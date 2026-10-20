@@ -77,3 +77,23 @@ class Redactor:
     @property
     def count(self) -> int:
         return len(self.forward)
+
+
+class StreamUnmasker:
+    """Rimette i valori veri nel testo che arriva a pezzi: un segnaposto spezzato tra due pezzi (es. «[IBA» + «N_1]») viene trattenuto."""
+
+    def __init__(self, red: Redactor):
+        self.red, self.buf = red, ""
+
+    def feed(self, chunk: str) -> str:
+        self.buf += chunk
+        i = self.buf.rfind("[")
+        if i != -1 and "]" not in self.buf[i:] and len(self.buf) - i < 16:
+            out, self.buf = self.buf[:i], self.buf[i:]
+        else:
+            out, self.buf = self.buf, ""
+        return self.red.unmask(out)
+
+    def flush(self) -> str:
+        out, self.buf = self.buf, ""
+        return self.red.unmask(out)

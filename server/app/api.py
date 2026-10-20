@@ -2,7 +2,7 @@
 import asyncio
 import json
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -16,7 +16,7 @@ from .tools.basic import parse_due
 
 router = APIRouter(prefix="/api", dependencies=[Depends(require_token)])
 STARTED = time.time()
-VERSION = "0.2.0"
+VERSION = "0.4.0"
 
 
 class ReminderIn(BaseModel):
@@ -59,15 +59,36 @@ class ReadIn(BaseModel):
     ids: list[int] | None = None  # None = tutte
 
 
+def forecast(b: dict) -> dict:
+    """Quando finiscono i token al ritmo di consumo di questo mese (stima dal consumo medio giornaliero)."""
+    now = datetime.now(ZoneInfo("UTC"))
+    elapsed = max(1.0, now.day - 1 + now.hour / 24)
+    used, remaining = b.get("used_tokens") or 0, b.get("remaining_tokens")
+    burn = used / elapsed
+    out = {"burn_per_day": int(burn), "days_left": None, "depletes_on": None, "runs_out_before_reset": False}
+    if remaining is not None and burn > 0:
+        days = remaining / burn
+        out["days_left"] = round(days, 1)
+        end = now + timedelta(days=days)
+        out["depletes_on"] = end.strftime("%Y-%m-%d")
+        try:
+            reset = datetime.fromisoformat(str(b.get("resets_at", "")).replace("Z", "+00:00"))
+            out["runs_out_before_reset"] = end < reset
+        except ValueError:
+            pass
+    return out
+
+
 @router.get("/tokens")
 async def tokens(request: Request, refresh: bool = False) -> dict:
     budget = request.app.state.budget
     if not budget.enabled:
         raise HTTPException(404, "FreeLLMAPI non è in questo container")
     try:
-        return await budget.get(force=refresh)
+        b = await budget.get(force=refresh)
     except AdminError as e:
         raise HTTPException(503, str(e)) from e
+    return {**b, "forecast": forecast(b), "jarvis_today": request.app.state.usage.today()}
 
 
 @router.get("/status")
@@ -83,6 +104,7 @@ async def status(request: Request) -> dict:
         "google": st.google.enabled,
         "memory": "supabase" if s.supabase_url and s.supabase_service_key else "ram",
         "voice": st.voice.enabled,
+        "brain": st.brain.enabled,
         "pending_actions": len(st.pending.list_pending()),
         "tokens": None,
     }
@@ -147,8 +169,83 @@ async def notifications(request: Request, limit: int = Query(50, ge=1, le=200)) 
 
 @router.post("/notifications/read")
 async def notifications_read(body: ReadIn, request: Request) -> dict:
-    await request.app.state.store.mark_notifications_read(body.ids)
+    await request.app.state.notifier.mark_read(body.ids)
     return {"ok": True}
+
+
+@router.delete("/notifications")
+async def notifications_clear(request: Request, read_only: bool = True) -> dict:
+    await request.app.state.store.clear_notifications(read_only)
+    return {"ok": True}
+
+
+class SnoozeIn(BaseModel):
+    minutes: int = Field(default=10, ge=0, le=1440)  # 0 = fatto, nessun nuovo promemoria
+
+
+@router.post("/notifications/{notification_id}/snooze")
+async def notification_snooze(notification_id: int, body: SnoozeIn, request: Request) -> dict:
+    """Dal promemoria scattato: rimanda di N minuti (crea un nuovo promemoria con lo stesso testo)."""
+    st = request.app.state
+    n = await st.store.get_notification(notification_id)
+    if not n or n["kind"] != "reminder":
+        raise HTTPException(404, "Notifica inesistente")
+    if body.minutes:
+        due = datetime.now(ZoneInfo(st.settings.timezone)) + timedelta(minutes=body.minutes)
+        await st.store.add_reminder(n["body"], due)
+    await st.notifier.mark_read([notification_id])
+    return {"ok": True}
+
+
+@router.get("/notify/prefs")
+async def notify_prefs(request: Request) -> dict:
+    return await request.app.state.notifier.prefs()
+
+
+@router.post("/notify/prefs")
+async def notify_prefs_set(request: Request) -> dict:
+    return await request.app.state.notifier.set_prefs(await request.json())
+
+
+@router.get("/models")
+async def models(request: Request) -> list[dict]:
+    try:
+        return [{"id": "auto", "owned_by": "router"}, *await request.app.state.agent.llm.models()]
+    except Exception as e:
+        raise HTTPException(503, "Elenco dei modelli non disponibile: FreeLLMAPI si sta avviando") from e
+
+
+@router.get("/usage")
+async def usage(request: Request, days: int = Query(14, ge=1, le=90)) -> dict:
+    st = request.app.state
+    await st.usage.flush(st.store)
+    rows = await st.store.usage_series(days)
+    by_day: dict[str, dict] = {}
+    for r in rows:
+        d = by_day.setdefault(str(r["day"]), {"day": str(r["day"]), "requests": 0, "errors": 0, "tokens": 0, "latency_ms": 0})
+        d["requests"] += r["requests"]
+        d["errors"] += r["errors"]
+        d["tokens"] += r["prompt_tokens"] + r["completion_tokens"]
+        d["latency_ms"] += r["latency_ms"]
+    series = sorted(by_day.values(), key=lambda d: d["day"])
+    for d in series:
+        d["avg_latency_ms"] = int(d["latency_ms"] / max(1, d["requests"] - d["errors"]))
+    by_kind: dict[str, int] = {}
+    for r in rows:
+        by_kind[r["kind"]] = by_kind.get(r["kind"], 0) + r["prompt_tokens"] + r["completion_tokens"]
+    return {"series": series, "by_kind": by_kind, "today": st.usage.today()}
+
+
+@router.get("/health")
+async def health(request: Request) -> dict:
+    from .health import deep_health
+
+    return await deep_health(request.app)
+
+
+@router.get("/app/update")
+async def app_update(request: Request, platform: str = Query(pattern="^(android|windows)$"), version: str = Query("0.0.0", max_length=20)) -> dict:
+    return await request.app.state.updates.check_for(platform, version)
 
 
 @router.post("/notifications/test")
@@ -180,7 +277,7 @@ async def stream(request: Request) -> StreamingResponse:
             while not await request.is_disconnected():
                 try:
                     row = await asyncio.wait_for(q.get(), timeout=20)
-                    yield f"event: notification\ndata: {json.dumps(row)}\n\n"
+                    yield f"event: {row.get('event', 'notification')}\ndata: {json.dumps(row)}\n\n"
                 except asyncio.TimeoutError:
                     yield ": ping\n\n"
         finally:

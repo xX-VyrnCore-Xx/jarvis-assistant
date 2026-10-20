@@ -17,6 +17,14 @@ class Settings(BaseSettings):
     freellm_internal_url: str = ""  # se impostata, /v1/* viene inoltrato qui (FreeLLMAPI nello stesso container)
     freellm_db_path: str = ""  # se FREELLM_API_KEY è vuota, la chiave unificata si legge da questo DB SQLite
     llm_timeout_s: float = 90.0
+    llm_temperature: float = 0.6
+    llm_temperature_tools: float = 0.2  # con i tool serve precisione, non creatività
+    llm_max_tokens: int = 1500  # tetto per risposta: protegge la quota gratuita
+    stt_model: str = "auto"  # trascrizione dei vocali (FreeLLMAPI /v1/audio/transcriptions)
+    history_chars: int = 7000  # budget della cronologia inviata al modello (le conversazioni lunghe si accorciano dalle più vecchie)
+    github_repo: str = "xX-VyrnCore-Xx/jarvis-assistant"  # da dove le app scaricano gli aggiornamenti
+    github_webhook_secret: str = ""  # facoltativo: notifica istantanea alla pubblicazione di una Release
+    update_check_minutes: int = 30
     max_tool_rounds: int = 5
 
     supabase_url: str = ""

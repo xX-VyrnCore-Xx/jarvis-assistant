@@ -97,6 +97,14 @@ class FakeTG(Telegram):
     async def send(self, chat_id, text, markup=None):
         self.out.append((text, markup))
 
+    async def send_id(self, chat_id, text, markup=None, silent=False):
+        self.out.append((text, markup))
+        return len(self.out)
+
+    async def edit(self, chat_id, message_id, text, markup=None, html=True):
+        self.out.append((text, markup))
+        return True
+
     async def typing(self, chat_id):
         pass
 
@@ -121,8 +129,9 @@ def make_bot():
     st.tg, st.store = FakeTG(), MemoryStore()
 
     class Agent:
-        async def reply(self, text, session):
-            return f"eco:{text}"
+        async def reply_stream(self, text, session, voice=False, model=None):
+            yield ("delta", "eco:")
+            yield ("done", f"eco:{text}")
 
     st.agent = Agent()
     return TelegramBot(FakeApp), st
@@ -136,7 +145,8 @@ async def test_bot_owner_only_dedup_commands_and_buttons():
 
     await bot.handle_update(msg(42, "ciao", 1))
     await bot.handle_update(msg(42, "ciao", 1))  # duplicato di Telegram
-    assert [o[0] for o in st.tg.out] == ["eco:ciao"]
+    assert [o[0] for o in st.tg.out if o[0] != "…"] == ["eco:ciao"]  # il duplicato non produce una seconda risposta
+    assert st.tg.out[-1][1]["inline_keyboard"][0][0]["callback_data"] == "sv"  # pulsanti Salva / Rigenera sotto la risposta
 
     from datetime import datetime, timedelta, timezone
     await st.store.add_reminder("bere", datetime.now(timezone.utc) + timedelta(hours=1))

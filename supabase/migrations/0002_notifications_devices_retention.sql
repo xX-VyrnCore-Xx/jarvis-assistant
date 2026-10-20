@@ -103,3 +103,19 @@ alter table brain_chunks enable row level security;
 alter table brain_entities enable row level security;
 alter table brain_doc_entities enable row level security;
 revoke all on public.brain_docs, public.brain_chunks, public.brain_entities, public.brain_doc_entities from anon, authenticated;
+
+-- Notifiche: metadati cifrati (azioni, percorso nell'app); consumo giornaliero dei modelli.
+alter table notifications add column if not exists meta text not null default '';
+create table if not exists usage_daily (
+  day date not null,
+  kind text not null,
+  model text not null default '',
+  requests int not null default 0,
+  errors int not null default 0,
+  prompt_tokens bigint not null default 0,
+  completion_tokens bigint not null default 0,
+  latency_ms bigint not null default 0,
+  primary key (day, kind, model)
+);
+alter table usage_daily enable row level security;
+revoke all on public.usage_daily from anon, authenticated;

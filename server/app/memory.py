@@ -20,7 +20,9 @@ class Store(Protocol):
     async def list_memories(self, limit: int) -> list[dict]: ...
     async def delete_memory(self, memory_id: int) -> None: ...
     async def clear_messages(self, session_id: str) -> None: ...
-    async def add_notification(self, kind: str, title: str, body: str) -> dict: ...
+    async def add_notification(self, kind: str, title: str, body: str, meta: dict | None = None) -> dict: ...
+    async def get_notification(self, notification_id: int) -> dict | None: ...
+    async def clear_notifications(self, read_only: bool) -> None: ...
     async def list_notifications(self, limit: int) -> list[dict]: ...
     async def mark_notifications_read(self, ids: list[int] | None) -> None: ...
     async def upsert_device(self, platform: str, token: str, label: str) -> None: ...
@@ -31,6 +33,8 @@ class Store(Protocol):
     async def set_task_done(self, task_id: int, done: bool) -> None: ...
     async def delete_task(self, task_id: int) -> None: ...
     async def messages_between(self, start: str, end: str, limit: int) -> list[dict]: ...
+    async def add_usage(self, day: str, kind: str, model: str, delta: dict) -> None: ...
+    async def usage_series(self, days: int) -> list[dict]: ...
     async def get_setting(self, key: str) -> str: ...
     async def set_setting(self, key: str, value: str) -> None: ...
     async def prune(self) -> None: ...
@@ -47,6 +51,7 @@ class MemoryStore:
         self.devices: dict[str, dict] = {}
         self.settings: dict[str, str] = {}
         self.tasks: list[dict] = []
+        self.usage: dict[tuple[str, str, str], dict] = {}
 
     async def add_message(self, session_id, role, content):
         self.messages.append({"session_id": session_id, "role": role, "content": content, "created_at": datetime.now(timezone.utc).isoformat()})
@@ -92,11 +97,17 @@ class MemoryStore:
     async def delete_reminder(self, reminder_id):
         self.reminders = [r for r in self.reminders if r["id"] != reminder_id]
 
-    async def add_notification(self, kind, title, body):
-        row = {"id": len(self.notifications) + 1, "kind": kind, "title": title, "body": body, "read": False,
+    async def add_notification(self, kind, title, body, meta=None):
+        row = {"id": len(self.notifications) + 1, "kind": kind, "title": title, "body": body, "read": False, "meta": meta or {},
                "created_at": datetime.now(timezone.utc).isoformat()}
         self.notifications.append(row)
         return row
+
+    async def get_notification(self, notification_id):
+        return next((n for n in self.notifications if n["id"] == notification_id), None)
+
+    async def clear_notifications(self, read_only):
+        self.notifications = [n for n in self.notifications if read_only and not n["read"]]
 
     async def list_notifications(self, limit):
         return list(reversed(self.notifications))[:limit]
@@ -132,6 +143,14 @@ class MemoryStore:
 
     async def messages_between(self, start, end, limit):
         return [m for m in self.messages if start <= m["created_at"] < end][:limit]
+
+    async def add_usage(self, day, kind, model, delta):
+        r = self.usage.setdefault((day, kind, model), {k: 0 for k in delta})
+        for k, v in delta.items():
+            r[k] += v
+
+    async def usage_series(self, days):
+        return [{"day": d, "kind": k, "model": m, **r} for (d, k, m), r in sorted(self.usage.items())][-days * 12:]
 
     async def get_setting(self, key):
         return self.settings.get(key, "")
@@ -234,16 +253,37 @@ class SupabaseStore:
         r = await self._client.delete(f"{self.base}/reminders", params={"id": f"eq.{reminder_id}"}, headers=self.headers)
         r.raise_for_status()
 
-    async def add_notification(self, kind, title, body):
+    def _notif(self, n: dict) -> dict:
+        import json as _json
+
+        try:
+            meta = _json.loads(self.vault.open(n.get("meta", "")) or "{}")
+        except ValueError:
+            meta = {}
+        return {**n, "title": self.vault.open(n["title"]), "body": self.vault.open(n["body"]), "meta": meta}
+
+    async def add_notification(self, kind, title, body, meta=None):
+        import json as _json
+
         h = {**self.headers, "Prefer": "return=representation"}
-        r = await self._client.post(f"{self.base}/notifications", json={"kind": kind, "title": self.vault.seal(title), "body": self.vault.seal(body)}, headers=h)
+        r = await self._client.post(f"{self.base}/notifications", headers=h, json={
+            "kind": kind, "title": self.vault.seal(title), "body": self.vault.seal(body), "meta": self.vault.seal(_json.dumps(meta)) if meta else ""})
         r.raise_for_status()
-        return {**r.json()[0], "title": title, "body": body}
+        return {**r.json()[0], "title": title, "body": body, "meta": meta or {}}
 
     async def list_notifications(self, limit):
         rows = await self._get(
-            "notifications", {"select": "id,kind,title,body,read,created_at", "order": "created_at.desc", "limit": limit})
-        return [{**n, "title": self.vault.open(n["title"]), "body": self.vault.open(n["body"])} for n in rows]
+            "notifications", {"select": "id,kind,title,body,read,created_at,meta", "order": "created_at.desc", "limit": limit})
+        return [self._notif(n) for n in rows]
+
+    async def get_notification(self, notification_id):
+        rows = await self._get("notifications", {"select": "id,kind,title,body,read,created_at,meta", "id": f"eq.{int(notification_id)}"})
+        return self._notif(rows[0]) if rows else None
+
+    async def clear_notifications(self, read_only):
+        params = {"read": "eq.true"} if read_only else {"id": "gt.0"}
+        r = await self._client.delete(f"{self.base}/notifications", params=params, headers=self.headers)
+        r.raise_for_status()
 
     async def mark_notifications_read(self, ids):
         params = {"id": f"in.({','.join(str(int(i)) for i in ids)})"} if ids is not None else {"read": "eq.false"}
@@ -300,6 +340,18 @@ class SupabaseStore:
                 r.raise_for_status()
                 done += 1
         return done
+
+    async def add_usage(self, day, kind, model, delta):
+        rows = await self._get("usage_daily", {"select": "*", "day": f"eq.{day}", "kind": f"eq.{kind}", "model": f"eq.{model}"})
+        cur = rows[0] if rows else {k: 0 for k in delta}
+        row = {"day": day, "kind": kind, "model": model, **{k: int(cur.get(k, 0)) + int(v) for k, v in delta.items()}}
+        h = {**self.headers, "Prefer": "resolution=merge-duplicates,return=minimal"}
+        r = await self._client.post(f"{self.base}/usage_daily", params={"on_conflict": "day,kind,model"}, json=row, headers=h)
+        r.raise_for_status()
+
+    async def usage_series(self, days):
+        since = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
+        return await self._get("usage_daily", {"select": "*", "day": f"gte.{since}", "order": "day.asc", "limit": 1000})
 
     async def messages_between(self, start, end, limit):
         rows = await self._get("messages", {"select": "session_id,role,content,created_at", "and": f"(created_at.gte.{start},created_at.lt.{end})",

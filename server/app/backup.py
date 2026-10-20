@@ -59,7 +59,8 @@ def decrypt(key: bytes, blob: bytes) -> bytes:
 
 
 class HFBackup:
-    TABLES = {"messages": "created_at", "memories": "created_at", "reminders": "created_at", "notifications": "created_at"}
+    TABLES = {"messages": "created_at", "memories": "created_at", "reminders": "created_at", "notifications": "created_at", "tasks": "created_at",
+              "brain_docs": "created_at", "brain_chunks": "created_at", "brain_entities": "updated_at", "brain_doc_entities": "doc_id", "usage_daily": "day"}
 
     def __init__(self, settings: Settings, client: httpx.AsyncClient | None = None):
         self.s = settings
