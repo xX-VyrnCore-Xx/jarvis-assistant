@@ -3,6 +3,7 @@ import logging
 import secrets
 from contextlib import asynccontextmanager
 
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Request, WebSocket
 from pydantic import BaseModel, Field
 
@@ -66,6 +67,28 @@ async def lifespan(app: FastAPI):
 log = logging.getLogger("jarvis")
 app = FastAPI(title="JARVIS", lifespan=lifespan)
 app.include_router(gateway_router)
+
+# La finestra web delle app (Tauri/Capacitor) è un'origine diversa dal server: senza CORS il browser blocca /chat.
+# L'autenticazione è un Bearer token (niente cookie), quindi nessuna credenziale cross-site.
+APP_ORIGINS = [
+    "http://tauri.localhost", "https://tauri.localhost", "tauri://localhost",  # Windows (Tauri 2)
+    "https://localhost", "http://localhost", "capacitor://localhost",  # Android (Capacitor) e sviluppo
+    "http://localhost:1420",
+]
+
+
+def _cors_origins() -> list[str]:
+    extra = [o.strip() for o in get_settings().cors_origins.split(",") if o.strip()]
+    return APP_ORIGINS + extra
+
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_cors_origins(),
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
+    max_age=600,
+)
 
 
 @app.get("/health")

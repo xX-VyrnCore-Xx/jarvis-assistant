@@ -1,0 +1,14 @@
+{
+  "name": "jarvis-mobile",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Client Android di JARVIS: stessa interfaccia dell'app Windows, impacchettata con Capacitor",
+  "dependencies": {
+    "@capacitor/android": "^7.0.0",
+    "@capacitor/core": "^7.0.0"
+  },
+  "devDependencies": {
+    "@capacitor/assets": "^3.0.5",
+    "@capacitor/cli": "^7.0.0"
+  }
+}

@@ -1,5 +1,10 @@
 import { invoke } from "@tauri-apps/api/core";
 
+// URL pubblico del server (non è un segreto): precompilato; il token personale va inserito una volta dalle impostazioni
+const DEFAULT_URL = "https://jarvis-ai-841t.onrender.com";
+// Dentro Tauri (Windows) c'è il canale col PC; nell'APK Android e nel browser c'è solo la chat
+const isTauri = "__TAURI_INTERNALS__" in window;
+
 const $ = (id) => document.getElementById(id);
 const log = $("log");
 const SENSITIVE = {
@@ -8,7 +13,7 @@ const SENSITIVE = {
 };
 
 const cfg = {
-  get url() { return (localStorage.getItem("jarvis.url") || "").replace(/\/+$/, ""); },
+  get url() { return (localStorage.getItem("jarvis.url") || DEFAULT_URL).replace(/\/+$/, ""); },
   get token() { return localStorage.getItem("jarvis.token") || ""; },
   set(url, token) { localStorage.setItem("jarvis.url", url.trim()); localStorage.setItem("jarvis.token", token.trim()); },
 };
@@ -38,7 +43,7 @@ $("composer").addEventListener("submit", async (e) => {
   e.preventDefault();
   const text = $("input").value.trim();
   if (!text) return;
-  if (!cfg.url || !cfg.token) return $("settings").showModal();
+  if (!cfg.token) return $("settings").showModal();
   $("input").value = "";
   add("user", text);
   const wait = add("sys", "JARVIS sta pensando…");
@@ -69,13 +74,14 @@ function confirmAction(text) {
     $("confirm-text").textContent = text;
     $("confirm").addEventListener("close", () => resolve($("confirm").returnValue === "yes"), { once: true });
     $("confirm").showModal();
-    invoke("show_window").catch(() => {});
+    if (isTauri) invoke("show_window").catch(() => {});
   });
 }
 
 // ---- canale WebSocket col server (comandi sul PC + notifiche)
 let ws, retry = 0, ping;
 function connect() {
+  if (!isTauri) return watchServer();
   clearInterval(ping);
   ws?.close();
   if (!cfg.url || !cfg.token) return;
@@ -101,6 +107,18 @@ function connect() {
   };
 }
 
+// Senza canale col PC: l'indicatore mostra se il server risponde (e lo sveglia se dorme)
+let watching;
+function watchServer() {
+  clearInterval(watching);
+  const check = () =>
+    fetch(`${cfg.url}/health`, { signal: AbortSignal.timeout(70_000) })
+      .then((r) => $("dot").classList.toggle("on", r.ok))
+      .catch(() => $("dot").classList.remove("on"));
+  check();
+  watching = setInterval(check, 60_000);
+}
+
 async function runCommand(action, args) {
   const describe = SENSITIVE[action];
   if (describe && !(await confirmAction(describe(args)))) return "Azione rifiutata dall'utente.";
@@ -111,5 +129,5 @@ async function runCommand(action, args) {
   }
 }
 
-add("sys", cfg.url ? "Pronto, signore." : "Apri ⚙ e inserisci URL del server e token.");
+add("sys", cfg.token ? "Pronto, signore." : "Apri ⚙ e inserisci il token personale (l'URL è già impostato).");
 connect();
