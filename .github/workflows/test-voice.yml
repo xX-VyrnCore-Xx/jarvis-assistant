@@ -1,5 +1,8 @@
 name: Prova installazione voce (Windows)
-on: workflow_dispatch
+on:
+  workflow_dispatch:
+  pull_request:
+    paths: ["desktop/src-tauri/resources/**", ".github/workflows/test-voice.yml"]
 jobs:
   voice:
     runs-on: windows-latest
