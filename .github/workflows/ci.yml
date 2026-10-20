@@ -66,6 +66,14 @@ jobs:
           # JARVIS (utente node) legge la chiave unificata dal DB di FreeLLMAPI
           docker exec -u node -w /srv/jarvis jarvis-ci /opt/venv/bin/python -c \
             "from app.llm import read_unified_key as r; k=r('/app/server/data/freellmapi.db'); assert k.startswith('freellmapi-'); print('chiave unificata ok')"
+          # Gateway pubblico: /v1 passa (con la chiave unificata), la dashboard /api no
+          KEY=$(docker exec -u node -w /srv/jarvis jarvis-ci /opt/venv/bin/python -c "from app.llm import read_unified_key as r; print(r('/app/server/data/freellmapi.db'))")
+          test "$(curl -s -o /dev/null -w '%{http_code}' localhost:10000/v1/models)" = 401
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $KEY" localhost:10000/v1/models)" = 200
+          test "$(curl -s -o /dev/null -w '%{http_code}' localhost:10000/api/keys)" = 404
+          # l'endpoint con le credenziali per le altre app richiede il token di JARVIS
+          test "$(curl -s -o /dev/null -w '%{http_code}' localhost:10000/admin/freellm)" = 401
+          curl -fsS -H "Authorization: Bearer ci" localhost:10000/admin/freellm | grep -q '"api_key"'
           # FreeLLMAPI non deve essere raggiungibile dall'esterno del container (solo loopback)
           if docker exec jarvis-ci node -e "const ip=Object.values(require('os').networkInterfaces()).flat().find(i=>!i.internal&&i.family==='IPv4').address;fetch('http://'+ip+':3001/api/ping').then(()=>process.exit(0)).catch(()=>process.exit(1))"; then
             echo "FreeLLMAPI è esposto fuori dal loopback"; exit 1

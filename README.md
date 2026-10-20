@@ -19,8 +19,8 @@ pytest
 `POST /chat` con `Authorization: Bearer $JARVIS_API_TOKEN` e body `{"message": "ciao"}`.
 
 ## Deploy (tutto gratuito su Render)
-Un solo servizio Docker (`Dockerfile`, `render.yaml`) contiene **JARVIS** (pubblico) e **FreeLLMAPI** (solo loopback,
-mai esposto). Un unico servizio basta per restare nelle 750 ore gratuite/mese di Render (due servizi H24 non ci stanno).
+Un solo servizio Docker (`Dockerfile`, `render.yaml`) contiene **JARVIS** e **FreeLLMAPI**. FreeLLMAPI ascolta solo in
+loopback; JARVIS ne inoltra pubblicamente solo `/v1/*` (la dashboard resta privata). Un unico servizio basta per restare nelle 750 ore gratuite/mese di Render (due servizi H24 non ci stanno).
 
 1. **Supabase**: migrazioni in `supabase/migrations/`, anti-sleep in `supabase/keepalive.sql` (con l'URL del servizio).
 2. **Render**: New → Blueprint dal repo. Variabili: `SUPABASE_*`, `TELEGRAM_*`, `GOOGLE_*` (opzionali) e quelle sotto.
@@ -33,6 +33,11 @@ mai esposto). Un unico servizio basta per restare nelle 750 ore gratuite/mese di
 4. **Chiavi dei provider** in `FREEAPI_CONFIG_JSON` (applicato a ogni avvio), per esempio:
    `{"keys":[{"platform":"groq","key":"gsk_..."},{"platform":"google","key":"AIza..."}],"routing":{"strategy":"balanced"}}`
    Le piattaforme valide sono quelle del catalogo FreeLLMAPI. JARVIS legge da solo la chiave unificata dal DB.
+
+### Usare FreeLLMAPI da altre app
+Qualunque app compatibile OpenAI/Anthropic può usare `https://<servizio>.onrender.com/v1` con la chiave unificata.
+Per ottenerle: `curl -H "Authorization: Bearer $JARVIS_API_TOKEN" https://<servizio>.onrender.com/admin/freellm`
+→ `{"base_url": ..., "api_key": ...}`. Il ping di Supabase (`keepalive.sql`) lo tiene sveglio.
 
 ## Telegram
 1. Crea il bot con @BotFather e copia il token; il tuo ID numerico si legge con @userinfobot.
