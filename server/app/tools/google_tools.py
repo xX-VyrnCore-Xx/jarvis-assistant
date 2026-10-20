@@ -34,9 +34,18 @@ def _body_text(payload: dict) -> str:
 def register_google_tools(reg: ToolRegistry, settings: Settings, g: GoogleClient, pending: PendingStore) -> None:
     tz = ZoneInfo(settings.timezone)
 
-    def R(name, description, parameters, fn):
+    def R(name, description, parameters, fn, ttl=0):
         # i tool compaiono solo quando Google è davvero collegato (anche dopo il collegamento guidato, senza riavvio)
-        reg.register(name, description, parameters, fn, available=lambda: g.enabled)
+        reg.register(name, description, parameters, fn, available=lambda: g.enabled, cache_ttl=ttl)
+
+    def wrote(fn):
+        """Dopo una scrittura sul calendario le letture in cache non valgono più."""
+        async def inner(**kw):
+            try:
+                return await fn(**kw)
+            finally:
+                reg.invalidate("calendar_")
+        return inner
 
     async def gmail_search(query: str, max_results: int = 5) -> str:
         r = await g.request("GET", f"{GMAIL}/messages", params={"q": query, "maxResults": min(max_results, 10)})
@@ -165,6 +174,7 @@ def register_google_tools(reg: ToolRegistry, settings: Settings, g: GoogleClient
 
         async def delete() -> str:
             await g.request("DELETE", f"{CAL}/events/{event_id}", params={"sendUpdates": "none"})
+            reg.invalidate("calendar_")
             return "Evento eliminato."
 
         p = pending.create("calendar_delete", f"Eliminare l'evento «{label}»", delete)
@@ -231,22 +241,22 @@ def register_google_tools(reg: ToolRegistry, settings: Settings, g: GoogleClient
     obj = lambda props, req: {"type": "object", "properties": props, "required": req}  # noqa: E731
     s_ = {"type": "string"}
     i_ = {"type": "integer"}
-    R("gmail_search", "Cerca email (sintassi Gmail, es. 'is:unread from:mario').", obj({"query": s_, "max_results": i_}, ["query"]), gmail_search)
-    R("gmail_read", "Legge il contenuto di una email dato il suo id.", obj({"message_id": s_}, ["message_id"]), gmail_read)
+    R("gmail_search", "Cerca email (sintassi Gmail, es. 'is:unread from:mario').", obj({"query": s_, "max_results": i_}, ["query"]), gmail_search, ttl=60)
+    R("gmail_read", "Legge il contenuto di una email dato il suo id.", obj({"message_id": s_}, ["message_id"]), gmail_read, ttl=600)
     R("gmail_create_draft", "Crea una bozza email (NON la invia).", obj({"to": s_, "subject": s_, "body": s_}, ["to", "subject", "body"]), gmail_create_draft)
     R("gmail_send_draft", "Chiede all'utente di approvare l'invio di una bozza (non la invia da sola: serve la sua conferma nell'app o su Telegram).", obj({"draft_id": s_}, ["draft_id"]), gmail_send_draft)
     b_ = {"type": "boolean"}
     R("gmail_reply_draft", "Crea la bozza di risposta a una email (nello stesso thread). NON la invia.", obj({"message_id": s_, "body": s_}, ["message_id", "body"]), gmail_reply_draft)
     R("calendar_list_events", "Elenca gli eventi del calendario (con id). 'days' = quanti giorni (default 7), 'from_date' = data di partenza ISO (anche nel passato), 'query' = testo da cercare.",
-      obj({"days": i_, "query": s_, "from_date": s_}, []), calendar_list_events)
+      obj({"days": i_, "query": s_, "from_date": s_}, []), calendar_list_events, ttl=60)
     R("calendar_create_event", "Crea un evento. 'start' è data/ora locale ISO 8601 (calcolala da get_datetime); 'attendees' = email separate da virgola (gli inviti NON partono).",
-      obj({"summary": s_, "start": s_, "duration_minutes": i_, "description": s_, "location": s_, "all_day": b_, "attendees": s_}, ["summary", "start"]), calendar_create_event)
+      obj({"summary": s_, "start": s_, "duration_minutes": i_, "description": s_, "location": s_, "all_day": b_, "attendees": s_}, ["summary", "start"]), wrote(calendar_create_event))
     R("calendar_update_event", "Modifica un evento esistente (id da calendar_list_events): titolo, orario di inizio (mantiene la durata se non indicata), durata, descrizione, luogo.",
-      obj({"event_id": s_, "summary": s_, "start": s_, "duration_minutes": i_, "description": s_, "location": s_}, ["event_id"]), calendar_update_event)
+      obj({"event_id": s_, "summary": s_, "start": s_, "duration_minutes": i_, "description": s_, "location": s_}, ["event_id"]), wrote(calendar_update_event))
     R("calendar_delete_event", "Elimina un evento (id da calendar_list_events). Serve la conferma dell'utente nell'app o su Telegram: dopo la chiamata di' che l'attende.",
-      obj({"event_id": s_}, ["event_id"]), calendar_delete_event)
+      obj({"event_id": s_}, ["event_id"]), wrote(calendar_delete_event))
     R("calendar_find_free_time", "Trova le fasce libere di un giorno (data ISO) di almeno N minuti, tra 'day_start' e 'day_end' (ore, default 9-19).",
-      obj({"date": s_, "duration_minutes": i_, "day_start": i_, "day_end": i_}, ["date"]), calendar_find_free_time)
-    R("drive_recent", "Elenca i file di Drive modificati più di recente.", obj({"count": i_}, []), drive_recent)
-    R("drive_search", "Cerca file su Google Drive per contenuto o nome.", obj({"query": s_}, ["query"]), drive_search)
-    R("drive_read", "Legge il testo di un file di Drive (Docs, Sheets, testo).", obj({"file_id": s_}, ["file_id"]), drive_read)
+      obj({"date": s_, "duration_minutes": i_, "day_start": i_, "day_end": i_}, ["date"]), calendar_find_free_time, ttl=60)
+    R("drive_recent", "Elenca i file di Drive modificati più di recente.", obj({"count": i_}, []), drive_recent, ttl=120)
+    R("drive_search", "Cerca file su Google Drive per contenuto o nome.", obj({"query": s_}, ["query"]), drive_search, ttl=300)
+    R("drive_read", "Legge il testo di un file di Drive (Docs, Sheets, testo).", obj({"file_id": s_}, ["file_id"]), drive_read, ttl=300)

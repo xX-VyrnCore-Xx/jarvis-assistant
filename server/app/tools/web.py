@@ -130,6 +130,31 @@ def calc(expr: str) -> float:
     return ev(ast.parse(expr.strip().replace("^", "**"), mode="eval").body)
 
 
+UNITS = {  # unità -> fattore verso l'unità base della categoria
+    "length": {"mm": 0.001, "cm": 0.01, "m": 1, "km": 1000, "in": 0.0254, "ft": 0.3048, "yd": 0.9144, "mi": 1609.344, "nmi": 1852},
+    "mass": {"mg": 1e-6, "g": 0.001, "kg": 1, "t": 1000, "oz": 0.028349523, "lb": 0.45359237},
+    "volume": {"ml": 0.001, "cl": 0.01, "l": 1, "m3": 1000, "tsp": 0.00492892, "tbsp": 0.0147868, "cup": 0.236588, "gal": 3.78541, "floz": 0.0295735},
+    "speed": {"ms": 1, "kmh": 1 / 3.6, "mph": 0.44704, "kn": 0.514444},
+    "area": {"m2": 1, "km2": 1e6, "ha": 1e4, "ft2": 0.092903, "ac": 4046.86},
+    "data": {"b": 1, "kb": 1e3, "mb": 1e6, "gb": 1e9, "tb": 1e12, "kib": 1024, "mib": 1024**2, "gib": 1024**3},
+}
+TEMP = {"c", "f", "k"}
+COINS = {"btc": "bitcoin", "eth": "ethereum", "sol": "solana", "ada": "cardano", "xrp": "ripple", "doge": "dogecoin", "bnb": "binancecoin",
+         "ltc": "litecoin", "dot": "polkadot", "usdt": "tether", "matic": "matic-network", "avax": "avalanche-2", "trx": "tron"}
+
+
+def convert_units(value: float, a: str, b: str) -> str:
+    a, b = a.lower().replace("°", "").replace("/", "").replace(" ", ""), b.lower().replace("°", "").replace("/", "").replace(" ", "")
+    if a in TEMP and b in TEMP:
+        c = value if a == "c" else (value - 32) * 5 / 9 if a == "f" else value - 273.15
+        r = c if b == "c" else c * 9 / 5 + 32 if b == "f" else c + 273.15
+        return f"{value:g} °{a.upper()} = {r:.2f} °{b.upper()}"
+    for cat, table in UNITS.items():
+        if a in table and b in table:
+            return f"{value:g} {a} = {value * table[a] / table[b]:.6g} {b}"
+    return "Errore: unità non riconosciute o di categorie diverse (supporto: lunghezza, massa, volume, velocità, area, dati, temperatura)."
+
+
 def register_web_tools(reg: ToolRegistry, client: httpx.AsyncClient | None = None) -> None:
     http = client or httpx.AsyncClient(timeout=20)
 
@@ -198,17 +223,51 @@ def register_web_tools(reg: ToolRegistry, client: httpx.AsyncClient | None = Non
         j = r.json()
         return f"{amount:g} {a} = {j['rates'][b]:g} {b} (cambio BCE del {j['date']})"
 
+    async def crypto_price(coin: str) -> str:
+        ids = ",".join(COINS.get(c.strip().lower(), c.strip().lower()) for c in coin.split(",") if c.strip())[:120]
+        if not re.fullmatch(r"[a-z0-9,-]+", ids or "-"):
+            return "Errore: nome della criptovaluta non valido."
+        r = await http.get("https://api.coingecko.com/api/v3/simple/price",
+                           params={"ids": ids, "vs_currencies": "eur,usd", "include_24hr_change": "true"})
+        if r.status_code == 429:
+            return "Errore: servizio prezzi temporaneamente limitato, riprova tra un minuto."
+        r.raise_for_status()
+        data = r.json()
+        if not data:
+            return f"Nessuna criptovaluta trovata per '{coin}' (usa il nome esteso, es. bitcoin)."
+        return "\n".join(f"{k}: {v.get('eur', 0):,.2f} € / {v.get('usd', 0):,.2f} $ ({v.get('eur_24h_change', 0):+.1f}% in 24 h)" for k, v in data.items())
+
+    async def world_time(city: str) -> str:
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
+        g = await http.get("https://geocoding-api.open-meteo.com/v1/search", params={"name": city, "count": 1, "language": "it"})
+        g.raise_for_status()
+        hits = g.json().get("results") or []
+        if not hits or not hits[0].get("timezone"):
+            return f"Nessuna località trovata per '{city}'."
+        now = datetime.now(ZoneInfo(hits[0]["timezone"]))
+        return f"A {hits[0]['name']} ({hits[0]['timezone']}) sono le {now:%H:%M} di {now:%d/%m/%Y} (UTC{now:%z})."
+
+    async def unit_convert(value: float, from_unit: str, to_unit: str) -> str:
+        return convert_units(value, from_unit, to_unit)
+
     s = {"type": "string"}
-    reg.register("web_news", "Ultime notizie su un argomento.", {"type": "object", "properties": {"query": s}, "required": ["query"]}, web_news)
+    reg.register("crypto_price", "Prezzo attuale di una o più criptovalute (separate da virgola, es. 'btc, eth') in euro e dollari, con variazione a 24 h.",
+                 {"type": "object", "properties": {"coin": s}, "required": ["coin"]}, crypto_price, cache_ttl=60)
+    reg.register("world_time", "Ora attuale in una città del mondo.", {"type": "object", "properties": {"city": s}, "required": ["city"]}, world_time)
+    reg.register("unit_convert", "Converte unità di misura (lunghezza, massa, volume, velocità, area, dati, temperatura): es. 5 mi -> km, 70 f -> c.",
+                 {"type": "object", "properties": {"value": {"type": "number"}, "from_unit": s, "to_unit": s}, "required": ["value", "from_unit", "to_unit"]}, unit_convert)
+    reg.register("web_news", "Ultime notizie su un argomento.", {"type": "object", "properties": {"query": s}, "required": ["query"]}, web_news, cache_ttl=900)
     reg.register("wikipedia", "Riassunto di una voce di Wikipedia (lingua predefinita: it). Per definizioni e fatti enciclopedici.",
-                 {"type": "object", "properties": {"topic": s, "lang": {"type": "string", "description": "codice lingua, es. it, en"}}, "required": ["topic"]}, wikipedia)
+                 {"type": "object", "properties": {"topic": s, "lang": {"type": "string", "description": "codice lingua, es. it, en"}}, "required": ["topic"]}, wikipedia, cache_ttl=86400)
     reg.register("convert_currency", "Converte un importo tra valute con il cambio BCE del giorno.",
                  {"type": "object", "properties": {"amount": {"type": "number"}, "from_currency": s, "to_currency": s}, "required": ["amount", "from_currency", "to_currency"]},
-                 convert_currency)
+                 convert_currency, cache_ttl=3600)
     reg.register("read_webpage", "Legge il testo di una pagina web pubblica (http/https) dato l'URL, ad esempio un risultato di web_search.",
-                 {"type": "object", "properties": {"url": s}, "required": ["url"]}, read_webpage)
+                 {"type": "object", "properties": {"url": s}, "required": ["url"]}, read_webpage, cache_ttl=900)
     reg.register("get_weather", "Meteo attuale e previsioni dei prossimi 3 giorni per una città.",
                  {"type": "object", "properties": {"city": {"type": "string", "description": "Nome della città, es. Milano"}}, "required": ["city"]},
-                 get_weather)
+                 get_weather, cache_ttl=600)
     reg.register("calculate", "Calcolatrice precisa: + - * / // % ^ , parentesi, sqrt, sin, cos, log, abs, round, pi. Usala per ogni calcolo.",
                  {"type": "object", "properties": {"expression": s}, "required": ["expression"]}, calculate)

@@ -43,6 +43,7 @@ class Settings(BaseSettings):
     # origini delle app (Tauri su Windows, Capacitor su Android); altre, separate da virgola
     cors_origins: str = ""
 
+    privacy_mode: str = "standard"  # off | standard (IBAN, carte, chiavi, password, CF) | strict (anche email e telefoni): mascherati verso i modelli
     chat_per_minute: int = 20
     auth_fail_limit: int = 8
     auth_lock_s: int = 900

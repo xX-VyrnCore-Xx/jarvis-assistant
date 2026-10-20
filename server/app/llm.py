@@ -1,4 +1,5 @@
 import asyncio
+import random
 import sqlite3
 from typing import Any
 
@@ -33,7 +34,12 @@ class LLMClient:
 
     def __init__(self, settings: Settings, client: httpx.AsyncClient | None = None):
         self.s = settings
-        self._client = client or httpx.AsyncClient(timeout=settings.llm_timeout_s)
+        # connessioni riutilizzate (keep-alive) e un numero limitato di richieste insieme: niente raffiche verso i provider gratuiti
+        self._client = client or httpx.AsyncClient(
+            timeout=httpx.Timeout(settings.llm_timeout_s, connect=10.0),
+            limits=httpx.Limits(max_connections=8, max_keepalive_connections=4, keepalive_expiry=60),
+        )
+        self._gate = asyncio.Semaphore(4)
         self._key = settings.freellm_api_key
 
     def _api_key(self) -> str:
@@ -54,16 +60,26 @@ class LLMClient:
         url = self.s.freellm_base_url.rstrip("/") + "/chat/completions"
 
         last: Exception | None = None
-        for attempt in range(3):
-            try:
-                headers = {"Authorization": f"Bearer {self._api_key()}"}
-                r = await self._client.post(url, json=payload, headers=headers)
-                if r.status_code in RETRY_STATUS:
-                    last = LLMError(f"HTTP {r.status_code}: {r.text[:200]}")
-                else:
-                    r.raise_for_status()
-                    return r.json()["choices"][0]["message"]
-            except (httpx.TransportError, LLMError) as e:
-                last = e
-            await asyncio.sleep(2**attempt)
+        async with self._gate:
+            for attempt in range(4):
+                delay = min(2**attempt, 8) + random.random() * 0.5  # backoff con jitter
+                try:
+                    headers = {"Authorization": f"Bearer {self._api_key()}"}
+                    r = await self._client.post(url, json=payload, headers=headers)
+                    if r.status_code in RETRY_STATUS:
+                        # il corpo della risposta può contenere frammenti del prompt: nei messaggi d'errore va solo lo stato
+                        last = LLMError(f"HTTP {r.status_code}")
+                        if wait := r.headers.get("retry-after"):
+                            delay = min(float(wait), 20.0) if wait.replace(".", "", 1).isdigit() else delay
+                    elif r.status_code in (400, 401, 403, 404, 422):
+                        raise LLMError(f"FreeLLMAPI ha rifiutato la richiesta (HTTP {r.status_code})")
+                    else:
+                        r.raise_for_status()
+                        return r.json()["choices"][0]["message"]
+                except (httpx.TransportError, LLMError) as e:
+                    if isinstance(e, LLMError) and "rifiutato" in str(e):
+                        raise
+                    last = e
+                if attempt < 3:
+                    await asyncio.sleep(delay)
         raise LLMError(f"FreeLLMAPI non raggiungibile: {last}")

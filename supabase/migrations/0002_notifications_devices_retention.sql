@@ -34,3 +34,19 @@ create table if not exists app_settings (
 );
 alter table app_settings enable row level security;
 revoke all on public.app_settings from anon, authenticated;
+
+-- Ricordi: indice cieco per cercare senza decifrare (HMAC delle parole, calcolato dal server).
+alter table memories add column if not exists terms text[] not null default '{}';
+create index if not exists memories_terms_idx on memories using gin (terms);
+
+-- Attività e liste (spesa, da fare...).
+create table if not exists tasks (
+  id bigint generated always as identity primary key,
+  list text not null default 'attività',
+  text text not null,
+  done boolean not null default false,
+  created_at timestamptz not null default now()
+);
+create index if not exists tasks_open_idx on tasks (list) where not done;
+alter table tasks enable row level security;
+revoke all on public.tasks from anon, authenticated;

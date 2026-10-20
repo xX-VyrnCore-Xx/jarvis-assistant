@@ -41,6 +41,7 @@ async def background_loop(settings: Settings, store: Store, notifier: Notifier, 
     last_budget = 0.0
     alerted = False
     started = time.monotonic()
+    encrypted = not hasattr(store, "encrypt_existing")
     last_backup = None
     while True:
         try:
@@ -54,6 +55,14 @@ async def background_loop(settings: Settings, store: Store, notifier: Notifier, 
                 alerted = await check_budget(settings, budget, notifier, alerted)
             except Exception as e:  # FreeLLMAPI può non essere ancora pronto
                 log.info("controllo token saltato: %s", type(e).__name__)
+        if not encrypted and now - started > 90:  # cifra i dati vecchi a lotti, una volta superato l'avvio
+            try:
+                n = await store.encrypt_existing()
+                if n:
+                    log.info("cifratura dei dati esistenti: %d righe", n)
+                encrypted = n == 0
+            except Exception as e:
+                log.warning("cifratura dei dati esistenti rimandata: %s", type(e).__name__)
         if now - last_prune >= PRUNE_EVERY_S:
             last_prune = now
             try:

@@ -28,6 +28,9 @@ def register_pc_tools(reg: ToolRegistry, pc: PCBridge) -> None:
         [],
     )
     tool("pc_brightness", "Imposta la luminosità dello schermo (0-100, solo portatili/monitor supportati).", {"level": {"type": "integer"}}, ["level"])
+    tool("pc_system_info", "Stato del PC: uso CPU, RAM, spazio disco, batteria, da quanto è acceso.", {}, [])
+    tool("pc_media", "Controlla la riproduzione multimediale del PC (play/pausa, brano successivo o precedente, stop).",
+         {"action": {"type": "string", "enum": ["play_pause", "next", "previous", "stop"]}}, ["action"])
     tool("pc_lock", "Blocca il PC.", {}, [])
     tool(
         "pc_power",

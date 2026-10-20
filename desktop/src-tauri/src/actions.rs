@@ -174,6 +174,24 @@ pub fn run(app: &tauri::AppHandle, action: &str, args: &Value) -> Result<String,
             ))?;
             Ok(format!("Luminosità impostata al {l}%"))
         }
+        "pc_system_info" => powershell(
+            "$o=Get-CimInstance Win32_OperatingSystem; $d=Get-PSDrive C; $b=Get-CimInstance Win32_Battery -ErrorAction SilentlyContinue; \
+             $c=(Get-CimInstance Win32_Processor | Measure-Object -Property LoadPercentage -Average).Average; \
+             $bat=if($b){\"$($b.EstimatedChargeRemaining)% (\"+$(if($b.BatteryStatus -eq 2){'in carica'}else{'a batteria'})+\")\"}else{'assente'}; \
+             \"CPU: $c% in uso; RAM libera: {0:N1} di {1:N1} GB; Disco C: libero {2:N0} GB; Batteria: $bat; Acceso da: {3:dd} g {3:hh} h\" -f \
+             ($o.FreePhysicalMemory/1MB), ($o.TotalVisibleMemorySize/1MB), ($d.Free/1GB), ((Get-Date)-$o.LastBootUpTime)",
+        ),
+        "pc_media" => {
+            let key = match arg(args, "action")? {
+                "play_pause" => 179,
+                "next" => 176,
+                "previous" => 177,
+                "stop" => 178,
+                _ => return Err("azione multimediale non valida".into()),
+            };
+            powershell(&format!("(New-Object -ComObject WScript.Shell).SendKeys([char]{key})"))?;
+            Ok("Comando multimediale inviato".into())
+        }
         "pc_lock" => {
             spawn_hidden("rundll32.exe", &["user32.dll,LockWorkStation"])?;
             Ok("PC bloccato".into())
