@@ -80,3 +80,15 @@ jobs:
           fi
       - if: failure()
         run: docker logs jarvis-ci
+
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: "21" }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: mobile/scripts/build-android.sh 0.0.0-ci 1
+      - uses: actions/upload-artifact@v4
+        with: { name: JARVIS-android-debug, path: mobile/out/*.apk }

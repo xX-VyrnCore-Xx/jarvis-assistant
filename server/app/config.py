@@ -32,6 +32,9 @@ class Settings(BaseSettings):
     google_client_secret: str = ""
     google_refresh_token: str = ""
 
+    # origini delle app (Tauri su Windows, Capacitor su Android); altre, separate da virgola
+    cors_origins: str = ""
+
     history_messages: int = 20
     memory_hits: int = 5
 

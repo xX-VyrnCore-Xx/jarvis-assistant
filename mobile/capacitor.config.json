@@ -1,0 +1,7 @@
+{
+  "appId": "it.vyrncore.jarvis",
+  "appName": "JARVIS",
+  "webDir": "../desktop/dist",
+  "backgroundColor": "#07121c",
+  "server": { "androidScheme": "https" }
+}

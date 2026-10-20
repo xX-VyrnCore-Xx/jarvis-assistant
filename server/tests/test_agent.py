@@ -259,3 +259,21 @@ def test_gateway_disabled_and_credentials_endpoint(monkeypatch, tmp_path):
         r = c.get("/admin/freellm", headers={"Authorization": "Bearer t"})
         assert r.json() == {"base_url": "https://x.onrender.com/v1", "api_key": "freellmapi-zzz"}
     get_settings.cache_clear()
+
+
+def test_cors_allows_app_origins_only(monkeypatch):
+    from app import main
+    from app.config import get_settings
+
+    monkeypatch.setenv("JARVIS_API_TOKEN", "t")
+    get_settings.cache_clear()
+    with TestClient(main.app) as c:
+        pre = {"Access-Control-Request-Method": "POST", "Access-Control-Request-Headers": "authorization,content-type"}
+        for origin in ("http://tauri.localhost", "https://localhost"):
+            r = c.options("/chat", headers={"Origin": origin, **pre})
+            assert r.status_code == 200 and r.headers["access-control-allow-origin"] == origin
+        r = c.options("/chat", headers={"Origin": "https://evil.example", **pre})
+        assert "access-control-allow-origin" not in r.headers
+        r = c.get("/health", headers={"Origin": "http://tauri.localhost"})
+        assert r.headers["access-control-allow-origin"] == "http://tauri.localhost"
+    get_settings.cache_clear()
