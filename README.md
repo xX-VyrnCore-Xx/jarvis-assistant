@@ -41,8 +41,9 @@ Per ottenerle: `curl -H "Authorization: Bearer $JARVIS_API_TOKEN" https://<servi
 
 ## Tool e funzioni dell'assistente
 Tool validati (tipi, parametri obbligatori, valori ammessi), con timeout, risultati limitati e più tool eseguiti insieme nello stesso turno:
-memoria (`remember`, `recall`, `list_memories`, `forget`), promemoria (`add_/list_/delete_reminder`), `web_search`, `read_webpage` (solo indirizzi pubblici),
-`get_weather`, `calculate`, `send_notification`, `get_token_budget`, Google (Gmail, Calendar, Drive) e controllo del PC.
+memoria (`remember`, `recall`, `list_memories`, `forget`), promemoria (`add_/list_/delete_reminder`, `remind_in`), `web_search`, `web_news`, `wikipedia`, `read_webpage` (solo indirizzi pubblici),
+`get_weather`, `calculate`, `date_info`, `convert_currency`, `send_notification`, `get_token_budget`, controllo del PC e Google:
+Gmail (cerca, leggi, bozze, risposte in thread, invio con conferma), Calendar (elenca/cerca, crea con luogo e giornata intera, **modifica**, **elimina con conferma**, fasce libere), Drive (cerca, leggi, recenti).
 
 ## Telegram
 1. Crea il bot con @BotFather e copia il token; il tuo ID numerico si legge con @userinfobot.

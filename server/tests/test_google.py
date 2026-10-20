@@ -115,3 +115,51 @@ async def test_external_content_is_marked_untrusted():
     reg, _, _ = make(token_or(h))
     out = await reg.call("gmail_search", json.dumps({"query": "x"}))
     assert out.startswith("[CONTENUTO ESTERNO NON FIDATO")
+
+
+@pytest.mark.asyncio
+async def test_calendar_update_keeps_duration_and_delete_needs_confirmation():
+    calls = []
+
+    def h(req):
+        calls.append((req.method, req.url.path))
+        if req.method == "GET":
+            return httpx.Response(200, json={"id": "e1", "summary": "Dentista",
+                                             "start": {"dateTime": "2030-01-05T10:00:00+01:00"}, "end": {"dateTime": "2030-01-05T11:30:00+01:00"}})
+        if req.method == "PATCH":
+            body = json.loads(req.content)
+            assert body["start"]["dateTime"].startswith("2030-01-06T15:00:00") and body["end"]["dateTime"].startswith("2030-01-06T16:30:00")
+            return httpx.Response(200, json={"id": "e1", "summary": "Dentista", "start": body["start"], "end": body["end"]})
+        return httpx.Response(204)
+
+    reg, _, pending = make(token_or(h))
+    out = await reg.call("calendar_update_event", json.dumps({"event_id": "e1", "start": "2030-01-06T15:00:00"}))
+    assert "aggiornato" in out and "2030-01-06 15:00" in out  # durata di 90 minuti mantenuta (verificata nel PATCH)
+    assert "Errore" in await reg.call("calendar_update_event", json.dumps({"event_id": "e1"}))
+
+    out = await reg.call("calendar_delete_event", json.dumps({"event_id": "e1"}))
+    assert "NON è stato eliminato" in out and not any(m == "DELETE" for m, _ in calls)  # nulla finché l'utente non approva
+    p = pending.list_pending()[0]
+    assert "Dentista" in p.summary
+    await pending.decide(p.id, True)
+    assert ("DELETE", "/calendar/v3/calendars/primary/events/e1") in calls
+
+
+@pytest.mark.asyncio
+async def test_find_free_time_and_reply_draft():
+    def h(req):
+        if req.url.path.endswith("/freeBusy"):
+            return httpx.Response(200, json={"calendars": {"primary": {"busy": [
+                {"start": "2030-01-05T10:00:00+01:00", "end": "2030-01-05T12:00:00+01:00"},
+                {"start": "2030-01-05T15:00:00+01:00", "end": "2030-01-05T16:00:00+01:00"}]}}})
+        if req.url.path.endswith("/messages/m1"):
+            return httpx.Response(200, json={"threadId": "t1", "payload": {"headers": [
+                {"name": "From", "value": "Mario <m@x.it>"}, {"name": "Subject", "value": "Cena"}, {"name": "Message-ID", "value": "<a@x>"}]}})
+        raw = base64.urlsafe_b64decode(json.loads(req.content)["message"]["raw"])
+        assert b"Re: Cena" in raw and b"In-Reply-To: <a@x>" in raw and json.loads(req.content)["message"]["threadId"] == "t1"
+        return httpx.Response(200, json={"id": "d9"})
+
+    reg, _, _ = make(token_or(h))
+    out = await reg.call("calendar_find_free_time", json.dumps({"date": "2030-01-05", "duration_minutes": 60}))
+    assert "09:00–10:00" in out and "12:00–15:00" in out and "16:00–19:00" in out
+    assert "Non è stata inviata" in await reg.call("gmail_reply_draft", json.dumps({"message_id": "m1", "body": "Volentieri"}))

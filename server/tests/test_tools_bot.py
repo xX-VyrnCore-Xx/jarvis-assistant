@@ -192,3 +192,27 @@ async def test_google_guided_link_stores_encrypted_token_only_for_issued_state()
     g2 = GoogleClient(s, store=store)
     await g2.load()
     assert g2.enabled and g2.refresh_token == "rt-segreto"  # sopravvive al riavvio
+
+
+@pytest.mark.asyncio
+async def test_extra_tools_currency_wikipedia_dates_and_remind_in():
+    from app.tools.basic import register_basic_tools
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if "frankfurter" in str(req.url):
+            return httpx.Response(200, json={"date": "2026-10-20", "rates": {"USD": 108.5}})
+        if "opensearch" in str(req.url):
+            return httpx.Response(200, json=["x", ["Roma"], [], []])
+        return httpx.Response(200, json={"title": "Roma", "extract": "Capitale d'Italia.", "content_urls": {"desktop": {"page": "https://it.wikipedia.org/wiki/Roma"}}})
+
+    reg = ToolRegistry()
+    register_web_tools(reg, httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    store = MemoryStore()
+    register_basic_tools(reg, Settings(), store)
+    assert "100 EUR = 108.5 USD" in await reg.call("convert_currency", json.dumps({"amount": 100, "from_currency": "eur", "to_currency": "usd"}))
+    assert "tre lettere" in await reg.call("convert_currency", json.dumps({"amount": 1, "from_currency": "eu", "to_currency": "usd"}))
+    assert "Capitale d'Italia" in await reg.call("wikipedia", json.dumps({"topic": "Roma"}))
+    assert "martedì 22/10/2030" in await reg.call("date_info", json.dumps({"date": "2030-10-22"}))
+    assert "martedì 22/10/2030" in await reg.call("date_info", json.dumps({"date": "2030-10-21", "add_days": 1}))
+    assert "fissato" in await reg.call("remind_in", json.dumps({"minutes": 20, "text": "pasta"}))
+    assert len(await store.list_reminders()) == 1
