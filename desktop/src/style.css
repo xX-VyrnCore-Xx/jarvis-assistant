@@ -158,3 +158,5 @@ button, input, textarea { font: inherit; color: inherit; }
 .brain-item { text-align: left; width: 100%; cursor: pointer; color: inherit; font: inherit; } .brain-item:hover, .brain-item.on { border-color: var(--cy); }
 .brain-doc { position: sticky; top: 0; padding: 16px 18px; border: 1px solid var(--line); border-radius: 14px; background: var(--panel2); display: flex; flex-direction: column; gap: 10px; } .brain-doc h2 { margin: 0; font-size: 18px; }
 .brain-text { margin: 0; max-height: 46vh; overflow: auto; white-space: pre-wrap; font: 13px/1.55 var(--mono); color: var(--text); opacity: .9; }
+
+.side-card.update { display: flex; align-items: center; gap: 8px; border-color: var(--cy); } .side-card.update span { flex: 1; }

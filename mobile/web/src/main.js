@@ -3,7 +3,7 @@ import { el, fmtDate, fmtTokens, fmtUptime, markdown, pct } from "@shared/format
 import { icon } from "@shared/icons.js";
 import { Speaker } from "@shared/speech.js";
 import { openStream } from "@shared/stream.js";
-import { dictationAvailable, haptic, hideSplash, onBack, paintSystemBars, startDictation, stopDictation } from "./native.js";
+import { appVersion, dictationAvailable, haptic, hideSplash, onBack, openExternal, paintSystemBars, platform, startDictation, stopDictation } from "./native.js";
 import { initPush, teardownPush } from "./push.js";
 
 // URL pubblico del server (non è un segreto); il token personale resta nella memoria privata dell'app
@@ -27,7 +27,7 @@ const cfg = { url: (store.get("jarvis.url") || DEFAULT_URL).replace(/\/+$/, ""),
 const api = new Jarvis({ url: () => cfg.url, token: () => cfg.token });
 const speaker = new Speaker({ tts: (t) => api.tts(t) });
 const voiceOn = () => store.get("jarvis.speak") !== "0";
-const S = { brain: { q: "", results: null, docs: null, stats: null, busy: false }, tab: "chat", status: null, checked: false, tokens: null, tokensErr: "", tokensAt: null, reminders: [], remindersLoaded: false, notes: [], pending: [], online: false, busy: false, mic: false, canMic: false, sheets: [] };
+const S = { update: null, prefs: null, models: null, usage: null, appVer: "", brain: { q: "", results: null, docs: null, stats: null, busy: false }, tab: "chat", status: null, checked: false, tokens: null, tokensErr: "", tokensAt: null, reminders: [], remindersLoaded: false, notes: [], pending: [], online: false, busy: false, mic: false, canMic: false, sheets: [] };
 
 const $app = document.getElementById("m-app");
 let top, content, tabs, log, input, sendBtn, micBtn, downBtn, chatView, hello, chips;
@@ -99,6 +99,11 @@ function renderTop() {
       el("button", { class: "m-bell", onclick: openNotes, "aria-label": "Notifiche" }, icon("bell", 21), unread() ? el("i", {}, unread() > 9 ? "9+" : String(unread())) : null)),
   );
   document.getElementById("m-offline")?.remove();
+  document.getElementById("m-update")?.remove();
+  if (S.update?.available) {
+    top.insertAdjacentElement("afterend", el("button", { id: "m-update", class: "m-update", onclick: openUpdate },
+      icon("down", 18), el("span", {}, `Nuova versione ${S.update.latest} disponibile`), el("b", {}, "Aggiorna")));
+  }
   if (offline) {
     top.insertAdjacentElement("afterend", el("div", { id: "m-offline", class: "m-offline", role: "status" }, icon("offline", 17),
       "Server non raggiungibile: si sta svegliando o manca la rete.", el("button", { class: "m-ghost", style: "margin-left:auto;min-height:30px;padding:0 10px", onclick: () => { refreshStatus(); toast("Controllo il server…"); } }, "Riprova")));
@@ -201,16 +206,27 @@ async function send(text) {
   if (S.mic) { await stopDictation(); S.mic = false; micBtn.classList.remove("on"); }
   bubble("user", msg);
   S.busy = true; setOrb("thinking");
-  const typing = el("div", { class: "m-msg bot" }, el("div", { class: "m-bubble typing" }, el("i"), el("i"), el("i")));
+  const label = el("span", { class: "m-status" });
+  const typing = el("div", { class: "m-msg bot" }, el("div", { class: "m-bubble typing" }, el("i"), el("i"), el("i"), label));
   log.append(typing); log.scrollTop = log.scrollHeight;
+  let live = null, acc = "", raf = 0;
+  const paint = () => { raf = 0; const stick = nearBottom(); live.firstChild.replaceChildren(markdown(acc)); if (stick) log.scrollTop = log.scrollHeight; };
   try {
-    const reply = await api.chat(msg, SESSION);
-    typing.remove();
+    const reply = await api.chatStream(msg, SESSION, {
+      model: store.get("jarvis.model"),
+      onStatus: (t) => { label.textContent = t; },
+      onDelta: (t) => {
+        if (!live) { typing.remove(); live = el("div", { class: "m-msg bot" }, el("div", { class: "m-bubble" })); log.append(live); }
+        acc += t;
+        if (!raf) raf = requestAnimationFrame(paint);
+      },
+    });
+    cancelAnimationFrame(raf); typing.remove(); live?.remove();
     bubble("bot", reply);
     haptic("light");
     if (voiceOn() && S.status?.voice) speaker.speak(reply);
     refreshStatus();
-  } catch (e) { typing.remove(); bubble("sys", errText(e)); }
+  } catch (e) { cancelAnimationFrame(raf); typing.remove(); live?.remove(); bubble("sys", errText(e)); }
   finally { S.busy = false; if (!speaker.speaking) setOrb(""); }
 }
 
@@ -310,6 +326,7 @@ async function openDoc(id) {
 async function loadTokens(force = false) {
   if (!cfg.token) return;
   try { S.tokens = await api.tokens(force); S.tokensErr = ""; S.tokensAt = new Date(); } catch (e) { S.tokensErr = errText(e); }
+  api.usage(14).then((u) => { S.usage = u; if (S.tab === "tokens") renderTab(); }).catch(() => {});
   if (S.tab === "tokens") renderTab();
 }
 
@@ -320,6 +337,31 @@ function semi(p, big, small) {
   const arc = (cls, len) => { const path = document.createElementNS(NS, "path"); path.setAttribute("d", "M20 100 A80 80 0 0 1 180 100"); path.setAttribute("class", cls); if (len != null) path.setAttribute("stroke-dasharray", `${len} ${L}`); return path; };
   svg.append(arc("s-track"), arc(`s-bar${p < 15 ? " low" : p < 35 ? " mid" : ""}`, (L * p) / 100));
   return el("div", { class: "semi" }, svg, el("div", { class: "semi-t" }, el("strong", {}, big), el("span", {}, small)));
+}
+
+function forecastCard(t) {
+  const f = t.forecast;
+  if (!f || f.days_left == null) return null;
+  const bad = f.runs_out_before_reset;
+  const when = f.depletes_on ? new Date(f.depletes_on).toLocaleDateString("it-IT", { day: "numeric", month: "long" }) : "";
+  return el("div", { class: `m-card forecast${bad ? " warn" : ""}` },
+    el("b", {}, bad ? `Al ritmo attuale finiscono il ${when}` : "Consumo sotto controllo"),
+    el("p", { class: "m-note" }, bad ? `Prima del prossimo azzeramento. Consumi circa ${fmtTokens(f.burn_per_day)} al giorno: ti restano ~${Math.floor(f.days_left)} giorni.`
+      : `Circa ${fmtTokens(f.burn_per_day)} al giorno: bastano per ~${Math.floor(f.days_left)} giorni, oltre l'azzeramento.`),
+    t.jarvis_today ? el("small", {}, `Oggi JARVIS ha usato ${fmtTokens((t.jarvis_today.prompt_tokens || 0) + (t.jarvis_today.completion_tokens || 0))} token in ${t.jarvis_today.requests || 0} richieste`) : null);
+}
+
+function usageCard() {
+  const u = S.usage;
+  if (!u?.series?.length) return null;
+  const max = Math.max(...u.series.map((d) => d.tokens), 1);
+  const total = u.series.reduce((a, d) => a + d.tokens, 0);
+  const avg = u.series.filter((d) => d.requests).reduce((a, d, _, arr) => a + d.avg_latency_ms / arr.length, 0);
+  return el("div", { class: "m-card usage" },
+    el("div", { class: "prov-top" }, el("b", {}, "Consumo di JARVIS"), el("span", {}, `${fmtTokens(total)} in ${u.series.length} g`)),
+    el("div", { class: "bars", role: "img", "aria-label": "Token usati al giorno" }, u.series.map((d) =>
+      el("i", { title: `${d.day}: ${fmtTokens(d.tokens)}`, style: `height:${Math.max(4, (d.tokens / max) * 100)}%` }))),
+    el("small", {}, `Risposta media ${avg ? `${(avg / 1000).toFixed(1)} s` : "—"} · errori ${u.series.reduce((a, d) => a + d.errors, 0)}`));
 }
 
 function buildTokens() {
@@ -341,6 +383,8 @@ function buildTokens() {
         el("div", {}, el("small", {}, "Usati"), el("b", {}, fmtTokens(t.used_tokens))),
         el("div", {}, el("small", {}, "Richieste"), el("b", {}, t.used_requests))),
       el("p", { class: "m-note" }, `${t.resets_at ? `Si azzera ${fmtDate(t.resets_at)}` : "Si azzera a inizio mese"}${S.tokensAt ? ` · aggiornato alle ${clock(S.tokensAt)}` : ""}`)),
+    forecastCard(t),
+    usageCard(),
     el("h3", { class: "m-sub" }, "Per provider"),
     ...t.providers.map((x) => {
       const known = x.remaining != null;
@@ -443,6 +487,61 @@ function buildReminders() {
   return wrap;
 }
 
+// ---------------------------------------------------------------- aggiornamenti dell'app
+async function checkUpdate(manual = false) {
+  if (!cfg.token || platform !== "android") { if (manual) toast("Gli aggiornamenti si controllano dall'app Android"); return; }
+  try {
+    S.appVer = S.appVer || await appVersion();
+    if (!S.appVer) return;
+    S.update = await api.appUpdate("android", S.appVer);
+    if (manual) toast(S.update.available ? `Disponibile la ${S.update.latest}` : "Sei già alla versione più recente");
+  } catch (e) { if (manual) toast(errText(e), true); }
+  renderTop();
+  if (S.tab === "more") renderTab();
+}
+
+function openUpdate() {
+  const u = S.update;
+  if (!u?.available) return toast("Nessun aggiornamento disponibile");
+  const notes = (u.notes || "").replace(/[#*`]/g, "").trim().slice(0, 700);
+  const s = openSheet(`JARVIS ${u.latest}`,
+    el("small", { class: "m-note" }, `Installata: ${u.current}${u.size ? ` · download ${(u.size / 1048576).toFixed(1)} MB` : ""}`),
+    notes ? el("div", { class: "notes-list", style: "white-space:pre-wrap;max-height:34vh" }, notes) : null,
+    el("p", { class: "m-note" }, "Si scarica l'APK dal sito ufficiale del progetto; poi Android chiede di installarlo sopra l'app attuale. I tuoi dati restano."),
+    u.sha256 ? el("small", { class: "m-note", style: "word-break:break-all" }, `SHA-256: ${u.sha256}`) : null,
+    el("div", { class: "m-btns" },
+      el("button", { class: "m-ghost", onclick: () => { s.close(); openExternal(u.page); } }, "Note di rilascio"),
+      el("button", { class: "m-primary", onclick: () => { haptic("medium"); s.close(); openExternal(u.url); } }, "Scarica e installa")));
+}
+
+// ---------------------------------------------------------------- impostazioni delle notifiche e del modello
+const KIND_LABEL = { reminder: "Promemoria", alert: "Avvisi (token, sicurezza)", pending: "Conferme richieste", update: "Aggiornamenti app", brain: "Secondo cervello", info: "Informazioni" };
+
+async function openNotifySettings() {
+  let p;
+  try { p = await api.notifyPrefs(); } catch (e) { return toast(errText(e), true); }
+  const save = async () => { try { S.prefs = await api.setNotifyPrefs(p); } catch (e) { toast(errText(e), true); } };
+  const sw = (k, ch) => el("input", { type: "checkbox", class: "m-switch", "aria-label": `${KIND_LABEL[k]} ${ch}`, checked: p.kinds[k][ch], onchange: (e) => { p.kinds[k][ch] = e.target.checked; save(); haptic(); } });
+  const from = el("input", { type: "time", value: p.quiet.from, onchange: (e) => { p.quiet.from = e.target.value; save(); } });
+  const to = el("input", { type: "time", value: p.quiet.to, onchange: (e) => { p.quiet.to = e.target.value; save(); } });
+  openSheet("Notifiche",
+    el("div", { class: "notif-grid" }, el("span", {}), el("small", {}, "App"), el("small", {}, "Push"), el("small", {}, "Telegram"),
+      Object.keys(KIND_LABEL).filter((k) => p.kinds[k]).flatMap((k) => [el("span", {}, KIND_LABEL[k]), sw(k, "inapp"), sw(k, "push"), sw(k, "telegram")])),
+    el("div", { class: "m-row" }, el("span", {}, "Ore silenziose"), el("input", { type: "checkbox", class: "m-switch", "aria-label": "Ore silenziose", checked: p.quiet.enabled, onchange: (e) => { p.quiet.enabled = e.target.checked; save(); } })),
+    el("div", { class: "m-presets" }, el("label", {}, "Dalle ", from), el("label", {}, "Alle ", to)),
+    el("p", { class: "m-note" }, "Promemoria, avvisi e conferme arrivano comunque nelle ore silenziose."));
+}
+
+async function openModelPicker() {
+  let list;
+  try { list = await api.models(); } catch (e) { return toast(errText(e), true); }
+  const cur = store.get("jarvis.model");
+  const s = openSheet("Modello di intelligenza", el("p", { class: "m-note" }, "«Automatico» sceglie da solo il migliore disponibile e passa al successivo se uno è esaurito."),
+    el("div", { class: "notes-list" }, list.map((m) => el("button", { class: `m-ghost model${(cur || "auto") === m.id ? " on" : ""}`, onclick: () => {
+      store.set("jarvis.model", m.id === "auto" ? "" : m.id); s.close(); toast(m.id === "auto" ? "Modello automatico" : `Modello: ${m.id}`); if (S.tab === "more") renderTab();
+    } }, m.id === "auto" ? "Automatico (consigliato)" : m.id))));
+}
+
 // ---------------------------------------------------------------- altro
 function row(label, value, ok) { return el("div", { class: "m-row" }, el("span", {}, label), el("b", { class: ok === undefined ? "" : ok ? "ok" : "off" }, value)); }
 
@@ -474,10 +573,18 @@ function buildMore() {
       el("div", { class: "m-btns" }, el("button", { class: "m-ghost", onclick: test }, "Prova"), el("button", { class: "m-primary", onclick: save }, "Salva")), out),
     el("h3", { class: "m-sub" }, "Aspetto"),
     el("div", { class: "m-card" }, seg),
+    el("h3", { class: "m-sub" }, "Aggiornamenti"),
+    el("div", { class: "m-card" },
+      row("Versione app", S.appVer || (platform === "android" ? "—" : "solo Android")),
+      S.update?.available ? el("div", { class: "m-row" }, el("span", {}, `Disponibile ${S.update.latest}`), el("button", { class: "m-primary", onclick: openUpdate }, "Aggiorna"))
+        : el("div", { class: "m-row" }, el("span", {}, S.update ? "Sei aggiornato" : "Controlla le novità"), el("button", { class: "m-ghost", onclick: () => checkUpdate(true) }, icon("refresh", 16), "Controlla"))),
+    el("h3", { class: "m-sub" }, "Intelligenza"),
+    el("div", { class: "m-card" }, el("div", { class: "m-row" }, el("span", {}, "Modello"), el("button", { class: "m-ghost", onclick: openModelPicker }, store.get("jarvis.model") || "Automatico"))),
     el("h3", { class: "m-sub" }, "Voce e notifiche"),
     el("div", { class: "m-card" },
       el("label", { class: "m-row" }, el("span", {}, st?.voice ? "Leggi le risposte (voce di JARVIS)" : "Leggi le risposte (serve il PC acceso)"), speakSwitch),
       el("div", { class: "m-row" }, el("span", {}, "Prova la voce"), el("button", { class: "m-ghost", onclick: () => speaker.speak("Buongiorno, signore. Tutti i sistemi sono operativi.") }, icon("volume", 16), "Ascolta")),
+      el("div", { class: "m-row" }, el("span", {}, "Canali e ore silenziose"), el("button", { class: "m-ghost", onclick: openNotifySettings }, icon("sliders", 16), "Imposta")),
       el("div", { class: "m-row" }, el("span", {}, "Notifica di prova"), el("button", { class: "m-ghost", onclick: async () => { try { await api.testNotification(); toast("Inviata"); } catch (e) { toast(errText(e), true); } } }, icon("bell", 16), "Invia"))),
     el("h3", { class: "m-sub" }, "Stato"),
     el("div", { class: "m-card" },
@@ -494,7 +601,8 @@ function buildMore() {
 }
 
 // ---------------------------------------------------------------- notifiche
-const KIND = { reminder: "clock", alert: "shield", pending: "shield", info: "bell" };
+const KIND = { reminder: "clock", alert: "shield", pending: "shield", update: "down", brain: "sparkle", info: "bell" };
+const ROUTE_TAB = { chat: "chat", brain: "brain", tokens: "tokens", reminders: "reminders", more: "more" };
 let notesSheet = null;
 
 async function loadNotes() {
@@ -506,6 +614,7 @@ async function loadNotes() {
 
 function onNote(n) {
   if (S.notes.some((x) => x.id === n.id)) return;
+  if (n.kind === "update") checkUpdate();
   S.notes.unshift(n);
   renderTop();
   haptic("heavy");
@@ -516,8 +625,17 @@ function fillNotes() {
   const body = notesSheet.sheet.querySelector(".notes-list");
   body.replaceChildren(...(S.notes.length
     ? S.notes.map((n) => el("div", { class: `m-note-row${n.read ? "" : " unread"}` }, el("span", { class: "m-note-ic" }, icon(KIND[n.kind] || "bell", 18)),
-      el("div", {}, el("b", {}, n.title), n.body ? el("p", {}, n.body) : null, el("small", {}, fmtDate(n.created_at)))))
+      el("div", {}, el("b", {}, n.title), n.body ? el("p", {}, n.body) : null, el("small", {}, fmtDate(n.created_at)), noteActions(n))))
     : [el("div", { class: "m-empty" }, el("div", { class: "ico" }, icon("bell", 30)), "Nessuna notifica.")]));
+}
+
+function noteActions(n) {
+  if (n.kind === "reminder" && !n.read) {
+    const go = (m) => async () => { try { await api.snooze(n.id, m); n.read = true; toast(m ? `Te lo ricordo tra ${m >= 60 ? `${m / 60} h` : `${m} min`}` : "Fatto"); renderTop(); fillNotes(); } catch (e) { toast(errText(e), true); } };
+    return el("div", { class: "m-presets note-act" }, el("button", { onclick: go(10) }, "+10 min"), el("button", { onclick: go(60) }, "+1 ora"), el("button", { onclick: go(0) }, "Fatto"));
+  }
+  if (n.kind === "update") return el("div", { class: "m-presets note-act" }, el("button", { onclick: () => { notesSheet?.close(); openUpdate(); } }, "Aggiorna"));
+  return null;
 }
 
 function openNotes() {
@@ -564,9 +682,11 @@ function start() {
   refreshStatus(); pollPending(); loadHistory(); loadNotes(); loadReminders();
   closeStream = openStream({ url: () => cfg.url, token: () => cfg.token }, {
     onNotification: onNote,
+    onRead: (ids) => { S.notes.forEach((n) => { if (!ids || ids.includes(n.id)) n.read = true; }); renderTop(); if (notesSheet) fillNotes(); },
     onState: (st) => { if (st === "on") loadNotes(); },
   });
-  initPush(api).catch(() => {});
+  initPush(api, (route) => { if (ROUTE_TAB[route]) setTab(ROUTE_TAB[route]); }).catch(() => {});
+  checkUpdate();
   timers = [setInterval(refreshStatus, 30_000), setInterval(pollPending, 5_000)];
 }
 function stop() { closeStream?.(); closeStream = null; timers.forEach(clearInterval); timers = []; S.status = null; S.checked = false; S.online = false; S.pending = []; renderTop(); renderPending(); }

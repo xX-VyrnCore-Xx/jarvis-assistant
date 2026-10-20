@@ -90,6 +90,13 @@ Promemoria, avvisi (token in esaurimento, backup fallito) e richieste di conferm
   Senza queste restano le notifiche in-app e Telegram. L'APK registra il proprio token con `POST /api/devices`.
 - **Telegram**: promemoria e avvisi arrivano anche lì.
 
+## Aggiornamenti dall'app e consumi
+
+- **Aggiornamenti**: il server controlla le Release di GitHub ogni 30 minuti e avvisa tutte le app (in tempo reale, push e Telegram) quando ne esce una nuova. Per l'avviso istantaneo aggiungi su GitHub un webhook «Releases» verso `https://<server>/github/webhook` con segreto uguale a `GITHUB_WEBHOOK_SECRET`. Su Android l'app mostra un banner «Aggiorna»: scarica l'APK e Android propone l'installazione sopra l'app attuale (serve la stessa chiave di firma: configura i 4 segreti `ANDROID_KEYSTORE_*`, altrimenti l'APK di debug cambia a ogni build e va prima disinstallata la vecchia). Su Windows il pulsante apre il download dell'installer.
+- **Token**: la sezione mostra previsione di esaurimento, consumo giornaliero di JARVIS e latenza (`/api/tokens`, `/api/usage`). Il modello si sceglie da Altro → Intelligenza (`/api/models`).
+- **Notifiche**: da Altro → Canali e ore silenziose scegli per ogni tipo se arriva nell'app, come push o su Telegram. Sui promemoria ci sono +10 min / +1 ora / Fatto.
+- **Salute**: `/api/health` e il comando Telegram `/salute` mostrano memoria, cifratura, integrazioni e ultimo backup.
+
 ## Secondo cervello (RAG)
 Memoria a lungo termine per note, ricordi, pagine web, file, email e Drive, con recupero **ibrido** e tutto **cifrato a riposo**:
 - **Acquisizione**: `brain_add_note`, `brain_save_url`, `drive_save_to_brain`, `gmail_save_to_brain`; su Telegram `/nota testo`, e file `.txt/.md/.pdf` inviati al bot; nelle app la scheda **Cervello**. Frammenti coerenti (~1200 caratteri, per titolo e paragrafo, con sovrapposizione), deduplicazione per contenuto e per URI (stesso URI = aggiornamento).

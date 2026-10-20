@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { getVersion } from "@tauri-apps/api/app";
 import { Jarvis, ApiError } from "@shared/api.js";
 import { el, fmtDate, fmtTokens, fmtUptime, markdown, nowLocalInput, pct } from "@shared/format.js";
 import { icon } from "@shared/icons.js";
@@ -35,7 +36,7 @@ const cfg = { url: (localStorage.getItem("jarvis.url") || DEFAULT_URL).replace(/
 const api = new Jarvis({ url: () => cfg.url, token: () => cfg.token });
 const speaker = new Speaker({ tts: (t) => synth(t) });
 const voiceOn = () => localStorage.getItem("jarvis.speak") !== "0";
-const S = { view: "chat", status: null, tokens: null, tokensErr: "", pending: [], reminders: [], notes: [], brain: { q: "", results: null, docs: null, stats: null, doc: null }, live: "off", online: false, ws: false, pcLog: [], busy: false };
+const S = { update: null, view: "chat", status: null, tokens: null, tokensErr: "", pending: [], reminders: [], notes: [], brain: { q: "", results: null, docs: null, stats: null, doc: null }, live: "off", online: false, ws: false, pcLog: [], busy: false };
 
 const $app = document.getElementById("app");
 let rail, viewBox, side, chatLog, chatInput, chatView;
@@ -136,6 +137,8 @@ function renderSide() {
       stat("Memoria", st ? (st.memory === "supabase" ? "permanente" : "temporanea") : "—", st ? st.memory === "supabase" : undefined),
       st ? stat("Attivo da", fmtUptime(st.uptime_s)) : null,
     ),
+    S.update?.available ? el("div", { class: "side-card update" }, icon("down", 16), el("span", {}, `Nuova versione ${S.update.latest}`),
+      el("button", { class: "btn primary", onclick: () => local("pc_open_url", { url: S.update.url }).then(() => toast("Scarico l'installer: avvialo per aggiornare")).catch((e) => toast(errText(e), true)) }, "Aggiorna")) : null,
     el("div", { class: "side-card hint" }, icon("shield", 16), el("span", {}, "Le azioni sensibili chiedono sempre la tua conferma.")),
   );
 }
@@ -177,8 +180,18 @@ async function send(text) {
   S.busy = true;
   const wait = addMessage("sys", "JARVIS sta pensando…");
   wait.classList.add("thinking");
+  let live = null, acc = "";
   try {
-    const reply = await api.chat(msg, SESSION);
+    const reply = await api.chatStream(msg, SESSION, {
+      onStatus: (t) => { wait.textContent = t; },
+      onDelta: (t) => {
+        if (!live) { wait.remove(); live = addMessage("bot", ""); }
+        acc += t;
+        live.querySelector(".bubble").replaceChildren(markdown(acc));
+        chatLog.scrollTop = chatLog.scrollHeight;
+      },
+    });
+    live?.remove();
     addMessage("bot", reply);
     if (voiceOn() && voice.installed) speaker.speak(reply);
     refreshStatus();
@@ -237,8 +250,14 @@ function buildTokens() {
   );
 }
 
+// ------------------------------------------------------------------ aggiornamenti
+async function checkUpdate() {
+  if (!cfg.token || !isTauri) return;
+  try { S.update = await api.appUpdate("windows", await getVersion()); renderSide(); } catch { /* server in avvio: riprova al prossimo ciclo */ }
+}
+
 // ------------------------------------------------------------------ notifiche
-const KIND = { reminder: "clock", alert: "shield", pending: "shield", info: "bell" };
+const KIND = { reminder: "clock", alert: "shield", pending: "shield", update: "down", brain: "sparkle", info: "bell" };
 
 async function loadNotes() {
   if (!cfg.token) return;
@@ -249,6 +268,7 @@ async function loadNotes() {
 
 function onNote(n) {
   if (S.notes.some((x) => x.id === n.id)) return;
+  if (n.kind === "update") checkUpdate();
   S.notes.unshift(n);
   renderRail();
   if (S.view === "notifications") renderView();
@@ -528,9 +548,10 @@ async function pollPending() {
 function start() {
   stop();
   if (!cfg.token) return;
-  refreshStatus(); pollPending(); loadHistory(); connect(); loadNotes();
+  refreshStatus(); pollPending(); loadHistory(); connect(); loadNotes(); checkUpdate();
   closeStream = openStream({ url: () => cfg.url, token: () => cfg.token }, {
     onNotification: onNote,
+    onRead: (ids) => { S.notes.forEach((n) => { if (!ids || ids.includes(n.id)) n.read = true; }); renderRail(); if (S.view === "notifications") renderView(); },
     onState: (st) => { const was = S.live; S.live = st; if (st === "on" && was !== "on") loadNotes(); else if (S.view === "notifications") renderView(); },
   });
   timers = [setInterval(refreshStatus, 20_000), setInterval(pollPending, 4_000)];
