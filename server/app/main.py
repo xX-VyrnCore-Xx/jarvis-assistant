@@ -10,6 +10,8 @@ from pydantic import BaseModel, Field
 from .agent import Agent
 from .api import router as api_router
 from .auth import require_token, throttle
+from .backup import HFBackup
+from .voice import VoiceService
 from .budget_service import BudgetService
 from .freellm_admin import FreeLLMAdmin
 from .pending import PendingStore
@@ -20,7 +22,8 @@ from .gateway import make_client
 from .gateway import router as gateway_router
 from .memory import build_store
 from .pc import PCBridge
-from .scheduler import reminder_loop
+from .notify import Notifier
+from .scheduler import background_loop
 from .telegram import Telegram
 from .tools import ToolRegistry
 from .google import GoogleClient
@@ -66,7 +69,21 @@ async def lifespan(app: FastAPI):
             )
 
         pending.on_create = notify_pending
-    task = None
+    app.state.backup = HFBackup(settings)
+    app.state.voice = VoiceService(pc)
+    notifier = app.state.notifier = Notifier(settings, store, tg)
+    prev = pending.on_create
+
+    def on_pending(p) -> None:
+        if prev:
+            prev(p)
+        try:
+            asyncio.get_running_loop().create_task(notifier.push("pending", "Conferma richiesta", p.summary))
+        except RuntimeError:  # creata fuori dal loop (test): nessuna notifica
+            pass
+
+    pending.on_create = on_pending
+    task = asyncio.create_task(background_loop(settings, store, notifier, budget, app.state.backup))
     if tg.enabled:
         base = settings.public_url or settings.render_external_url
         if base and settings.telegram_webhook_secret:
@@ -74,10 +91,8 @@ async def lifespan(app: FastAPI):
                 await tg.set_webhook(f"{base.rstrip('/')}/telegram/webhook")
             except Exception:
                 log.exception("setWebhook fallito")
-        task = asyncio.create_task(reminder_loop(settings, store, tg))
     yield
-    if task:
-        task.cancel()
+    task.cancel()
     await app.state.gateway_client.aclose()
 
 
@@ -103,7 +118,7 @@ def _cors_origins() -> list[str]:
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins(),
-    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type"],
     max_age=600,
 )

@@ -2,6 +2,9 @@ import { invoke } from "@tauri-apps/api/core";
 import { Jarvis, ApiError } from "@shared/api.js";
 import { el, fmtDate, fmtTokens, fmtUptime, markdown, nowLocalInput, pct } from "@shared/format.js";
 import { icon } from "@shared/icons.js";
+import { Speaker } from "@shared/speech.js";
+import { openStream } from "@shared/stream.js";
+import { initVoice, installVoice, onVoiceChange, removeVoice, synth, toBase64, voice } from "./voice.js";
 import { clearToken, loadToken, saveToken } from "./secrets.js";
 
 // URL pubblico del server (non è un segreto); il token personale sta nel Gestore credenziali
@@ -21,18 +24,21 @@ const CHIPS = [
 const VIEWS = [
   ["chat", "Conversazione", "chat"],
   ["tokens", "Token", "gauge"],
-  ["reminders", "Promemoria", "bell"],
+  ["notifications", "Notifiche", "bell"],
+  ["reminders", "Promemoria", "clock"],
   ["pc", "Controllo PC", "monitor"],
   ["settings", "Impostazioni", "sliders"],
 ];
 
 const cfg = { url: (localStorage.getItem("jarvis.url") || DEFAULT_URL).replace(/\/+$/, ""), token: "", where: "local" };
 const api = new Jarvis({ url: () => cfg.url, token: () => cfg.token });
-const S = { view: "chat", status: null, tokens: null, tokensErr: "", pending: [], reminders: [], online: false, ws: false, pcLog: [], busy: false };
+const speaker = new Speaker({ tts: (t) => synth(t) });
+const voiceOn = () => localStorage.getItem("jarvis.speak") !== "0";
+const S = { view: "chat", status: null, tokens: null, tokensErr: "", pending: [], reminders: [], notes: [], live: "off", online: false, ws: false, pcLog: [], busy: false };
 
 const $app = document.getElementById("app");
 let rail, viewBox, side, chatLog, chatInput, chatView;
-let ws, wsRetry = 0, wsPing;
+let ws, wsRetry = 0, wsPing, closeStream;
 
 // ------------------------------------------------------------------ utilità
 function toast(text, bad = false) {
@@ -65,8 +71,8 @@ function renderRail() {
   rail.replaceChildren(
     el("div", { class: "brand", title: "JARVIS" }, el("span", { class: "core" })),
     ...VIEWS.map(([id, label, ic]) => {
-      const badge = id === "reminders" || id === "chat" ? 0 : 0;
-      return el("button", { class: `rail-btn${S.view === id ? " on" : ""}`, title: label, "aria-label": label, onclick: () => setView(id) }, icon(ic, 22), badge ? el("i") : null);
+      const badge = id === "notifications" ? S.notes.filter((n) => !n.read).length : 0;
+      return el("button", { class: `rail-btn${S.view === id ? " on" : ""}`, title: label, "aria-label": label, onclick: () => setView(id) }, icon(ic, 22), badge ? el("i", { class: "badge" }, badge > 9 ? "9+" : String(badge)) : null);
     }),
   );
 }
@@ -77,6 +83,7 @@ function setView(v) {
   renderView();
   if (v === "tokens") loadTokens();
   if (v === "reminders") loadReminders();
+  if (v === "notifications") loadNotes();
 }
 
 function renderView() {
@@ -84,6 +91,7 @@ function renderView() {
   if (S.view === "chat") return viewBox.replaceChildren(buildChat());
   if (S.view === "tokens") return viewBox.replaceChildren(buildTokens());
   if (S.view === "reminders") return viewBox.replaceChildren(buildReminders());
+  if (S.view === "notifications") return viewBox.replaceChildren(buildNotes());
   if (S.view === "pc") return viewBox.replaceChildren(buildPc());
   return viewBox.replaceChildren(buildSettings());
 }
@@ -132,7 +140,8 @@ function renderSide() {
 // ------------------------------------------------------------------ chat
 function addMessage(role, text) {
   const body = role === "bot" ? markdown(text) : el("p", {}, text);
-  const node = el("div", { class: `msg ${role}` }, el("div", { class: "who" }, role === "bot" ? "J.A.R.V.I.S." : role === "user" ? "Tu" : ""), el("div", { class: "bubble" }, body));
+  const play = role === "bot" ? el("button", { class: "speak-btn", title: "Ascolta", "aria-label": "Ascolta", onclick: () => (speaker.speaking ? speaker.stop() : speaker.speak(text)) }, icon("volume", 15)) : null;
+  const node = el("div", { class: `msg ${role}` }, el("div", { class: "who" }, role === "bot" ? "J.A.R.V.I.S." : role === "user" ? "Tu" : "", play), el("div", { class: "bubble" }, body));
   chatLog.append(node);
   chatLog.scrollTop = chatLog.scrollHeight;
   return node;
@@ -166,7 +175,9 @@ async function send(text) {
   const wait = addMessage("sys", "JARVIS sta pensando…");
   wait.classList.add("thinking");
   try {
-    addMessage("bot", await api.chat(msg, SESSION));
+    const reply = await api.chat(msg, SESSION);
+    addMessage("bot", reply);
+    if (voiceOn() && voice.installed) speaker.speak(reply);
     refreshStatus();
   } catch (e) {
     addMessage("sys", errText(e));
@@ -220,6 +231,43 @@ function buildTokens() {
         el("div", { class: "prov-val" }, known ? fmtTokens(p.remaining) : "n/d"));
     })),
     el("p", { class: "tiny note" }, t.note),
+  );
+}
+
+// ------------------------------------------------------------------ notifiche
+const KIND = { reminder: "clock", alert: "shield", pending: "shield", info: "bell" };
+
+async function loadNotes() {
+  if (!cfg.token) return;
+  try { S.notes = await api.notifications(60); } catch (e) { toast(errText(e), true); }
+  renderRail();
+  if (S.view === "notifications") renderView();
+}
+
+function onNote(n) {
+  if (S.notes.some((x) => x.id === n.id)) return;
+  S.notes.unshift(n);
+  renderRail();
+  if (S.view === "notifications") renderView();
+  if (document.hasFocus()) toast(n.title);
+  else invoke("notify", { title: n.title, body: n.body }).catch(() => {});
+}
+
+async function markAllRead() {
+  try { await api.markRead(null); S.notes.forEach((n) => (n.read = true)); renderRail(); renderView(); } catch (e) { toast(errText(e), true); }
+}
+
+function buildNotes() {
+  const live = S.live === "on";
+  return el("div", { class: "page" },
+    panelHead("Notifiche", live ? "In tempo reale: collegato al server." : "Riconnessione in corso…",
+      el("button", { class: "btn", onclick: async () => { try { await api.testNotification(); } catch (e) { toast(errText(e), true); } } }, icon("bell", 16), "Prova"),
+      el("button", { class: "btn", onclick: markAllRead }, icon("check", 16), "Segna lette")),
+    S.notes.length
+      ? el("div", { class: "list" }, S.notes.map((n) => el("div", { class: `item note${n.read ? "" : " unread"}` },
+        el("span", { class: "note-ic" }, icon(KIND[n.kind] || "bell", 18)),
+        el("div", {}, el("b", {}, n.title), n.body ? el("p", { class: "note-body" }, n.body) : null, el("small", {}, fmtDate(n.created_at))))))
+      : el("div", { class: "empty" }, "Nessuna notifica."),
   );
 }
 
@@ -303,6 +351,25 @@ function buildSettings() {
   const autostart = el("input", { type: "checkbox", id: "autostart" });
   if (isTauri) invoke("autostart_get").then((v) => (autostart.checked = !!v)).catch(() => {});
   autostart.addEventListener("change", () => invoke("autostart_set", { enabled: autostart.checked }).catch((e) => toast(String(e), true)));
+  const speak = el("input", { type: "checkbox", id: "speak" });
+  speak.checked = voiceOn();
+  speak.addEventListener("change", () => { localStorage.setItem("jarvis.speak", speak.checked ? "1" : "0"); if (!speak.checked) speaker.stop(); });
+  const vbox = el("div", { class: "voice-box" });
+  const drawVoice = () => {
+    const log = el("pre", { class: "voice-log" }, voice.log.slice(-12).join("\n"));
+    vbox.replaceChildren(
+      el("p", { class: "tiny" }, voice.installing ? "Installazione in corso: servono alcuni minuti e circa 3 GB (non chiudere JARVIS)."
+        : voice.installed ? (voice.running ? "Voce di JARVIS pronta." : "Voce installata: si avvia al primo utilizzo.")
+        : "La voce clonata di JARVIS (XTTS v2) gira sul tuo PC, gratis. Si scaricano circa 3 GB una volta sola."),
+      voice.error ? el("p", { class: "tiny bad" }, voice.error) : null,
+      el("div", { class: "row" },
+        !voice.installed && !voice.installing ? el("button", { class: "btn primary", onclick: installVoice }, "Installa la voce") : null,
+        voice.installed ? el("button", { class: "btn", onclick: () => speaker.speak("Buongiorno, signore. Tutti i sistemi sono operativi.") }, "Prova la voce") : null,
+        voice.installed && !voice.installing ? el("button", { class: "btn danger", onclick: async () => { speaker.stop(); await removeVoice(); } }, "Rimuovi la voce") : null),
+      voice.installing || voice.log.length ? log : null);
+  };
+  drawVoice();
+  const stopVoice = onVoiceChange(() => (vbox.isConnected ? drawVoice() : stopVoice()));
   return el("div", { class: "page narrow" },
     panelHead("Impostazioni", "Collegamento al tuo JARVIS."),
     el("label", { class: "field" }, "Indirizzo del server", url),
@@ -310,6 +377,8 @@ function buildSettings() {
       el("small", {}, cfg.where === "keyring" ? "Salvato nel Gestore credenziali di Windows, cifrato dall'account." : "Salvato su questo computer (nel browser di prova).")),
     el("div", { class: "row" }, el("button", { class: "btn", onclick: test }, "Prova il collegamento"), el("button", { class: "btn primary", onclick: save }, "Salva")),
     result,
+    el("label", { class: "check" }, speak, "Leggi le risposte con la voce di JARVIS"),
+    isTauri ? vbox : null,
     isTauri ? el("label", { class: "check" }, autostart, "Avvia JARVIS con Windows (resta nella barra delle applicazioni)") : null,
     el("div", { class: "row" }, el("button", { class: "btn danger", onclick: async () => { await clearToken(); cfg.token = ""; token.value = ""; stop(); toast("Token rimosso da questo computer"); } }, "Rimuovi il token da questo PC")),
     el("p", { class: "tiny" }, "Scorciatoia: Alt+Spazio mostra o nasconde la finestra."),
@@ -355,7 +424,7 @@ function connect() {
   ws?.close();
   if (!isTauri || !cfg.token) return;
   ws = new WebSocket(`${cfg.url.replace(/^http/, "ws")}/ws/pc`);
-  ws.onopen = () => ws.send(JSON.stringify({ token: cfg.token }));
+  ws.onopen = () => ws.send(JSON.stringify({ token: cfg.token, caps: { voice: voice.installed } }));
   ws.onmessage = async (ev) => {
     const msg = JSON.parse(ev.data);
     if (msg.type === "ready") {
@@ -376,6 +445,10 @@ function connect() {
 }
 
 async function runCommand(action, args) {
+  if (action === "tts") { // il server (e quindi il telefono) chiede di leggere un testo con la voce di JARVIS
+    if (!voice.installed) return "Voce non installata sul PC.";
+    try { return await toBase64(await synth(String(args.text || "").slice(0, 500))); } catch (e) { return `Errore: ${e}`; }
+  }
   const ask = SENSITIVE[action];
   if (ask && !(await confirmLocal(ask(args)))) { logPc(`${action}: rifiutato`, false); return "Azione rifiutata dall'utente."; }
   try { const out = await local(action, args); logPc(`${action}: ${out}`); return out; } catch (e) { logPc(`${action}: ${e}`, false); return `Errore: ${e}`; }
@@ -396,11 +469,16 @@ async function pollPending() {
 function start() {
   stop();
   if (!cfg.token) return;
-  refreshStatus(); pollPending(); loadHistory(); connect();
+  refreshStatus(); pollPending(); loadHistory(); connect(); loadNotes();
+  closeStream = openStream({ url: () => cfg.url, token: () => cfg.token }, {
+    onNotification: onNote,
+    onState: (st) => { const was = S.live; S.live = st; if (st === "on" && was !== "on") loadNotes(); else if (S.view === "notifications") renderView(); },
+  });
   timers = [setInterval(refreshStatus, 20_000), setInterval(pollPending, 4_000)];
 }
 function stop() {
   timers.forEach(clearInterval); timers = [];
+  closeStream?.(); closeStream = null; S.live = "off";
   clearInterval(wsPing); ws?.close(); S.ws = false; S.status = null; S.online = false; S.pending = [];
   renderPending(); renderSide();
 }
@@ -417,4 +495,16 @@ function stop() {
   if (!cfg.token) S.view = "settings";
   renderRail(); renderView();
   if (cfg.token) start();
+  await initVoice();
+  onVoiceChange(() => { if (ws?.readyState === 1) ws.send(JSON.stringify({ type: "caps", voice: voice.installed })); });
+  if (isTauri && !voice.installed && !voice.installing && !localStorage.getItem("jarvis.voice.asked")) {
+    localStorage.setItem("jarvis.voice.asked", "1");
+    const o = el("div", { class: "overlay" }, el("div", { class: "dialog", role: "dialog" },
+      el("div", { class: "dlg-icon" }, icon("volume", 28)), el("h2", {}, "Voce di JARVIS"),
+      el("p", {}, "Vuoi installare la voce clonata di JARVIS? Gira sul tuo PC, è gratuita e serve anche al telefono quando il PC è acceso."),
+      el("small", {}, "Download di circa 3 GB, una volta sola. Puoi farlo anche dopo da Impostazioni."),
+      el("div", { class: "row end" }, el("button", { class: "btn", onclick: () => o.remove() }, "Più tardi"),
+        el("button", { class: "btn primary", onclick: () => { o.remove(); installVoice(); setView("settings"); } }, "Installa"))));
+    document.body.append(o);
+  }
 })();

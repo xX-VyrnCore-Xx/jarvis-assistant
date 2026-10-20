@@ -1,0 +1,35 @@
+name: Prova installazione voce (Windows)
+on:
+  workflow_dispatch:
+  pull_request:
+    paths: ["desktop/src-tauri/resources/**", ".github/workflows/test-voice.yml"]
+jobs:
+  voice:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Installa la voce come farebbe l'app
+        shell: pwsh
+        run: ./desktop/src-tauri/resources/install_voice.ps1 -Dir "$env:RUNNER_TEMP\voice"
+      - name: Sintetizza una frase
+        shell: pwsh
+        run: |
+          $dir = "$env:RUNNER_TEMP\voice"
+          $env:JARVIS_TTS_TOKEN = 'prova'; $env:COQUI_TOS_AGREED = '1'; $env:TTS_HOME = "$dir\models"
+          $p = Start-Process "$dir\python\python.exe" -PassThru -ArgumentList "desktop/src-tauri/resources/tts_server.py","--port","8777","--voice","desktop/src-tauri/resources/jarvis.wav"
+          $ok = $false
+          for ($i = 0; $i -lt 180 -and -not $ok; $i++) {
+            Start-Sleep 2
+            try { $ok = (Invoke-WebRequest http://127.0.0.1:8777/health -UseBasicParsing).StatusCode -eq 200 } catch {}
+          }
+          if (-not $ok) { throw 'il server vocale non si è avviato' }
+          $sw = [Diagnostics.Stopwatch]::StartNew()
+          Invoke-WebRequest http://127.0.0.1:8777/tts -Method Post -ContentType 'application/json' `
+            -Headers @{ Authorization = 'Bearer prova' } -Body '{"text":"Buongiorno, signore. Tutti i sistemi sono operativi."}' -OutFile out.wav
+          Write-Output "Sintesi in $($sw.Elapsed.TotalSeconds) s, $((Get-Item out.wav).Length) byte"
+          $head = [Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes((Resolve-Path out.wav))[0..3])
+          if ($head -ne 'RIFF' -or (Get-Item out.wav).Length -lt 20000) { throw 'audio non valido' }
+          Stop-Process $p -Force
+      - uses: actions/upload-artifact@v4
+        with: { name: prova-voce, path: out.wav }

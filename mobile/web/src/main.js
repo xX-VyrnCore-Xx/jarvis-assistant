@@ -1,20 +1,26 @@
 import { Jarvis, ApiError } from "@shared/api.js";
 import { el, fmtDate, fmtTokens, fmtUptime, markdown, nowLocalInput, pct } from "@shared/format.js";
 import { icon } from "@shared/icons.js";
+import { Speaker } from "@shared/speech.js";
+import { openStream } from "@shared/stream.js";
+import { initPush, teardownPush } from "./push.js";
 
 // URL pubblico del server (non è un segreto); il token personale resta nella memoria privata dell'app
 const DEFAULT_URL = "https://jarvis-ai-841t.onrender.com";
 const SESSION = "mobile";
-const TABS = [["chat", "Chat", "chat"], ["tokens", "Token", "gauge"], ["reminders", "Promemoria", "bell"], ["more", "Altro", "sliders"]];
+const TABS = [["chat", "Chat", "chat"], ["tokens", "Token", "gauge"], ["reminders", "Promemoria", "clock"], ["more", "Altro", "sliders"]];
 const CHIPS = [["Token disponibili", "Quanti token mi restano questo mese?"], ["Che ore sono", "Che ore sono?"], ["Agenda", "Cosa ho in agenda nei prossimi giorni?"], ["Email", "Ho email non lette importanti?"]];
 
 const cfg = { url: (localStorage.getItem("jarvis.url") || DEFAULT_URL).replace(/\/+$/, ""), token: localStorage.getItem("jarvis.token") || "" };
 const api = new Jarvis({ url: () => cfg.url, token: () => cfg.token });
-const S = { tab: "chat", status: null, tokens: null, tokensErr: "", reminders: [], pending: [], online: false, busy: false };
+const speaker = new Speaker({ tts: (t) => api.tts(t) });
+const voiceOn = () => localStorage.getItem("jarvis.speak") !== "0";
+const S = { tab: "chat", status: null, tokens: null, tokensErr: "", reminders: [], notes: [], pending: [], online: false, busy: false };
 
 const $app = document.getElementById("m-app");
 let top, content, tabs, log, input, chatView;
 let timers = [];
+let closeStream = null;
 
 const errText = (e) => (e instanceof ApiError ? e.message : String(e));
 function toast(text, bad = false) {
@@ -38,6 +44,7 @@ function renderTop() {
   top.replaceChildren(
     el("div", { class: "m-title" }, el("span", { class: "m-logo" }), el("div", {}, el("h1", {}, "JARVIS"), el("p", {}, `${greeting()}, signore`))),
     el("div", { class: "m-right" },
+      el("button", { class: "m-bell", onclick: openNotes, "aria-label": "Notifiche" }, icon("bell", 21), unread() ? el("i", {}, unread() > 9 ? "9+" : String(unread())) : null),
       t ? el("button", { class: "m-pill", onclick: () => setTab("tokens"), "aria-label": "Token disponibili" }, icon("gauge", 15), fmtTokens(t.remaining_tokens)) : null,
       el("button", { class: `m-dot ${S.online ? "on" : ""}`, title: S.online ? "Online" : "Non raggiungibile", "aria-label": S.online ? "Online" : "Non raggiungibile", onclick: () => { refreshStatus(); toast("Controllo il server…"); } })),
   );
@@ -63,7 +70,8 @@ function renderTab() {
 
 // ---------------------------------------------------------------- chat
 function bubble(role, text) {
-  const node = el("div", { class: `m-msg ${role}` }, el("div", { class: "m-bubble" }, role === "bot" ? markdown(text) : el("p", {}, text)));
+  const play = role === "bot" ? el("button", { class: "m-speak", "aria-label": "Ascolta", onclick: () => (speaker.speaking ? speaker.stop() : speaker.speak(text)) }, icon("volume", 16)) : null;
+  const node = el("div", { class: `m-msg ${role}` }, el("div", { class: "m-bubble" }, role === "bot" ? markdown(text) : el("p", {}, text), play));
   log.append(node);
   log.scrollTop = log.scrollHeight;
   return node;
@@ -91,7 +99,12 @@ async function send(text) {
   S.busy = true;
   const typing = el("div", { class: "m-msg bot" }, el("div", { class: "m-bubble typing" }, el("i"), el("i"), el("i")));
   log.append(typing); log.scrollTop = log.scrollHeight;
-  try { bubble("bot", await api.chat(msg, SESSION)); refreshStatus(); }
+  try {
+    const reply = await api.chat(msg, SESSION);
+    bubble("bot", reply);
+    if (voiceOn() && S.status?.voice) speaker.speak(reply);
+    refreshStatus();
+  }
   catch (e) { bubble("sys", errText(e)); }
   finally { typing.remove(); S.busy = false; }
 }
@@ -216,8 +229,50 @@ function buildMore() {
       row("Google", st ? (st.google ? "collegato" : "non collegato") : "—", st ? st.google : undefined),
       row("Memoria", st ? (st.memory === "supabase" ? "permanente" : "temporanea") : "—", st ? st.memory === "supabase" : undefined),
       st ? row("Attivo da", fmtUptime(st.uptime_s)) : null),
+    el("div", { class: "m-card" }, el("label", { class: "m-row" }, el("span", {}, st?.voice ? "Voce di JARVIS" : "Voce di JARVIS (serve il PC acceso)"),
+      el("input", { type: "checkbox", checked: voiceOn(), onchange: (e) => { localStorage.setItem("jarvis.speak", e.target.checked ? "1" : "0"); if (!e.target.checked) speaker.stop(); } }))),
     el("div", { class: "m-card safe" }, icon("shield", 20), el("p", {}, "Le azioni sensibili, come inviare un'email, richiedono sempre la tua conferma.")),
-    el("button", { class: "m-danger", onclick: () => { localStorage.removeItem("jarvis.token"); cfg.token = ""; stop(); renderTab(); toast("Token rimosso da questo telefono"); } }, "Rimuovi il token da questo telefono"));
+    el("button", { class: "m-danger", onclick: () => { teardownPush(api).catch(() => {}); localStorage.removeItem("jarvis.token"); cfg.token = ""; stop(); renderTab(); toast("Token rimosso da questo telefono"); } }, "Rimuovi il token da questo telefono"));
+}
+
+// ---------------------------------------------------------------- notifiche
+const unread = () => S.notes.filter((n) => !n.read).length;
+const KIND = { reminder: "clock", alert: "shield", pending: "shield", info: "bell" };
+let notesSheet = null;
+
+async function loadNotes() {
+  if (!cfg.token) return;
+  try { S.notes = await api.notifications(40); } catch { return; }
+  renderTop();
+  if (notesSheet) fillNotes();
+}
+
+function onNote(n) {
+  if (S.notes.some((x) => x.id === n.id)) return;
+  S.notes.unshift(n);
+  renderTop();
+  if (notesSheet) fillNotes(); else toast(n.title);
+  navigator.vibrate?.(60);
+}
+
+function fillNotes() {
+  const body = notesSheet.sheet.querySelector(".notes-list");
+  body.replaceChildren(...(S.notes.length
+    ? S.notes.map((n) => el("div", { class: `m-note-row${n.read ? "" : " unread"}` }, el("span", { class: "m-note-ic" }, icon(KIND[n.kind] || "bell", 18)),
+      el("div", {}, el("b", {}, n.title), n.body ? el("p", {}, n.body) : null, el("small", {}, fmtDate(n.created_at)))))
+    : [el("div", { class: "m-empty" }, "Nessuna notifica.")]));
+}
+
+async function openNotes() {
+  if (notesSheet) return;
+  const list = el("div", { class: "notes-list" });
+  const s = openSheet("Notifiche", list, el("div", { class: "m-btns" },
+    el("button", { class: "m-ghost", onclick: async () => { try { await api.testNotification(); } catch (e) { toast(errText(e), true); } } }, "Prova"),
+    el("button", { class: "m-primary", onclick: async () => { try { await api.markRead(null); S.notes.forEach((n) => (n.read = true)); renderTop(); fillNotes(); } catch (e) { toast(errText(e), true); } } }, "Segna lette")));
+  notesSheet = { ...s, close: () => { s.close(); notesSheet = null; } };
+  s.sheet.addEventListener("click", (e) => { if (e.target === s.sheet) notesSheet = null; });
+  fillNotes();
+  if (unread()) { api.markRead(null).then(() => setTimeout(() => { S.notes.forEach((n) => (n.read = true)); renderTop(); }, 1500)).catch(() => {}); }
 }
 
 // ---------------------------------------------------------------- conferme
@@ -245,13 +300,18 @@ async function pollPending() { if (!cfg.token) return; try { S.pending = await a
 function start() {
   stop();
   if (!cfg.token) return;
-  refreshStatus(); pollPending(); loadHistory();
+  refreshStatus(); pollPending(); loadHistory(); loadNotes();
+  closeStream = openStream({ url: () => cfg.url, token: () => cfg.token }, {
+    onNotification: onNote,
+    onState: (st) => { if (st === "on") loadNotes(); },
+  });
+  initPush(api).catch(() => {});
   timers = [setInterval(refreshStatus, 30_000), setInterval(pollPending, 5_000)];
 }
-function stop() { timers.forEach(clearInterval); timers = []; S.status = null; S.online = false; S.pending = []; renderTop(); renderPending(); }
+function stop() { closeStream?.(); closeStream = null; timers.forEach(clearInterval); timers = []; S.status = null; S.online = false; S.pending = []; renderTop(); renderPending(); }
 
 // risparmia batteria e dati: nulla gira con l'app in secondo piano
-document.addEventListener("visibilitychange", () => { if (document.hidden) { timers.forEach(clearInterval); timers = []; } else start(); });
+document.addEventListener("visibilitychange", () => { if (document.hidden) { speaker.stop(); closeStream?.(); closeStream = null; timers.forEach(clearInterval); timers = []; } else start(); });
 
 shell();
 if (!cfg.token) S.tab = "more";

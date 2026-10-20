@@ -25,7 +25,7 @@ export class Jarvis {
     this.cfg = cfg;
   }
 
-  async #req(path, { method = "GET", body, timeout = 30_000, auth = true } = {}) {
+  async #req(path, { method = "GET", body, timeout = 30_000, auth = true, raw = false } = {}) {
     const headers = {};
     if (auth) headers.Authorization = `Bearer ${this.cfg.token()}`;
     if (body !== undefined) headers["Content-Type"] = "application/json";
@@ -48,7 +48,7 @@ export class Jarvis {
       if (res.status === 429 && wait) msg = `Troppe richieste: riprova tra ${wait} s.`;
       throw new ApiError(res.status, msg, wait);
     }
-    return res.json();
+    return raw ? res.blob() : res.json();
   }
 
   health() { return this.#req("/health", { auth: false, timeout: 70_000 }); }
@@ -61,4 +61,10 @@ export class Jarvis {
   deleteReminder(id) { return this.#req(`/api/reminders/${id}`, { method: "DELETE" }); }
   pending() { return this.#req("/api/pending"); }
   decide(id, approve) { return this.#req(`/api/pending/${encodeURIComponent(id)}/${approve ? "approve" : "reject"}`, { method: "POST" }); }
+  tts(text) { return this.#req("/api/tts", { method: "POST", body: { text }, timeout: 150_000, raw: true }); }
+  notifications(limit = 50) { return this.#req(`/api/notifications?limit=${limit}`); }
+  markRead(ids = null) { return this.#req("/api/notifications/read", { method: "POST", body: { ids } }); }
+  testNotification() { return this.#req("/api/notifications/test", { method: "POST" }); }
+  registerDevice(platform, token, label = "") { return this.#req("/api/devices", { method: "POST", body: { platform, token, label } }); }
+  unregisterDevice(token) { return this.#req(`/api/devices?token=${encodeURIComponent(token)}`, { method: "DELETE" }); }
 }

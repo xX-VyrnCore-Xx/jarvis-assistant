@@ -7,6 +7,9 @@ cd "$(dirname "$0")/.."
 VERSION="${1:-0.1.0}"
 VERSION_CODE="${2:-1}"
 
+# notifiche push: servono il google-services.json del progetto Firebase (come segreto base64); senza, restano quelle in-app
+if [ -n "${ANDROID_GOOGLE_SERVICES_JSON_B64:-}" ]; then export VITE_PUSH=1; fi
+
 npm ci
 # interfaccia pensata per il telefono (mobile/web), diversa da quella dell'app Windows
 npm run build:web
@@ -17,6 +20,14 @@ MANIFEST=android/app/src/main/AndroidManifest.xml
 sed -i 's/android:allowBackup="true"/android:allowBackup="false"/' "$MANIFEST"
 grep -q 'usesCleartextTraffic' "$MANIFEST" || sed -i 's/<application/<application android:usesCleartextTraffic="false"/' "$MANIFEST"
 grep -q 'allowBackup="false"' "$MANIFEST" || { echo "manifest: allowBackup non disattivato"; exit 1; }
+
+if [ -n "${ANDROID_GOOGLE_SERVICES_JSON_B64:-}" ]; then
+  echo "$ANDROID_GOOGLE_SERVICES_JSON_B64" | base64 -d > android/app/google-services.json
+  grep -q '"it.vyrncore.jarvis"' android/app/google-services.json || { echo "google-services.json: package diverso da it.vyrncore.jarvis"; exit 1; }
+  echo "Push Firebase attive"
+else
+  echo "google-services.json assente: notifiche push disattivate (restano quelle in-app)"
+fi
 
 # versione dell'app
 sed -i -E "s/versionCode [0-9]+/versionCode ${VERSION_CODE}/; s/versionName \"[^\"]*\"/versionName \"${VERSION}\"/" android/app/build.gradle

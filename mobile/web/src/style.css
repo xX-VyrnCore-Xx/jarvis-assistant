@@ -93,3 +93,15 @@ input[type=text], input[type=password], input[type=datetime-local] { display: bl
 #m-toast { position: fixed; left: 16px; right: 16px; bottom: calc(86px + var(--bot)); text-align: center; padding: 12px 16px; border-radius: 16px; background: #2a2540; border: 1px solid var(--line); transform: translateY(20px); opacity: 0; transition: .25s; pointer-events: none; z-index: 60; }
 #m-toast.show { opacity: 1; transform: none; } #m-toast.bad { border-color: var(--bad); }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+
+/* notifiche */
+.m-bell { position: relative; width: 38px; height: 38px; border-radius: 50%; border: 1px solid var(--line); background: var(--surf2); color: var(--text); display: grid; place-items: center; }
+.m-bell i { position: absolute; top: -3px; right: -3px; min-width: 18px; height: 18px; padding: 0 4px; border-radius: 9px; background: var(--grad); color: #1a1220; font: 700 11px/18px system-ui; font-style: normal; text-align: center; }
+.notes-list { max-height: 52vh; overflow-y: auto; margin: 4px 0 14px; display: flex; flex-direction: column; gap: 8px; }
+.m-note-row { display: flex; gap: 12px; padding: 12px 14px; border-radius: 16px; background: var(--surf2); border: 1px solid var(--line); }
+.m-note-row.unread { border-color: var(--amber); }
+.m-note-row p { margin: 3px 0 0; font-size: 14px; opacity: .85; }
+.m-note-row small { display: block; margin-top: 4px; opacity: .6; font-size: 11.5px; }
+.m-note-ic { color: var(--amber); flex: none; margin-top: 2px; }
+
+.m-speak { display: block; margin: 6px 0 0 auto; background: none; border: 0; color: var(--amber); padding: 2px 0 0; opacity: .8; }

@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Protocol
 
 import httpx
@@ -16,6 +16,13 @@ class Store(Protocol):
     async def due_reminders(self, now: datetime) -> list[dict]: ...
     async def mark_reminder_done(self, reminder_id: int) -> None: ...
     async def delete_reminder(self, reminder_id: int) -> None: ...
+    async def add_notification(self, kind: str, title: str, body: str) -> dict: ...
+    async def list_notifications(self, limit: int) -> list[dict]: ...
+    async def mark_notifications_read(self, ids: list[int] | None) -> None: ...
+    async def upsert_device(self, platform: str, token: str, label: str) -> None: ...
+    async def list_devices(self) -> list[dict]: ...
+    async def delete_device(self, token: str) -> None: ...
+    async def prune(self) -> None: ...
 
 
 class MemoryStore:
@@ -25,6 +32,8 @@ class MemoryStore:
         self.messages: list[dict] = []
         self.memories: list[str] = []
         self.reminders: list[dict] = []
+        self.notifications: list[dict] = []
+        self.devices: dict[str, dict] = {}
 
     async def add_message(self, session_id, role, content):
         self.messages.append({"session_id": session_id, "role": role, "content": content})
@@ -59,6 +68,32 @@ class MemoryStore:
 
     async def delete_reminder(self, reminder_id):
         self.reminders = [r for r in self.reminders if r["id"] != reminder_id]
+
+    async def add_notification(self, kind, title, body):
+        row = {"id": len(self.notifications) + 1, "kind": kind, "title": title, "body": body, "read": False,
+               "created_at": datetime.now(timezone.utc).isoformat()}
+        self.notifications.append(row)
+        return row
+
+    async def list_notifications(self, limit):
+        return list(reversed(self.notifications))[:limit]
+
+    async def mark_notifications_read(self, ids):
+        for n in self.notifications:
+            if ids is None or n["id"] in ids:
+                n["read"] = True
+
+    async def upsert_device(self, platform, token, label):
+        self.devices[token] = {"platform": platform, "token": token, "label": label}
+
+    async def list_devices(self):
+        return list(self.devices.values())
+
+    async def delete_device(self, token):
+        self.devices.pop(token, None)
+
+    async def prune(self):
+        pass
 
 
 class SupabaseStore:
@@ -137,6 +172,48 @@ class SupabaseStore:
     async def delete_reminder(self, reminder_id):
         r = await self._client.delete(f"{self.base}/reminders", params={"id": f"eq.{reminder_id}"}, headers=self.headers)
         r.raise_for_status()
+
+    async def add_notification(self, kind, title, body):
+        h = {**self.headers, "Prefer": "return=representation"}
+        r = await self._client.post(f"{self.base}/notifications", json={"kind": kind, "title": title, "body": body}, headers=h)
+        r.raise_for_status()
+        return r.json()[0]
+
+    async def list_notifications(self, limit):
+        return await self._get(
+            "notifications", {"select": "id,kind,title,body,read,created_at", "order": "created_at.desc", "limit": limit}
+        )
+
+    async def mark_notifications_read(self, ids):
+        params = {"id": f"in.({','.join(str(int(i)) for i in ids)})"} if ids is not None else {"read": "eq.false"}
+        r = await self._client.patch(f"{self.base}/notifications", params=params, json={"read": True}, headers=self.headers)
+        r.raise_for_status()
+
+    async def upsert_device(self, platform, token, label):
+        h = {**self.headers, "Prefer": "resolution=merge-duplicates,return=minimal"}
+        row = {"platform": platform, "token": token, "label": label, "last_seen": datetime.now(timezone.utc).isoformat()}
+        r = await self._client.post(f"{self.base}/devices", params={"on_conflict": "token"}, json=row, headers=h)
+        r.raise_for_status()
+
+    async def list_devices(self):
+        return await self._get("devices", {"select": "platform,token,label"})
+
+    async def delete_device(self, token):
+        r = await self._client.delete(f"{self.base}/devices", params={"token": f"eq.{token}"}, headers=self.headers)
+        r.raise_for_status()
+
+    async def prune(self):
+        # Retention applicata dal server (PostgREST): messaggi 180 gg, notifiche 90 gg, promemoria fatti 60 gg, dispositivi 90 gg.
+        now = datetime.now(timezone.utc)
+        for table, col, days, extra in (
+            ("messages", "created_at", 180, {}),
+            ("notifications", "created_at", 90, {}),
+            ("reminders", "due_at", 60, {"done": "eq.true"}),
+            ("devices", "last_seen", 90, {}),
+        ):
+            cutoff = (now - timedelta(days=days)).isoformat()
+            r = await self._client.delete(f"{self.base}/{table}", params={col: f"lt.{cutoff}", **extra}, headers=self.headers)
+            r.raise_for_status()
 
 
 def build_store(settings: Settings) -> Store:

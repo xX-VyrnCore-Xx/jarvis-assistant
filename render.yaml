@@ -38,3 +38,9 @@ services:
         sync: false
       - key: FREEAPI_CONFIG_JSON
         sync: false
+      # backup del DB di FreeLLMAPI ogni 30 min (meno commit sul dataset); Supabase viene salvato cifrato ogni notte
+      - key: FREEAPI_BACKUP_INTERVAL_MS
+        value: "1800000"
+      # notifiche push Android: JSON dell'account di servizio Firebase (vedi README, sezione Notifiche)
+      - key: FIREBASE_SERVICE_ACCOUNT_JSON
+        sync: false
