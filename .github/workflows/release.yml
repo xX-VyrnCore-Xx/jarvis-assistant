@@ -41,7 +41,9 @@ jobs:
         working-directory: desktop
       - name: Imposta la versione
         shell: bash
-        run: sed -i "s/\"version\": \"0.1.0\"/\"version\": \"$VERSION\"/" desktop/src-tauri/tauri.conf.json
+        run: |
+          sed -i 's/"version": "0.1.0"/"version": "'"$VERSION"'"/' desktop/src-tauri/tauri.conf.json
+          grep '"version"' desktop/src-tauri/tauri.conf.json
       - run: npx tauri build
         working-directory: desktop
       - uses: actions/upload-artifact@v4
