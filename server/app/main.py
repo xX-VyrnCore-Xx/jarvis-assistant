@@ -10,6 +10,8 @@ from .agent import Agent
 from .auth import require_token
 from .config import get_settings
 from .llm import LLMClient, LLMError
+from .gateway import make_client
+from .gateway import router as gateway_router
 from .memory import build_store
 from .pc import PCBridge
 from .scheduler import reminder_loop
@@ -37,6 +39,7 @@ async def lifespan(app: FastAPI):
     store = build_store(settings)
     tools = ToolRegistry()
     register_basic_tools(tools, settings, store)
+    app.state.gateway_client = make_client()
     pc = app.state.pc = PCBridge()
     register_pc_tools(tools, pc)
     google = GoogleClient(settings)
@@ -57,10 +60,12 @@ async def lifespan(app: FastAPI):
     yield
     if task:
         task.cancel()
+    await app.state.gateway_client.aclose()
 
 
 log = logging.getLogger("jarvis")
 app = FastAPI(title="JARVIS", lifespan=lifespan)
+app.include_router(gateway_router)
 
 
 @app.get("/health")

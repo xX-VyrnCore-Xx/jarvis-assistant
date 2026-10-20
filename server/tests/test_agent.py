@@ -204,3 +204,58 @@ async def test_unified_key_is_read_from_freellm_db(tmp_path):
     con.close()
     assert (await llm.chat([{"role": "user", "content": "x"}]))["content"] == "ok"
     assert seen["auth"] == "Bearer freellmapi-abc"
+
+
+def test_gateway_forwards_only_v1_and_streams(monkeypatch):
+    import httpx
+
+    from app import main
+    from app.config import get_settings
+
+    monkeypatch.setenv("JARVIS_API_TOKEN", "t")
+    monkeypatch.setenv("FREELLM_INTERNAL_URL", "http://upstream:3001")
+    get_settings.cache_clear()
+    seen = {}
+
+    def upstream(req: httpx.Request):
+        seen["url"], seen["auth"], seen["body"] = str(req.url), req.headers.get("authorization"), req.content
+        if req.url.path == "/v1/stream":
+            return httpx.Response(200, stream=httpx.ByteStream(b"data: a\n\ndata: b\n\n"), headers={"content-type": "text/event-stream"})
+        # stream=: una risposta già letta (content=/json=) non è ri-leggibile come farebbe un vero stream
+        return httpx.Response(401, stream=httpx.ByteStream(b'{"error": {"message": "bad key"}}'), headers={"content-type": "application/json"})
+
+    with TestClient(main.app) as c:
+        main.app.state.gateway_client = httpx.AsyncClient(transport=httpx.MockTransport(upstream))
+        r = c.post("/v1/chat/completions?x=1", content=b'{"m":1}', headers={"Authorization": "Bearer freellmapi-k"})
+        assert r.status_code == 401 and r.json()["error"]["message"] == "bad key"
+        assert seen["url"] == "http://upstream:3001/v1/chat/completions?x=1"
+        assert seen["auth"] == "Bearer freellmapi-k" and seen["body"] == b'{"m":1}'
+        assert c.get("/v1/stream").text == "data: a\n\ndata: b\n\n"
+        # la dashboard (/api/*) non è inoltrata
+        assert c.get("/api/keys").status_code == 404
+    get_settings.cache_clear()
+
+
+def test_gateway_disabled_and_credentials_endpoint(monkeypatch, tmp_path):
+    import sqlite3
+
+    from app import main
+    from app.config import get_settings
+
+    monkeypatch.setenv("JARVIS_API_TOKEN", "t")
+    monkeypatch.delenv("FREELLM_INTERNAL_URL", raising=False)
+    db = tmp_path / "f.db"
+    con = sqlite3.connect(db)
+    con.execute("create table settings (key text primary key, value text)")
+    con.execute("insert into settings values ('unified_api_key', 'freellmapi-zzz')")
+    con.commit()
+    con.close()
+    monkeypatch.setenv("FREELLM_DB_PATH", str(db))
+    monkeypatch.setenv("RENDER_EXTERNAL_URL", "https://x.onrender.com")
+    get_settings.cache_clear()
+    with TestClient(main.app) as c:
+        assert c.get("/v1/models").status_code == 404
+        assert c.get("/admin/freellm").status_code == 401
+        r = c.get("/admin/freellm", headers={"Authorization": "Bearer t"})
+        assert r.json() == {"base_url": "https://x.onrender.com/v1", "api_key": "freellmapi-zzz"}
+    get_settings.cache_clear()
