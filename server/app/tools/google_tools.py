@@ -5,7 +5,8 @@ from zoneinfo import ZoneInfo
 
 from ..config import Settings
 from ..google import GoogleClient
-from . import ToolRegistry
+from ..pending import PendingStore
+from . import UNTRUSTED, ToolRegistry
 
 GMAIL = "https://gmail.googleapis.com/gmail/v1/users/me"
 CAL = "https://www.googleapis.com/calendar/v3/calendars/primary"
@@ -30,7 +31,7 @@ def _body_text(payload: dict) -> str:
     return ""
 
 
-def register_google_tools(reg: ToolRegistry, settings: Settings, g: GoogleClient) -> None:
+def register_google_tools(reg: ToolRegistry, settings: Settings, g: GoogleClient, pending: PendingStore) -> None:
     tz = ZoneInfo(settings.timezone)
 
     async def gmail_search(query: str, max_results: int = 5) -> str:
@@ -47,12 +48,12 @@ def register_google_tools(reg: ToolRegistry, settings: Settings, g: GoogleClient
             out.append(
                 f"[{m['id']}] {_header(d, 'Date')} | {_header(d, 'From')} | {_header(d, 'Subject')}\n  {d.get('snippet', '')}"
             )
-        return "\n".join(out) or "Nessuna email trovata."
+        return UNTRUSTED + "\n".join(out) if out else "Nessuna email trovata."
 
     async def gmail_read(message_id: str) -> str:
         d = (await g.request("GET", f"{GMAIL}/messages/{message_id}", params={"format": "full"})).json()
         head = f"Da: {_header(d, 'From')}\nA: {_header(d, 'To')}\nOggetto: {_header(d, 'Subject')}\nData: {_header(d, 'Date')}"
-        return f"{head}\n\n{_body_text(d['payload'])[:MAX_TEXT] or d.get('snippet', '')}"
+        return f"{UNTRUSTED}{head}\n\n{_body_text(d['payload'])[:MAX_TEXT] or d.get('snippet', '')}"
 
     async def gmail_create_draft(to: str, subject: str, body: str) -> str:
         m = EmailMessage()
@@ -63,9 +64,21 @@ def register_google_tools(reg: ToolRegistry, settings: Settings, g: GoogleClient
         return f"Bozza creata (id {r.json()['id']}) per {to}. Non è stata inviata."
 
     async def gmail_send_draft(draft_id: str) -> str:
-        # Azione irreversibile: il prompt di sistema impone la conferma esplicita dell'utente prima di chiamarla.
-        await g.request("POST", f"{GMAIL}/drafts/send", json={"id": draft_id})
-        return "Email inviata."
+        # Mai inviata dal modello: crea una richiesta che solo l'utente può approvare (app o Telegram).
+        try:
+            d = (await g.request("GET", f"{GMAIL}/drafts/{draft_id}", params={"format": "metadata"})).json()
+            msg = d.get("message", {})
+            who = f"A: {_header(msg, 'To')}, oggetto: {_header(msg, 'Subject')}"
+        except Exception:
+            who = f"bozza {draft_id}"
+
+        async def send() -> str:
+            await g.request("POST", f"{GMAIL}/drafts/send", json={"id": draft_id})
+            return "Email inviata."
+
+        p = pending.create("gmail_send", f"Inviare l'email ({who})", send)
+        return (f"Invio in attesa di conferma dell'utente (richiesta {p.id}): NON è stata inviata. "
+                "L'utente deve approvarla dall'app o da Telegram.")
 
     async def calendar_list_events(days: int = 7) -> str:
         now = datetime.now(tz)
@@ -110,7 +123,7 @@ def register_google_tools(reg: ToolRegistry, settings: Settings, g: GoogleClient
             },
         )
         rows = [f"[{f['id']}] {f['name']} ({f['mimeType']}, {f['modifiedTime'][:10]})" for f in r.json()["files"]]
-        return "\n".join(rows) or "Nessun file trovato."
+        return UNTRUSTED + "\n".join(rows) if rows else "Nessun file trovato."
 
     async def drive_read(file_id: str) -> str:
         meta = (await g.request("GET", f"{DRIVE}/files/{file_id}", params={"fields": "name,mimeType"})).json()
@@ -120,7 +133,7 @@ def register_google_tools(reg: ToolRegistry, settings: Settings, g: GoogleClient
             r = await g.request("GET", f"{DRIVE}/files/{file_id}", params={"alt": "media"})
         else:
             return f"Formato non leggibile come testo: {meta['mimeType']}."
-        return f"{meta['name']}\n\n{r.text[:MAX_TEXT]}"
+        return f"{UNTRUSTED}{meta['name']}\n\n{r.text[:MAX_TEXT]}"
 
     obj = lambda props, req: {"type": "object", "properties": props, "required": req}  # noqa: E731
     s_ = {"type": "string"}
@@ -128,7 +141,7 @@ def register_google_tools(reg: ToolRegistry, settings: Settings, g: GoogleClient
     reg.register("gmail_search", "Cerca email (sintassi Gmail, es. 'is:unread from:mario').", obj({"query": s_, "max_results": i_}, ["query"]), gmail_search)
     reg.register("gmail_read", "Legge il contenuto di una email dato il suo id.", obj({"message_id": s_}, ["message_id"]), gmail_read)
     reg.register("gmail_create_draft", "Crea una bozza email (NON la invia).", obj({"to": s_, "subject": s_, "body": s_}, ["to", "subject", "body"]), gmail_create_draft)
-    reg.register("gmail_send_draft", "Invia una bozza. SOLO dopo aver mostrato la bozza all'utente e ottenuto il suo sì esplicito.", obj({"draft_id": s_}, ["draft_id"]), gmail_send_draft)
+    reg.register("gmail_send_draft", "Chiede all'utente di approvare l'invio di una bozza (non la invia da sola: serve la sua conferma nell'app o su Telegram).", obj({"draft_id": s_}, ["draft_id"]), gmail_send_draft)
     reg.register("calendar_list_events", "Elenca i prossimi eventi del calendario.", obj({"days": i_}, []), calendar_list_events)
     reg.register(
         "calendar_create_event",

@@ -92,6 +92,14 @@ jobs:
           test "$(curl -s -o /dev/null -w '%{http_code}' localhost:10000/v1/models)" = 401
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $KEY" localhost:10000/v1/models)" = 200
           test "$(curl -s -o /dev/null -w '%{http_code}' localhost:10000/api/keys)" = 404
+          # Token disponibili: JARVIS crea da solo l'account interno di FreeLLMAPI e ne legge budget e consumo
+          test "$(curl -s -o /dev/null -w '%{http_code}' localhost:10000/api/tokens)" = 401
+          curl -fsS -H "Authorization: Bearer ci" localhost:10000/api/tokens | tee /tmp/tokens.json
+          python3 -c "import json; d=json.load(open('/tmp/tokens.json')); assert 'remaining_tokens' in d and 'providers' in d, d"
+          curl -fsS -H "Authorization: Bearer ci" localhost:10000/api/status | grep -q '"ready":true'
+          # un secondo giro riusa la sessione (nessun nuovo account) e le intestazioni di sicurezza ci sono
+          curl -fsS -H "Authorization: Bearer ci" localhost:10000/api/tokens >/dev/null
+          curl -sI localhost:10000/health | grep -qi 'x-content-type-options: nosniff'
           # l'endpoint con le credenziali per le altre app richiede il token di JARVIS
           test "$(curl -s -o /dev/null -w '%{http_code}' localhost:10000/admin/freellm)" = 401
           curl -fsS -H "Authorization: Bearer ci" localhost:10000/admin/freellm | grep -q '"api_key"'

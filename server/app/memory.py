@@ -15,6 +15,7 @@ class Store(Protocol):
     async def list_reminders(self) -> list[dict]: ...
     async def due_reminders(self, now: datetime) -> list[dict]: ...
     async def mark_reminder_done(self, reminder_id: int) -> None: ...
+    async def delete_reminder(self, reminder_id: int) -> None: ...
 
 
 class MemoryStore:
@@ -54,6 +55,10 @@ class MemoryStore:
         for r in self.reminders:
             if r["id"] == reminder_id:
                 r["done"] = True
+
+
+    async def delete_reminder(self, reminder_id):
+        self.reminders = [r for r in self.reminders if r["id"] != reminder_id]
 
 
 class SupabaseStore:
@@ -126,6 +131,11 @@ class SupabaseStore:
         r = await self._client.patch(
             f"{self.base}/reminders", params={"id": f"eq.{reminder_id}"}, json={"done": True}, headers=self.headers
         )
+        r.raise_for_status()
+
+
+    async def delete_reminder(self, reminder_id):
+        r = await self._client.delete(f"{self.base}/reminders", params={"id": f"eq.{reminder_id}"}, headers=self.headers)
         r.raise_for_status()
 
 

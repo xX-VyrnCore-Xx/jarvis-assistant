@@ -8,7 +8,12 @@ from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Re
 from pydantic import BaseModel, Field
 
 from .agent import Agent
-from .auth import require_token
+from .api import router as api_router
+from .auth import require_token, throttle
+from .budget_service import BudgetService
+from .freellm_admin import FreeLLMAdmin
+from .pending import PendingStore
+from .security import RateLimiter, SecurityHeaders, client_ip
 from .config import get_settings
 from .llm import LLMClient, LLMError
 from .gateway import make_client
@@ -26,7 +31,7 @@ from .tools.pc_tools import register_pc_tools
 
 class ChatIn(BaseModel):
     message: str = Field(min_length=1, max_length=8000)
-    session_id: str = "default"
+    session_id: str = Field(default="default", pattern=r"^[A-Za-z0-9_.:-]{1,64}$")
     voice: bool = False  # risposta destinata alla sintesi vocale
 
 
@@ -37,18 +42,30 @@ class ChatOut(BaseModel):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
-    store = build_store(settings)
+    store = app.state.store = build_store(settings)
     tools = ToolRegistry()
-    register_basic_tools(tools, settings, store)
+    admin = app.state.admin = FreeLLMAdmin(settings)
+    budget = app.state.budget = BudgetService(admin)
+    register_basic_tools(tools, settings, store, budget=budget.text if budget.enabled else None)
     app.state.gateway_client = make_client()
     pc = app.state.pc = PCBridge()
     register_pc_tools(tools, pc)
+    pending = app.state.pending = PendingStore(settings.pending_ttl_s)
+    app.state.chat_limiter = RateLimiter(settings.chat_per_minute)
     google = GoogleClient(settings)
     if google.enabled:
-        register_google_tools(tools, settings, google)
+        register_google_tools(tools, settings, google, pending)
     app.state.agent = Agent(settings, LLMClient(settings), store, tools)
     tg = app.state.tg = Telegram(settings)
     app.state.settings = settings
+    if tg.enabled:
+        def notify_pending(p) -> None:
+            asyncio.get_running_loop().create_task(
+                tg.send_buttons(settings.telegram_owner_id, f"Conferma richiesta: {p.summary}",
+                                [("Approva", f"ok:{p.id}"), ("Rifiuta", f"no:{p.id}")])
+            )
+
+        pending.on_create = notify_pending
     task = None
     if tg.enabled:
         base = settings.public_url or settings.render_external_url
@@ -67,6 +84,7 @@ async def lifespan(app: FastAPI):
 log = logging.getLogger("jarvis")
 app = FastAPI(title="JARVIS", lifespan=lifespan)
 app.include_router(gateway_router)
+app.include_router(api_router)
 
 # La finestra web delle app (Tauri/Capacitor) è un'origine diversa dal server: senza CORS il browser blocca /chat.
 # L'autenticazione è un Bearer token (niente cookie), quindi nessuna credenziale cross-site.
@@ -89,6 +107,7 @@ app.add_middleware(
     allow_headers=["Authorization", "Content-Type"],
     max_age=600,
 )
+app.add_middleware(SecurityHeaders)
 
 
 @app.api_route("/", methods=["GET", "HEAD"])
@@ -103,6 +122,10 @@ async def health() -> dict:
 
 @app.post("/chat", response_model=ChatOut, dependencies=[Depends(require_token)])
 async def chat(body: ChatIn) -> ChatOut:
+    limiter: RateLimiter = app.state.chat_limiter
+    if wait := limiter.retry_after():
+        raise HTTPException(429, "Troppe richieste: rallenta un momento", headers={"Retry-After": str(wait)})
+    limiter.hit()
     try:
         return ChatOut(reply=await app.state.agent.reply(body.message, body.session_id, voice=body.voice))
     except LLMError as e:
@@ -120,6 +143,22 @@ async def _handle_telegram_text(chat_id: int, text: str) -> None:
     await tg.send(chat_id, reply or "…")
 
 
+async def _handle_telegram_callback(cb: dict) -> None:
+    tg: Telegram = app.state.tg
+    action, _, pid = (cb.get("data") or "").partition(":")
+    msg = cb.get("message") or {}
+    if action not in ("ok", "no") or not pid:
+        return await tg.answer_callback(cb["id"])
+    p = await app.state.pending.decide(pid, action == "ok")
+    if p is None or p.status == "expired":
+        outcome = "Richiesta scaduta o inesistente."
+    else:
+        outcome = {"approved": f"Approvata. {p.result}", "rejected": "Rifiutata.", "failed": p.result}.get(p.status, p.status)
+    await tg.answer_callback(cb["id"], outcome[:150])
+    if msg.get("message_id"):
+        await tg.clear_buttons(msg["chat"]["id"], msg["message_id"], f"{p.summary if p else 'Richiesta'}: {outcome}")
+
+
 @app.post("/telegram/webhook")
 async def telegram_webhook(
     request: Request,
@@ -131,7 +170,12 @@ async def telegram_webhook(
         x_telegram_bot_api_secret_token, s.telegram_webhook_secret
     ):
         raise HTTPException(403, "Forbidden")
-    msg = (await request.json()).get("message") or {}
+    update = await request.json()
+    if cb := update.get("callback_query"):
+        if cb.get("from", {}).get("id") == s.telegram_owner_id:
+            background.add_task(_handle_telegram_callback, cb)
+        return {"ok": True}
+    msg = update.get("message") or {}
     # whitelist: chiunque non sia il proprietario viene ignorato in silenzio
     if msg.get("from", {}).get("id") == s.telegram_owner_id and msg.get("text"):
         # risposta immediata a Telegram; l'elaborazione (lenta) va in background per evitare retry
@@ -141,4 +185,8 @@ async def telegram_webhook(
 
 @app.websocket("/ws/pc")
 async def ws_pc(ws: WebSocket) -> None:
-    await app.state.pc.serve(ws, app.state.settings.jarvis_api_token)
+    ip = client_ip(ws)
+    if throttle.retry_after(ip):
+        await ws.close(code=4429)
+        return
+    await app.state.pc.serve(ws, app.state.settings.jarvis_api_token, on_auth_fail=lambda: throttle.fail(ip))
