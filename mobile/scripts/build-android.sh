@@ -7,11 +7,16 @@ cd "$(dirname "$0")/.."
 VERSION="${1:-0.1.0}"
 VERSION_CODE="${2:-1}"
 
-# la stessa interfaccia dell'app Windows
-(cd ../desktop && npm ci && npm run build)
-
 npm ci
+# interfaccia pensata per il telefono (mobile/web), diversa da quella dell'app Windows
+npm run build:web
 [ -d android ] || npx cap add android
+
+# sicurezza: niente backup del contenuto dell'app (il token resta nella memoria privata) e solo HTTPS
+MANIFEST=android/app/src/main/AndroidManifest.xml
+sed -i 's/android:allowBackup="true"/android:allowBackup="false"/' "$MANIFEST"
+grep -q 'usesCleartextTraffic' "$MANIFEST" || sed -i 's/<application/<application android:usesCleartextTraffic="false"/' "$MANIFEST"
+grep -q 'allowBackup="false"' "$MANIFEST" || { echo "manifest: allowBackup non disattivato"; exit 1; }
 
 # versione dell'app
 sed -i -E "s/versionCode [0-9]+/versionCode ${VERSION_CODE}/; s/versionName \"[^\"]*\"/versionName \"${VERSION}\"/" android/app/build.gradle

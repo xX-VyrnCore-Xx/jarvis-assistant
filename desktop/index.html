@@ -2,40 +2,13 @@
 <html lang="it">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>JARVIS</title>
     <link rel="stylesheet" href="/src/style.css" />
   </head>
   <body>
-    <header>
-      <div class="brand"><span id="dot" class="dot"></span>J.A.R.V.I.S.</div>
-      <button id="btn-settings" title="Impostazioni">⚙</button>
-    </header>
-
-    <main id="log" aria-live="polite"></main>
-
-    <form id="composer" autocomplete="off">
-      <input id="input" type="text" placeholder="Scrivi a JARVIS…" />
-      <button type="submit">Invia</button>
-    </form>
-
-    <dialog id="settings">
-      <form method="dialog" id="settings-form">
-        <h2>Impostazioni</h2>
-        <label>URL del server <input id="cfg-url" placeholder="https://jarvis-xxxx.onrender.com" /></label>
-        <label>Token personale <input id="cfg-token" type="password" /></label>
-        <menu><button value="cancel">Annulla</button><button id="cfg-save" value="ok">Salva</button></menu>
-      </form>
-    </dialog>
-
-    <dialog id="confirm">
-      <form method="dialog">
-        <h2>Conferma richiesta</h2>
-        <p id="confirm-text"></p>
-        <menu><button value="no">Rifiuta</button><button value="yes" class="danger">Consenti</button></menu>
-      </form>
-    </dialog>
-
+    <div id="app"></div>
+    <div id="toast" role="status" aria-live="polite"></div>
     <script type="module" src="/src/main.js"></script>
   </body>
 </html>
