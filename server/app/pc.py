@@ -42,7 +42,7 @@ class PCBridge:
             except Exception:
                 pass
 
-    async def serve(self, ws: WebSocket, token: str) -> None:
+    async def serve(self, ws: WebSocket, token: str, on_auth_fail=None) -> None:
         await ws.accept()
         try:
             hello = await asyncio.wait_for(ws.receive_json(), AUTH_TIMEOUT_S)
@@ -50,6 +50,8 @@ class PCBridge:
             await ws.close(code=4401)
             return
         if not token or not secrets.compare_digest(str(hello.get("token", "")), token):
+            if on_auth_fail:
+                on_auth_fail()
             await ws.close(code=4401)
             return
         old, self.ws = self.ws, ws  # un solo PC alla volta: il nuovo sostituisce il vecchio

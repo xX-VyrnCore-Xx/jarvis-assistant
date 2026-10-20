@@ -61,3 +61,15 @@ Sviluppo: `cd desktop && npm install && npm run tauri dev` (richiede Rust).
 
 ## Voce
 Vedi `voice/README.md`.
+
+## Sicurezza
+- **Token personale** (`JARVIS_API_TOKEN`): confronto a tempo costante; dopo 8 tentativi sbagliati lo stesso IP viene bloccato 15 minuti
+  (anche con il token giusto). `/chat` è limitato a 20 richieste al minuto.
+- **Azioni sensibili**: l'invio di email non lo decide il modello. `gmail_send_draft` crea una richiesta che puoi approvare
+  solo dall'app o dai pulsanti di Telegram; scade dopo 10 minuti. Spostamenti di file e spegnimento del PC chiedono conferma sul PC.
+- **Contenuti esterni** (email, file, pagine web) sono marcati come non fidati: il modello li tratta come dati, non come ordini.
+- Dashboard di FreeLLMAPI mai raggiungibile da fuori; intestazioni `nosniff`, `no-store`, HSTS; richieste oltre 1 MB rifiutate; CORS limitato alle app.
+
+## API per le app
+Tutte con `Authorization: Bearer <JARVIS_API_TOKEN>`: `GET /api/status`, `GET /api/tokens` (token disponibili da FreeLLMAPI),
+`GET /api/history`, `GET|POST|DELETE /api/reminders`, `GET /api/pending`, `POST /api/pending/{id}/approve|reject`.

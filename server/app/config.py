@@ -7,6 +7,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     jarvis_api_token: str = ""
+    encryption_key: str = ""  # la stessa di FreeLLMAPI: da qui si ricava la password del suo account interno
     owner_name: str = "signore"
     timezone: str = "Europe/Rome"
 
@@ -34,6 +35,11 @@ class Settings(BaseSettings):
 
     # origini delle app (Tauri su Windows, Capacitor su Android); altre, separate da virgola
     cors_origins: str = ""
+
+    chat_per_minute: int = 20
+    auth_fail_limit: int = 8
+    auth_lock_s: int = 900
+    pending_ttl_s: int = 600
 
     history_messages: int = 14
     memory_hits: int = 5

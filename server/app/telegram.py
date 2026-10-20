@@ -22,6 +22,21 @@ class Telegram:
             )
             r.raise_for_status()
 
+    async def send_buttons(self, chat_id: int, text: str, buttons: list[tuple[str, str]]) -> None:
+        """buttons: [(testo, callback_data)] su una riga."""
+        r = await self._client.post(
+            f"{self.api}/sendMessage",
+            json={"chat_id": chat_id, "text": text,
+                  "reply_markup": {"inline_keyboard": [[{"text": t, "callback_data": d} for t, d in buttons]]}},
+        )
+        r.raise_for_status()
+
+    async def answer_callback(self, callback_id: str, text: str = "") -> None:
+        await self._client.post(f"{self.api}/answerCallbackQuery", json={"callback_query_id": callback_id, "text": text})
+
+    async def clear_buttons(self, chat_id: int, message_id: int, text: str) -> None:
+        await self._client.post(f"{self.api}/editMessageText", json={"chat_id": chat_id, "message_id": message_id, "text": text})
+
     async def notify_owner(self, text: str) -> None:
         await self.send(self.s.telegram_owner_id, text)
 
@@ -34,7 +49,7 @@ class Telegram:
             json={
                 "url": url,
                 "secret_token": self.s.telegram_webhook_secret,
-                "allowed_updates": ["message"],
+                "allowed_updates": ["message", "callback_query"],
                 "drop_pending_updates": False,
             },
         )

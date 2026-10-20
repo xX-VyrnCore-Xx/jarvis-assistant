@@ -4,12 +4,18 @@ from zoneinfo import ZoneInfo
 
 from ..config import Settings
 from ..memory import Store
-from . import ToolRegistry
+from . import UNTRUSTED, ToolRegistry
 
 _GIORNI = ["lunedì", "martedì", "mercoledì", "giovedì", "venerdì", "sabato", "domenica"]
 
 
-def register_basic_tools(reg: ToolRegistry, settings: Settings, store: Store) -> None:
+def parse_due(when: str, tz: ZoneInfo) -> datetime:
+    due = datetime.fromisoformat(when)
+    return due.replace(tzinfo=tz) if due.tzinfo is None else due.astimezone(tz)
+
+
+def register_basic_tools(reg: ToolRegistry, settings: Settings, store: Store, budget=None) -> None:
+    """`budget`: coroutine che restituisce il testo sui token disponibili (se FreeLLMAPI è nel container)."""
     async def get_datetime() -> str:
         now = datetime.now(ZoneInfo(settings.timezone))
         return f"{_GIORNI[now.weekday()]} {now:%d/%m/%Y %H:%M} ({settings.timezone})"
@@ -29,12 +35,12 @@ def register_basic_tools(reg: ToolRegistry, settings: Settings, store: Store) ->
             return DDGS().text(query, max_results=5, region="it-it")
 
         results = await asyncio.to_thread(_search)
-        return "\n\n".join(f"{r['title']}\n{r['href']}\n{r['body']}" for r in results) or "Nessun risultato."
+        body = "\n\n".join(f"{r['title']}\n{r['href']}\n{r['body']}" for r in results)
+        return UNTRUSTED + body if body else "Nessun risultato."
 
     async def add_reminder(text: str, when: str) -> str:
         tz = ZoneInfo(settings.timezone)
-        due = datetime.fromisoformat(when)
-        due = due.replace(tzinfo=tz) if due.tzinfo is None else due.astimezone(tz)
+        due = parse_due(when, tz)
         if due <= datetime.now(tz):
             return "Errore: la data del promemoria è nel passato. Usa get_datetime e riprova."
         await store.add_reminder(text, due)
@@ -79,3 +85,13 @@ def register_basic_tools(reg: ToolRegistry, settings: Settings, store: Store) ->
     reg.register(
         "list_reminders", "Elenca i promemoria attivi.", {"type": "object", "properties": {}}, list_reminders
     )
+    if budget is not None:
+        async def get_token_budget() -> str:
+            return await budget()
+
+        reg.register(
+            "get_token_budget",
+            "Quanti token gratuiti restano questo mese, in totale e per provider (da FreeLLMAPI).",
+            {"type": "object", "properties": {}},
+            get_token_budget,
+        )
