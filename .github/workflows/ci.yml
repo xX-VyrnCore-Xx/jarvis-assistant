@@ -115,8 +115,25 @@ jobs:
           }
           check jarvis-badsyntax '{"keys":[{"platform":"groq","key":"x"} {"platform":"google","key":"y"}]}' 'NON valido'
           check jarvis-badplatform '{"keys":[{"platform":"nonesiste","key":"x"}]}' 'riprovo SENZA configurazione'
+      - name: Una configurazione valida non deve causare un secondo avvio (nemmeno senza CAP_KILL, come su Render)
+        run: |
+          docker run -d --name jarvis-goodcfg --cap-drop=KILL -p 10002:10002 -e PORT=10002 \
+            -e ENCRYPTION_KEY=$(openssl rand -hex 32) -e JARVIS_API_TOKEN=ci \
+            -e FREEAPI_CONFIG_JSON='{"keys":[{"platform":"groq","key":"x"}]}' jarvis-all
+          ping() { docker exec jarvis-goodcfg node -e "fetch('http://127.0.0.1:3001/api/ping').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"; }
+          ok=0; for i in $(seq 1 90); do ping && ok=1 && break; sleep 2; done
+          test $ok = 1
+          sleep 15  # il difetto si manifestava poco dopo l'avvio, con un secondo FreeLLMAPI sulla stessa porta
+          ping
+          docker logs jarvis-goodcfg 2>&1 | grep -q 'applied FREEAPI_CONFIG_JSON'
+          if docker logs jarvis-goodcfg 2>&1 | grep -q 'riprovo SENZA'; then echo "riavvio a vuoto di FreeLLMAPI"; exit 1; fi
+          test "$(docker logs jarvis-goodcfg 2>&1 | grep -c 'Server running on')" = 1
+          if docker logs jarvis-goodcfg 2>&1 | grep -q 'EADDRINUSE'; then echo "due istanze di FreeLLMAPI"; exit 1; fi
+          docker rm -f jarvis-goodcfg >/dev/null
       - if: failure()
-        run: docker logs jarvis-ci
+        run: |
+          docker logs jarvis-ci || true
+          docker logs jarvis-goodcfg || true
 
   android:
     runs-on: ubuntu-latest

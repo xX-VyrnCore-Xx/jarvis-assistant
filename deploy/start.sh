@@ -33,13 +33,28 @@ as_node /opt/venv/bin/uvicorn app.main:app --host 0.0.0.0 --port "${PORT:-10000}
 JARVIS=$!
 
 start_freellm() { (cd /app && PORT=3001 HOST=127.0.0.1 exec setpriv --reuid=node --regid=node --init-groups -- node server/dist/index.js) & FREELLM=$!; }
+
+# `kill -0` può fallire con EPERM su un processo vivo se il container non ha CAP_KILL (succede su Render):
+# lo stato si legge da /proc, che non dipende dai permessi.
+alive() {
+  local st
+  st=$(sed -E 's/^[^)]*\) (.).*/\1/' "/proc/${1:-0}/stat" 2>/dev/null) || return 1
+  [ -n "$st" ] && [ "$st" != "Z" ]
+}
+port_open() {
+  /opt/venv/bin/python -c "import socket,sys; s=socket.socket(); s.settimeout(1); sys.exit(0 if s.connect_ex(('127.0.0.1',3001))==0 else 1)"
+}
+
 start_freellm
 
-# Se FreeLLMAPI cade nei primi secondi con una configurazione (es. nome di provider sconosciuto), riprova senza.
+# Se FreeLLMAPI cade all'avvio con una configurazione (es. nome di provider sconosciuto), riprova senza.
+# Si riavvia SOLO se il processo è morto E la porta è libera: mai due istanze sullo stesso database.
+# Su un piano Free l'avvio di Node può richiedere 30-40 s, quindi si aspetta finché non ascolta.
 if [ -n "${FREEAPI_CONFIG_JSON:-}" ]; then
-  for _ in $(seq 1 30); do
+  for _ in $(seq 1 60); do
     sleep 1
-    if ! kill -0 "$FREELLM" 2>/dev/null; then
+    port_open && break
+    if ! alive "$FREELLM" && ! port_open; then
       echo "[start.sh] FreeLLMAPI non è partito con FREEAPI_CONFIG_JSON (controlla i nomi dei provider): riprovo SENZA configurazione."
       unset FREEAPI_CONFIG_JSON
       start_freellm
