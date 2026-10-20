@@ -16,6 +16,9 @@ class Store(Protocol):
     async def due_reminders(self, now: datetime) -> list[dict]: ...
     async def mark_reminder_done(self, reminder_id: int) -> None: ...
     async def delete_reminder(self, reminder_id: int) -> None: ...
+    async def list_memories(self, limit: int) -> list[dict]: ...
+    async def delete_memory(self, memory_id: int) -> None: ...
+    async def clear_messages(self, session_id: str) -> None: ...
     async def add_notification(self, kind: str, title: str, body: str) -> dict: ...
     async def list_notifications(self, limit: int) -> list[dict]: ...
     async def mark_notifications_read(self, ids: list[int] | None) -> None: ...
@@ -45,9 +48,19 @@ class MemoryStore:
     async def add_memory(self, content):
         self.memories.append(content)
 
+    async def list_memories(self, limit):
+        return [{"id": i + 1, "content": m} for i, m in enumerate(self.memories) if m is not None][-limit:][::-1]
+
+    async def delete_memory(self, memory_id):
+        if 0 < memory_id <= len(self.memories):
+            self.memories[memory_id - 1] = None  # l'indice resta stabile
+
+    async def clear_messages(self, session_id):
+        self.messages = [m for m in self.messages if m["session_id"] != session_id]
+
     async def search_memories(self, query, limit):
         words = [w for w in query.lower().split() if len(w) > 2]
-        hits = [m for m in self.memories if any(w in m.lower() for w in words)]
+        hits = [m for m in self.memories if m is not None and any(w in m.lower() for w in words)]
         return hits[-limit:]
 
 
@@ -147,6 +160,17 @@ class SupabaseStore:
         )
         return [r["content"] for r in rows]
 
+
+    async def list_memories(self, limit):
+        return await self._get("memories", {"select": "id,content", "order": "created_at.desc", "limit": limit})
+
+    async def delete_memory(self, memory_id):
+        r = await self._client.delete(f"{self.base}/memories", params={"id": f"eq.{int(memory_id)}"}, headers=self.headers)
+        r.raise_for_status()
+
+    async def clear_messages(self, session_id):
+        r = await self._client.delete(f"{self.base}/messages", params={"session_id": f"eq.{session_id}"}, headers=self.headers)
+        r.raise_for_status()
 
     async def add_reminder(self, text, due_at):
         await self._insert("reminders", {"text": text, "due_at": due_at.isoformat()})

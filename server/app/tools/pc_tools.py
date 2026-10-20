@@ -10,7 +10,7 @@ def register_pc_tools(reg: ToolRegistry, pc: PCBridge) -> None:
         # i tool del PC compaiono solo se l'app Windows è collegata: meno token e niente promesse a vuoto
         reg.register(
             name, description, {"type": "object", "properties": props, "required": required}, fn,
-            available=lambda: pc.connected,
+            available=lambda: pc.connected, timeout=90,
         )
 
     s = {"type": "string"}

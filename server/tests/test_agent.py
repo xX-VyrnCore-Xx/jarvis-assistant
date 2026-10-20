@@ -54,8 +54,8 @@ async def test_unknown_tool_does_not_crash():
 @pytest.mark.asyncio
 async def test_tool_loop_is_bounded():
     call = {"id": "1", "type": "function", "function": {"name": "get_datetime", "arguments": "{}"}}
-    agent, _ = make([{"content": None, "tool_calls": [call]}] * 5)
-    assert "limite" in await agent.reply("x", "s1")
+    agent, _ = make([{"content": None, "tool_calls": [call]}] * 5 + [{"content": "Ecco quanto trovato."}])
+    assert await agent.reply("x", "s1") == "Ecco quanto trovato."  # dopo il limite chiede comunque una risposta, senza altri tool
 
 
 def test_health_open_and_chat_requires_token(monkeypatch):
@@ -117,17 +117,19 @@ def test_telegram_webhook_whitelist(monkeypatch):
     get_settings.cache_clear()
     handled = []
 
-    async def fake(chat_id, text):
-        handled.append((chat_id, text))
+    async def fake(self, update):
+        handled.append(update["message"]["text"])
 
-    monkeypatch.setattr(main, "_handle_telegram_text", fake)
+    from app.bot import TelegramBot
+
+    monkeypatch.setattr(TelegramBot, "handle_update", fake)
     upd = lambda uid: {"message": {"from": {"id": uid}, "chat": {"id": uid}, "text": "ciao"}}  # noqa: E731
     with TestClient(main.app) as c:
         assert c.post("/telegram/webhook", json=upd(42)).status_code == 403
         h = {"X-Telegram-Bot-Api-Secret-Token": "sec"}
         assert c.post("/telegram/webhook", json=upd(99), headers=h).status_code == 200
         assert c.post("/telegram/webhook", json=upd(42), headers=h).status_code == 200
-    assert handled == [(42, "ciao")]
+    assert handled == ["ciao"]
     get_settings.cache_clear()
 
 

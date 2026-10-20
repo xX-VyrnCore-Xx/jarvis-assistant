@@ -39,11 +39,20 @@ Qualunque app compatibile OpenAI/Anthropic può usare `https://<servizio>.onrend
 Per ottenerle: `curl -H "Authorization: Bearer $JARVIS_API_TOKEN" https://<servizio>.onrender.com/admin/freellm`
 → `{"base_url": ..., "api_key": ...}`. Il ping di Supabase (`keepalive.sql`) lo tiene sveglio.
 
+## Tool e funzioni dell'assistente
+Tool validati (tipi, parametri obbligatori, valori ammessi), con timeout, risultati limitati e più tool eseguiti insieme nello stesso turno:
+memoria (`remember`, `recall`, `list_memories`, `forget`), promemoria (`add_/list_/delete_reminder`), `web_search`, `read_webpage` (solo indirizzi pubblici),
+`get_weather`, `calculate`, `send_notification`, `get_token_budget`, Google (Gmail, Calendar, Drive) e controllo del PC.
+
 ## Telegram
 1. Crea il bot con @BotFather e copia il token; il tuo ID numerico si legge con @userinfobot.
 2. Imposta su Render `TELEGRAM_BOT_TOKEN` e `TELEGRAM_OWNER_ID` (il secret del webhook è generato in automatico).
 3. All'avvio il server registra il webhook usando `RENDER_EXTERNAL_URL` (in locale: `PUBLIC_URL`, es. un tunnel).
 4. Scrivi al bot: risponde solo al tuo ID. Prova "ricordami domani alle 9 di chiamare Luca".
+
+Bot: risposte formattate (grassetto, codice, link), indicatore «sta scrivendo», comandi `/aiuto /stato /token /promemoria /ricordi /nuova` con pulsanti per eliminare,
+duplicati ignorati, un messaggio alla volta per chat. All'avvio e ogni 10 minuti JARVIS riprende il controllo del bot se un vecchio servizio con lo stesso token ha reimpostato il suo webhook
+(scartando i messaggi arretrati). Per liberarlo del tutto, elimina o sospendi il vecchio servizio su Render.
 
 ## Google (Gmail, Calendar, Drive)
 1. Abilita le API Gmail, Calendar e Drive nel tuo progetto Google Cloud; consenso OAuth con te come utente di test.
