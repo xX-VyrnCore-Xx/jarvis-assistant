@@ -1,9 +1,12 @@
 """API per le app (Windows e Android): stato, token, cronologia, promemoria e conferme."""
+import asyncio
+import json
 import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from .auth import require_token
@@ -18,6 +21,16 @@ VERSION = "0.2.0"
 class ReminderIn(BaseModel):
     text: str = Field(min_length=1, max_length=500)
     when: str  # data/ora locale ISO 8601
+
+
+class DeviceIn(BaseModel):
+    platform: str = Field(pattern=r"^(android|windows|web)$")
+    token: str = Field(min_length=8, max_length=4096)
+    label: str = Field(default="", max_length=80)
+
+
+class ReadIn(BaseModel):
+    ids: list[int] | None = None  # None = tutte
 
 
 @router.get("/tokens")
@@ -98,3 +111,53 @@ async def decide(pid: str, decision: str, request: Request) -> dict:
     if p is None:
         raise HTTPException(404, "Richiesta inesistente o scaduta")
     return p.public()
+
+
+@router.get("/notifications")
+async def notifications(request: Request, limit: int = Query(50, ge=1, le=200)) -> list[dict]:
+    return await request.app.state.store.list_notifications(limit)
+
+
+@router.post("/notifications/read")
+async def notifications_read(body: ReadIn, request: Request) -> dict:
+    await request.app.state.store.mark_notifications_read(body.ids)
+    return {"ok": True}
+
+
+@router.post("/notifications/test")
+async def notifications_test(request: Request) -> dict:
+    return await request.app.state.notifier.push("info", "Notifica di prova", "Tutto funziona, signore.")
+
+
+@router.post("/devices", status_code=201)
+async def register_device(body: DeviceIn, request: Request) -> dict:
+    await request.app.state.store.upsert_device(body.platform, body.token, body.label)
+    return {"ok": True, "push": request.app.state.notifier.fcm.enabled}
+
+
+@router.delete("/devices")
+async def unregister_device(request: Request, token: str = Query(min_length=8, max_length=4096)) -> dict:
+    await request.app.state.store.delete_device(token)
+    return {"ok": True}
+
+
+@router.get("/stream")
+async def stream(request: Request) -> StreamingResponse:
+    """Flusso SSE: ogni notifica arriva alle app aperte in tempo reale (heartbeat ogni 20 s per tenere viva la connessione)."""
+    notifier = request.app.state.notifier
+    q = notifier.subscribe()
+
+    async def gen():
+        try:
+            yield "retry: 3000\n: connesso\n\n"
+            while not await request.is_disconnected():
+                try:
+                    row = await asyncio.wait_for(q.get(), timeout=20)
+                    yield f"event: notification\ndata: {json.dumps(row)}\n\n"
+                except asyncio.TimeoutError:
+                    yield ": ping\n\n"
+        finally:
+            notifier.unsubscribe(q)
+
+    return StreamingResponse(gen(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})

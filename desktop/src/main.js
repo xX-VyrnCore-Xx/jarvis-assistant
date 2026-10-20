@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { Jarvis, ApiError } from "@shared/api.js";
 import { el, fmtDate, fmtTokens, fmtUptime, markdown, nowLocalInput, pct } from "@shared/format.js";
 import { icon } from "@shared/icons.js";
+import { openStream } from "@shared/stream.js";
 import { clearToken, loadToken, saveToken } from "./secrets.js";
 
 // URL pubblico del server (non è un segreto); il token personale sta nel Gestore credenziali
@@ -21,18 +22,19 @@ const CHIPS = [
 const VIEWS = [
   ["chat", "Conversazione", "chat"],
   ["tokens", "Token", "gauge"],
-  ["reminders", "Promemoria", "bell"],
+  ["notifications", "Notifiche", "bell"],
+  ["reminders", "Promemoria", "clock"],
   ["pc", "Controllo PC", "monitor"],
   ["settings", "Impostazioni", "sliders"],
 ];
 
 const cfg = { url: (localStorage.getItem("jarvis.url") || DEFAULT_URL).replace(/\/+$/, ""), token: "", where: "local" };
 const api = new Jarvis({ url: () => cfg.url, token: () => cfg.token });
-const S = { view: "chat", status: null, tokens: null, tokensErr: "", pending: [], reminders: [], online: false, ws: false, pcLog: [], busy: false };
+const S = { view: "chat", status: null, tokens: null, tokensErr: "", pending: [], reminders: [], notes: [], live: "off", online: false, ws: false, pcLog: [], busy: false };
 
 const $app = document.getElementById("app");
 let rail, viewBox, side, chatLog, chatInput, chatView;
-let ws, wsRetry = 0, wsPing;
+let ws, wsRetry = 0, wsPing, closeStream;
 
 // ------------------------------------------------------------------ utilità
 function toast(text, bad = false) {
@@ -65,8 +67,8 @@ function renderRail() {
   rail.replaceChildren(
     el("div", { class: "brand", title: "JARVIS" }, el("span", { class: "core" })),
     ...VIEWS.map(([id, label, ic]) => {
-      const badge = id === "reminders" || id === "chat" ? 0 : 0;
-      return el("button", { class: `rail-btn${S.view === id ? " on" : ""}`, title: label, "aria-label": label, onclick: () => setView(id) }, icon(ic, 22), badge ? el("i") : null);
+      const badge = id === "notifications" ? S.notes.filter((n) => !n.read).length : 0;
+      return el("button", { class: `rail-btn${S.view === id ? " on" : ""}`, title: label, "aria-label": label, onclick: () => setView(id) }, icon(ic, 22), badge ? el("i", { class: "badge" }, badge > 9 ? "9+" : String(badge)) : null);
     }),
   );
 }
@@ -77,6 +79,7 @@ function setView(v) {
   renderView();
   if (v === "tokens") loadTokens();
   if (v === "reminders") loadReminders();
+  if (v === "notifications") loadNotes();
 }
 
 function renderView() {
@@ -84,6 +87,7 @@ function renderView() {
   if (S.view === "chat") return viewBox.replaceChildren(buildChat());
   if (S.view === "tokens") return viewBox.replaceChildren(buildTokens());
   if (S.view === "reminders") return viewBox.replaceChildren(buildReminders());
+  if (S.view === "notifications") return viewBox.replaceChildren(buildNotes());
   if (S.view === "pc") return viewBox.replaceChildren(buildPc());
   return viewBox.replaceChildren(buildSettings());
 }
@@ -220,6 +224,43 @@ function buildTokens() {
         el("div", { class: "prov-val" }, known ? fmtTokens(p.remaining) : "n/d"));
     })),
     el("p", { class: "tiny note" }, t.note),
+  );
+}
+
+// ------------------------------------------------------------------ notifiche
+const KIND = { reminder: "clock", alert: "shield", pending: "shield", info: "bell" };
+
+async function loadNotes() {
+  if (!cfg.token) return;
+  try { S.notes = await api.notifications(60); } catch (e) { toast(errText(e), true); }
+  renderRail();
+  if (S.view === "notifications") renderView();
+}
+
+function onNote(n) {
+  if (S.notes.some((x) => x.id === n.id)) return;
+  S.notes.unshift(n);
+  renderRail();
+  if (S.view === "notifications") renderView();
+  if (document.hasFocus()) toast(n.title);
+  else invoke("notify", { title: n.title, body: n.body }).catch(() => {});
+}
+
+async function markAllRead() {
+  try { await api.markRead(null); S.notes.forEach((n) => (n.read = true)); renderRail(); renderView(); } catch (e) { toast(errText(e), true); }
+}
+
+function buildNotes() {
+  const live = S.live === "on";
+  return el("div", { class: "page" },
+    panelHead("Notifiche", live ? "In tempo reale: collegato al server." : "Riconnessione in corso…",
+      el("button", { class: "btn", onclick: async () => { try { await api.testNotification(); } catch (e) { toast(errText(e), true); } } }, icon("bell", 16), "Prova"),
+      el("button", { class: "btn", onclick: markAllRead }, icon("check", 16), "Segna lette")),
+    S.notes.length
+      ? el("div", { class: "list" }, S.notes.map((n) => el("div", { class: `item note${n.read ? "" : " unread"}` },
+        el("span", { class: "note-ic" }, icon(KIND[n.kind] || "bell", 18)),
+        el("div", {}, el("b", {}, n.title), n.body ? el("p", { class: "note-body" }, n.body) : null, el("small", {}, fmtDate(n.created_at))))))
+      : el("div", { class: "empty" }, "Nessuna notifica."),
   );
 }
 
@@ -396,11 +437,16 @@ async function pollPending() {
 function start() {
   stop();
   if (!cfg.token) return;
-  refreshStatus(); pollPending(); loadHistory(); connect();
+  refreshStatus(); pollPending(); loadHistory(); connect(); loadNotes();
+  closeStream = openStream({ url: () => cfg.url, token: () => cfg.token }, {
+    onNotification: onNote,
+    onState: (st) => { const was = S.live; S.live = st; if (st === "on" && was !== "on") loadNotes(); else if (S.view === "notifications") renderView(); },
+  });
   timers = [setInterval(refreshStatus, 20_000), setInterval(pollPending, 4_000)];
 }
 function stop() {
   timers.forEach(clearInterval); timers = [];
+  closeStream?.(); closeStream = null; S.live = "off";
   clearInterval(wsPing); ws?.close(); S.ws = false; S.status = null; S.online = false; S.pending = [];
   renderPending(); renderSide();
 }

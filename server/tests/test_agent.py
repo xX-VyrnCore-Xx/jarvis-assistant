@@ -89,17 +89,21 @@ async def test_reminder_tool_and_delivery():
     soon = (datetime.now(tz) + timedelta(hours=1)).replace(tzinfo=None).isoformat()
     assert "fissato" in await reg.call("add_reminder", json.dumps({"text": "chiama Luca", "when": soon}))
 
+    from app.notify import Notifier
+
     class FakeTG:
+        enabled = True
         sent = []
 
         async def notify_owner(self, text):
             self.sent.append(text)
 
     tg = FakeTG()
-    assert await deliver_due_reminders(store, tg, datetime.now(tz)) == 0
-    assert await deliver_due_reminders(store, tg, datetime.now(tz) + timedelta(hours=2)) == 1
+    n = Notifier(s, store, tg)
+    assert await deliver_due_reminders(store, n, datetime.now(tz)) == 0
+    assert await deliver_due_reminders(store, n, datetime.now(tz) + timedelta(hours=2)) == 1
     assert "chiama Luca" in tg.sent[0]
-    assert await deliver_due_reminders(store, tg, datetime.now(tz) + timedelta(hours=2)) == 0
+    assert await deliver_due_reminders(store, n, datetime.now(tz) + timedelta(hours=2)) == 0
 
 
 def test_telegram_webhook_whitelist(monkeypatch):

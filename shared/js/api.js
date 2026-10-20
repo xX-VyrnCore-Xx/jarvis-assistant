@@ -61,4 +61,9 @@ export class Jarvis {
   deleteReminder(id) { return this.#req(`/api/reminders/${id}`, { method: "DELETE" }); }
   pending() { return this.#req("/api/pending"); }
   decide(id, approve) { return this.#req(`/api/pending/${encodeURIComponent(id)}/${approve ? "approve" : "reject"}`, { method: "POST" }); }
+  notifications(limit = 50) { return this.#req(`/api/notifications?limit=${limit}`); }
+  markRead(ids = null) { return this.#req("/api/notifications/read", { method: "POST", body: { ids } }); }
+  testNotification() { return this.#req("/api/notifications/test", { method: "POST" }); }
+  registerDevice(platform, token, label = "") { return this.#req("/api/devices", { method: "POST", body: { platform, token, label } }); }
+  unregisterDevice(token) { return this.#req(`/api/devices?token=${encodeURIComponent(token)}`, { method: "DELETE" }); }
 }

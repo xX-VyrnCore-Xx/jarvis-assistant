@@ -62,6 +62,19 @@ Sviluppo: `cd desktop && npm install && npm run tauri dev` (richiede Rust).
 ## Voce
 Vedi `voice/README.md`.
 
+## Notifiche in tempo reale
+Promemoria, avvisi (token in esaurimento, backup fallito) e richieste di conferma arrivano come notifica:
+- **App aperte** (Windows e Android): flusso SSE `GET /api/stream`, con notifica nativa di Windows; l'archivio è in `GET /api/notifications`.
+- **Android con app chiusa**: push Firebase (FCM HTTP v1). Servono due cose, entrambe dal progetto Firebase:
+  1. `google-services.json` dell'app Android `it.vyrncore.jarvis` → segreto GitHub `ANDROID_GOOGLE_SERVICES_JSON_B64` (base64 del file); poi si rigenera la Release.
+  2. chiave dell'account di servizio (Impostazioni progetto → Account di servizio → Genera chiave) → variabile Render `FIREBASE_SERVICE_ACCOUNT_JSON` (il JSON intero).
+  Senza queste restano le notifiche in-app e Telegram. L'APK registra il proprio token con `POST /api/devices`.
+- **Telegram**: promemoria e avvisi arrivano anche lì.
+
+## Dati e backup
+- Supabase: tabelle `messages`, `memories`, `reminders`, `notifications`, `devices` (RLS attiva, accesso solo dal server). Il server elimina ogni notte i dati vecchi (messaggi 180 giorni, notifiche 90, promemoria completati 60, dispositivi inattivi 90).
+- Hugging Face (dataset privato di `FREEAPI_DB_BACKUP_URL`): oltre al DB di FreeLLMAPI, ogni notte un export **cifrato AES-256-GCM** di Supabase in `jarvis/AAAA-MM-GG.json.enc` (ultimi 14), con scheda `README.md` e compattazione settimanale della cronologia. La chiave deriva da `ENCRYPTION_KEY`.
+
 ## Sicurezza
 - **Token personale** (`JARVIS_API_TOKEN`): confronto a tempo costante; dopo 8 tentativi sbagliati lo stesso IP viene bloccato 15 minuti
   (anche con il token giusto). `/chat` è limitato a 20 richieste al minuto.

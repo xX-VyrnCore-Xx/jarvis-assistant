@@ -33,6 +33,13 @@ class Settings(BaseSettings):
     google_client_secret: str = ""
     google_refresh_token: str = ""
 
+    firebase_service_account_json: str = ""  # JSON dell'account di servizio Firebase (push Android)
+    low_tokens_alert: int = 5_000_000  # avviso quando i token residui scendono sotto questa soglia (0 = off)
+
+    freeapi_db_backup_url: str = ""  # dataset HF di FreeLLMAPI: da qui si ricava anche dove salvare il backup di Supabase
+    freeapi_db_backup_token: str = ""
+    hf_backup_keep: int = 14
+
     # origini delle app (Tauri su Windows, Capacitor su Android); altre, separate da virgola
     cors_origins: str = ""
 

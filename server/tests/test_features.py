@@ -158,3 +158,101 @@ def test_security_headers_and_body_limit(client):
     big = client.post("/chat", headers={**AUTH, "Content-Length": "5000000"}, content=b"x")
     assert big.status_code == 413
     assert client.post("/chat", headers=AUTH, json={"message": "x", "session_id": "a b/c"}).status_code == 422
+
+
+def test_notifications_api_and_devices(client):
+    h = AUTH
+    assert client.post("/api/notifications/test", headers=h).status_code == 200
+    rows = client.get("/api/notifications", headers=h).json()
+    assert rows[0]["title"] == "Notifica di prova" and rows[0]["read"] is False
+    assert client.post("/api/notifications/read", json={"ids": None}, headers=h).status_code == 200
+    assert client.get("/api/notifications", headers=h).json()[0]["read"] is True
+    dev = {"platform": "android", "token": "fcm-token-123456", "label": "Pixel"}
+    r = client.post("/api/devices", json=dev, headers=h)
+    assert r.status_code == 201 and r.json()["push"] is False
+    assert client.delete("/api/devices", params={"token": dev["token"]}, headers=h).status_code == 200
+    assert client.post("/api/devices", json={**dev, "platform": "ios"}, headers=h).status_code == 422
+    assert client.get("/api/notifications").status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_notifier_fans_out_to_stream_and_fcm():
+    import json as _json
+
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    from app.memory import MemoryStore
+    from app.notify import FCM, Notifier
+
+    pem = rsa.generate_private_key(public_exponent=65537, key_size=2048).private_bytes(
+        serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()).decode()
+    account = {"project_id": "proj", "client_email": "sa@proj.iam.gserviceaccount.com", "private_key": pem}
+    sent = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.url.host == "oauth2.googleapis.com":
+            assert b"assertion=" in req.content
+            return httpx.Response(200, json={"access_token": "at", "expires_in": 3600})
+        assert req.headers["authorization"] == "Bearer at"
+        msg = _json.loads(req.content)["message"]
+        sent.append(msg["token"])
+        if msg["token"] == "stale":
+            return httpx.Response(404, json={"error": {"status": "NOT_FOUND", "details": [{"errorCode": "UNREGISTERED"}]}})
+        return httpx.Response(200, json={"name": "ok"})
+
+    s = Settings(jarvis_api_token="t", firebase_service_account_json=_json.dumps(account))
+    fcm = FCM(s, httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    assert fcm.enabled
+    store = MemoryStore()
+    await store.upsert_device("android", "good", "a")
+    await store.upsert_device("android", "stale", "b")
+    await store.upsert_device("windows", "pc", "c")
+    n = Notifier(s, store, fcm=fcm)
+    q = n.subscribe()
+    row = await n.push("info", "Ciao", "mondo")
+    assert (await q.get())["id"] == row["id"]
+    assert sorted(sent) == ["good", "stale"]  # solo Android; il token scaduto viene rimosso
+    assert [d["token"] for d in await store.list_devices()] == ["good", "pc"]
+    n.unsubscribe(q)
+    assert n.listeners == 0
+    assert not FCM(Settings(firebase_service_account_json="{bad")).enabled
+
+
+@pytest.mark.asyncio
+async def test_hf_backup_encrypts_commits_and_keeps_only_recent():
+    import json as _json
+
+    from app.backup import HFBackup, decrypt, derive_key, repo_from_url
+
+    s = Settings(jarvis_api_token="t", encryption_key="k", supabase_url="https://x.supabase.co", supabase_service_key="sk",
+                 freeapi_db_backup_url="https://huggingface.co/datasets/me/store/resolve/main/freellmapi.db.backup",
+                 freeapi_db_backup_token="hf", hf_backup_keep=2)
+    assert repo_from_url(s.freeapi_db_backup_url) == "me/store" and repo_from_url("https://x/y") is None
+    commits = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        u = str(req.url)
+        if "supabase.co" in u:
+            return httpx.Response(200, json=[{"id": 1, "content": "segreto"}] if req.url.params["offset"] == "0" else [])
+        if "/tree/main/jarvis" in u:
+            return httpx.Response(200, json=[{"type": "file", "path": f"jarvis/2020-01-0{i}.json.enc"} for i in (1, 2, 3)])
+        if req.method == "HEAD":
+            return httpx.Response(404)
+        if "/commit/main" in u:
+            commits.append([_json.loads(line) for line in req.content.decode().splitlines()])
+            return httpx.Response(200, json={})
+        return httpx.Response(200, json={})
+
+    b = HFBackup(s, httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    assert b.enabled
+    await b.run()
+    ops = commits[0]
+    files = [o["value"] for o in ops if o["key"] == "file"]
+    enc = next(f for f in files if f["path"].startswith("jarvis/"))
+    import base64
+    blob = base64.b64decode(enc["content"])
+    assert b"segreto" not in blob  # cifrato
+    assert _json.loads(decrypt(derive_key(s), blob))["tables"]["messages"][0]["content"] == "segreto"
+    assert any(f["path"] == "README.md" for f in files)
+    assert sorted(o["value"]["path"] for o in ops if o["key"] == "deletedFile") == ["jarvis/2020-01-01.json.enc", "jarvis/2020-01-02.json.enc"]

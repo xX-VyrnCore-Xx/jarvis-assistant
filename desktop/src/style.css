@@ -138,3 +138,10 @@ button, input, textarea { font: inherit; color: inherit; }
 
 @media (max-width: 1080px) { #app { grid-template-columns: 76px minmax(0, 1fr); } #side { display: none; } }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+
+/* notifiche */
+.rail-btn .badge { position: absolute; top: 5px; right: 5px; min-width: 17px; height: 17px; padding: 0 4px; border-radius: 9px; background: var(--cy); color: #04121a; font: 700 10px/17px var(--mono); font-style: normal; text-align: center; box-shadow: 0 0 10px var(--cy); }
+.item.note { justify-content: flex-start; gap: 14px; }
+.item.note.unread { border-color: var(--cy); box-shadow: inset 3px 0 0 var(--cy); }
+.note-ic { color: var(--cy); display: grid; place-items: center; width: 34px; height: 34px; border-radius: 10px; background: rgba(62, 224, 255, .1); flex: none; }
+.note-body { margin: 3px 0 0; color: var(--text); opacity: .85; font-size: 13px; }
