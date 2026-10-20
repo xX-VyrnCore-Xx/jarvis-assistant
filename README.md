@@ -6,8 +6,8 @@ Assistente personale H24: backend FastAPI su Render, AI via FreeLLMAPI, memoria 
 - [x] Fase 1: backend, agente con tool calling, memoria, auth
 - [x] Fase 2: Telegram (webhook, whitelist) + promemoria proattivi
 - [x] Fase 3: Gmail / Calendar / Drive
-- [ ] Fase 4: app Windows (Tauri) + controllo PC
-- [ ] Fase 5: voce (wake word, STT, TTS)
+- [x] Fase 4: app Windows (Tauri) + controllo PC (`desktop/`)
+- [x] Fase 5: voce, "Hey Jarvis" + Whisper + Edge-TTS (`voice/`)
 
 ## Avvio locale
 ```
@@ -37,3 +37,11 @@ pytest
 
 Le email vengono solo salvate come bozza; l'invio richiede la tua conferma esplicita.
 Permessi richiesti: Gmail lettura + bozze/invio, Calendar, Drive in sola lettura.
+
+## App Windows
+`desktop/` (Tauri). L'installer `.exe` è prodotto dalla CI (artifact `JARVIS-windows-installer`).
+Al primo avvio apri ⚙ e inserisci URL del server e `JARVIS_API_TOKEN`. `Alt+Spazio` mostra/nasconde la finestra.
+Sviluppo: `cd desktop && npm install && npm run tauri dev` (richiede Rust).
+
+## Voce
+Vedi `voice/README.md`.

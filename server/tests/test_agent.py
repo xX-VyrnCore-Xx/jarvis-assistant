@@ -164,3 +164,12 @@ async def test_pc_call_without_connection():
     from app.pc import PCBridge
 
     assert "non è connesso" in await PCBridge().call("pc_lock", {})
+
+
+@pytest.mark.asyncio
+async def test_voice_flag_adds_spoken_style_instruction():
+    agent, _ = make([{"content": "ok"}, {"content": "ok"}])
+    await agent.reply("ciao", "v", voice=True)
+    await agent.reply("ciao", "t", voice=False)
+    assert "AD ALTA VOCE" in agent.llm.calls[0][0]["content"]
+    assert "AD ALTA VOCE" not in agent.llm.calls[1][0]["content"]
