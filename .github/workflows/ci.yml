@@ -78,6 +78,22 @@ jobs:
           if docker exec jarvis-ci node -e "const ip=Object.values(require('os').networkInterfaces()).flat().find(i=>!i.internal&&i.family==='IPv4').address;fetch('http://'+ip+':3001/api/ping').then(()=>process.exit(0)).catch(()=>process.exit(1))"; then
             echo "FreeLLMAPI è esposto fuori dal loopback"; exit 1
           fi
+      - name: Una configurazione FreeLLMAPI sbagliata non deve far cadere il servizio
+        run: |
+          check() {  # $1 = nome container, $2 = JSON, $3 = testo atteso nei log
+            docker run -d --name "$1" -p 10001:10001 -e PORT=10001 -e ENCRYPTION_KEY=$(openssl rand -hex 32) \
+              -e JARVIS_API_TOKEN=ci -e FREEAPI_CONFIG_JSON="$2" jarvis-all
+            ok=0; for i in $(seq 1 60); do curl -fsS localhost:10001/health >/dev/null && ok=1 && break; sleep 2; done
+            test $ok = 1
+            ok=0; for i in $(seq 1 90); do
+              docker exec "$1" node -e "fetch('http://127.0.0.1:3001/api/ping').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))" && ok=1 && break; sleep 2
+            done
+            test $ok = 1
+            docker logs "$1" 2>&1 | grep -q "$3"
+            docker rm -f "$1" >/dev/null
+          }
+          check jarvis-badsyntax '{"keys":[{"platform":"groq","key":"x"} {"platform":"google","key":"y"}]}' 'NON valido'
+          check jarvis-badplatform '{"keys":[{"platform":"nonesiste","key":"x"}]}' 'riprovo SENZA configurazione'
       - if: failure()
         run: docker logs jarvis-ci
 
