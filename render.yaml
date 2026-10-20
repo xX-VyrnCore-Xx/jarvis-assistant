@@ -44,8 +44,3 @@ services:
       # notifiche push Android: JSON dell'account di servizio Firebase (vedi README, sezione Notifiche)
       - key: FIREBASE_SERVICE_ACCOUNT_JSON
         sync: false
-      # voce di JARVIS (XTTS v2 su Hugging Face Space, vedi tts/): URL dello Space e token condiviso
-      - key: TTS_URL
-        sync: false
-      - key: TTS_TOKEN
-        sync: false

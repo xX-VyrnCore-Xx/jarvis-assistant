@@ -70,7 +70,7 @@ async def lifespan(app: FastAPI):
 
         pending.on_create = notify_pending
     app.state.backup = HFBackup(settings)
-    app.state.voice = VoiceService(settings)
+    app.state.voice = VoiceService(pc)
     notifier = app.state.notifier = Notifier(settings, store, tg)
     prev = pending.on_create
 

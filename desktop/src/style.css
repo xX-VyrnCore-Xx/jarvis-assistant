@@ -148,3 +148,6 @@ button, input, textarea { font: inherit; color: inherit; }
 
 .speak-btn { margin-left: 8px; background: none; border: 0; color: var(--muted); cursor: pointer; vertical-align: middle; padding: 2px; }
 .speak-btn:hover { color: var(--cy); }
+
+.voice-box { margin-top: 14px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 13px; background: var(--panel2); }
+.voice-log { margin: 10px 0 0; max-height: 160px; overflow: auto; font: 11px/1.5 var(--mono); color: var(--muted); white-space: pre-wrap; }

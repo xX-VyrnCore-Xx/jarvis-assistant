@@ -173,7 +173,7 @@ async def stream(request: Request) -> StreamingResponse:
 async def tts(body: SpeakIn, request: Request) -> Response:
     voice = request.app.state.voice
     if not voice.enabled:
-        raise HTTPException(404, "Voce non configurata")
+        raise HTTPException(404, "La voce non è disponibile: il PC con JARVIS non è collegato")
     try:
         return Response(await voice.speak(body.text.strip()), media_type="audio/wav", headers={"Cache-Control": "no-store"})
     except TTSError as e:

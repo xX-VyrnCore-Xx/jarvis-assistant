@@ -4,6 +4,7 @@ import { el, fmtDate, fmtTokens, fmtUptime, markdown, nowLocalInput, pct } from 
 import { icon } from "@shared/icons.js";
 import { Speaker } from "@shared/speech.js";
 import { openStream } from "@shared/stream.js";
+import { initVoice, installVoice, onVoiceChange, removeVoice, synth, toBase64, voice } from "./voice.js";
 import { clearToken, loadToken, saveToken } from "./secrets.js";
 
 // URL pubblico del server (non è un segreto); il token personale sta nel Gestore credenziali
@@ -31,7 +32,7 @@ const VIEWS = [
 
 const cfg = { url: (localStorage.getItem("jarvis.url") || DEFAULT_URL).replace(/\/+$/, ""), token: "", where: "local" };
 const api = new Jarvis({ url: () => cfg.url, token: () => cfg.token });
-const speaker = new Speaker({ tts: (t) => api.tts(t) });
+const speaker = new Speaker({ tts: (t) => synth(t) });
 const voiceOn = () => localStorage.getItem("jarvis.speak") !== "0";
 const S = { view: "chat", status: null, tokens: null, tokensErr: "", pending: [], reminders: [], notes: [], live: "off", online: false, ws: false, pcLog: [], busy: false };
 
@@ -176,7 +177,7 @@ async function send(text) {
   try {
     const reply = await api.chat(msg, SESSION);
     addMessage("bot", reply);
-    if (voiceOn() && S.status?.voice) speaker.speak(reply);
+    if (voiceOn() && voice.installed) speaker.speak(reply);
     refreshStatus();
   } catch (e) {
     addMessage("sys", errText(e));
@@ -353,6 +354,22 @@ function buildSettings() {
   const speak = el("input", { type: "checkbox", id: "speak" });
   speak.checked = voiceOn();
   speak.addEventListener("change", () => { localStorage.setItem("jarvis.speak", speak.checked ? "1" : "0"); if (!speak.checked) speaker.stop(); });
+  const vbox = el("div", { class: "voice-box" });
+  const drawVoice = () => {
+    const log = el("pre", { class: "voice-log" }, voice.log.slice(-12).join("\n"));
+    vbox.replaceChildren(
+      el("p", { class: "tiny" }, voice.installing ? "Installazione in corso: servono alcuni minuti e circa 3 GB (non chiudere JARVIS)."
+        : voice.installed ? (voice.running ? "Voce di JARVIS pronta." : "Voce installata: si avvia al primo utilizzo.")
+        : "La voce clonata di JARVIS (XTTS v2) gira sul tuo PC, gratis. Si scaricano circa 3 GB una volta sola."),
+      voice.error ? el("p", { class: "tiny bad" }, voice.error) : null,
+      el("div", { class: "row" },
+        !voice.installed && !voice.installing ? el("button", { class: "btn primary", onclick: installVoice }, "Installa la voce") : null,
+        voice.installed ? el("button", { class: "btn", onclick: () => speaker.speak("Buongiorno, signore. Tutti i sistemi sono operativi.") }, "Prova la voce") : null,
+        voice.installed && !voice.installing ? el("button", { class: "btn danger", onclick: async () => { speaker.stop(); await removeVoice(); } }, "Rimuovi la voce") : null),
+      voice.installing || voice.log.length ? log : null);
+  };
+  drawVoice();
+  const stopVoice = onVoiceChange(() => (vbox.isConnected ? drawVoice() : stopVoice()));
   return el("div", { class: "page narrow" },
     panelHead("Impostazioni", "Collegamento al tuo JARVIS."),
     el("label", { class: "field" }, "Indirizzo del server", url),
@@ -360,7 +377,8 @@ function buildSettings() {
       el("small", {}, cfg.where === "keyring" ? "Salvato nel Gestore credenziali di Windows, cifrato dall'account." : "Salvato su questo computer (nel browser di prova).")),
     el("div", { class: "row" }, el("button", { class: "btn", onclick: test }, "Prova il collegamento"), el("button", { class: "btn primary", onclick: save }, "Salva")),
     result,
-    el("label", { class: "check" }, speak, S.status?.voice ? "Leggi le risposte con la voce di JARVIS" : "Leggi le risposte con la voce di JARVIS (voce non ancora configurata sul server)"),
+    el("label", { class: "check" }, speak, "Leggi le risposte con la voce di JARVIS"),
+    isTauri ? vbox : null,
     isTauri ? el("label", { class: "check" }, autostart, "Avvia JARVIS con Windows (resta nella barra delle applicazioni)") : null,
     el("div", { class: "row" }, el("button", { class: "btn danger", onclick: async () => { await clearToken(); cfg.token = ""; token.value = ""; stop(); toast("Token rimosso da questo computer"); } }, "Rimuovi il token da questo PC")),
     el("p", { class: "tiny" }, "Scorciatoia: Alt+Spazio mostra o nasconde la finestra."),
@@ -406,7 +424,7 @@ function connect() {
   ws?.close();
   if (!isTauri || !cfg.token) return;
   ws = new WebSocket(`${cfg.url.replace(/^http/, "ws")}/ws/pc`);
-  ws.onopen = () => ws.send(JSON.stringify({ token: cfg.token }));
+  ws.onopen = () => ws.send(JSON.stringify({ token: cfg.token, caps: { voice: voice.installed } }));
   ws.onmessage = async (ev) => {
     const msg = JSON.parse(ev.data);
     if (msg.type === "ready") {
@@ -427,6 +445,10 @@ function connect() {
 }
 
 async function runCommand(action, args) {
+  if (action === "tts") { // il server (e quindi il telefono) chiede di leggere un testo con la voce di JARVIS
+    if (!voice.installed) return "Voce non installata sul PC.";
+    try { return await toBase64(await synth(String(args.text || "").slice(0, 500))); } catch (e) { return `Errore: ${e}`; }
+  }
   const ask = SENSITIVE[action];
   if (ask && !(await confirmLocal(ask(args)))) { logPc(`${action}: rifiutato`, false); return "Azione rifiutata dall'utente."; }
   try { const out = await local(action, args); logPc(`${action}: ${out}`); return out; } catch (e) { logPc(`${action}: ${e}`, false); return `Errore: ${e}`; }
@@ -473,4 +495,16 @@ function stop() {
   if (!cfg.token) S.view = "settings";
   renderRail(); renderView();
   if (cfg.token) start();
+  await initVoice();
+  onVoiceChange(() => { if (ws?.readyState === 1) ws.send(JSON.stringify({ type: "caps", voice: voice.installed })); });
+  if (isTauri && !voice.installed && !voice.installing && !localStorage.getItem("jarvis.voice.asked")) {
+    localStorage.setItem("jarvis.voice.asked", "1");
+    const o = el("div", { class: "overlay" }, el("div", { class: "dialog", role: "dialog" },
+      el("div", { class: "dlg-icon" }, icon("volume", 28)), el("h2", {}, "Voce di JARVIS"),
+      el("p", {}, "Vuoi installare la voce clonata di JARVIS? Gira sul tuo PC, è gratuita e serve anche al telefono quando il PC è acceso."),
+      el("small", {}, "Download di circa 3 GB, una volta sola. Puoi farlo anche dopo da Impostazioni."),
+      el("div", { class: "row end" }, el("button", { class: "btn", onclick: () => o.remove() }, "Più tardi"),
+        el("button", { class: "btn primary", onclick: () => { o.remove(); installVoice(); setView("settings"); } }, "Installa"))));
+    document.body.append(o);
+  }
 })();

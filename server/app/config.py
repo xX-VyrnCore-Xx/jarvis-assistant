@@ -40,9 +40,6 @@ class Settings(BaseSettings):
     freeapi_db_backup_token: str = ""
     hf_backup_keep: int = 14
 
-    tts_url: str = ""  # Space Hugging Face con XTTS v2 (voce clonata di JARVIS)
-    tts_token: str = ""
-
     # origini delle app (Tauri su Windows, Capacitor su Android); altre, separate da virgola
     cors_origins: str = ""
 

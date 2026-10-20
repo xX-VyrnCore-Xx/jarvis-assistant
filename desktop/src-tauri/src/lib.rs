@@ -1,5 +1,6 @@
 mod actions;
 mod paths;
+mod voice;
 
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -82,6 +83,7 @@ fn autostart_set(app: AppHandle, enabled: bool) -> Result<(), String> {
 
 pub fn run() {
     tauri::Builder::default()
+        .manage(voice::Voice::default())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, Some(vec!["--hidden"])))
@@ -108,7 +110,11 @@ pub fn run() {
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, ev| match ev.id.as_ref() {
                     "open" => show(app),
-                    "quit" => app.exit(0),
+                    "quit" => {
+                        // chiusura completa: ferma la voce locale e termina il processo
+                        voice::stop(&app.state::<voice::Voice>());
+                        app.exit(0)
+                    }
                     _ => {}
                 })
                 .on_tray_icon_event(|tray, ev| {
@@ -131,7 +137,14 @@ pub fn run() {
                 let _ = window.hide();
             }
         })
-        .invoke_handler(tauri::generate_handler![run_action, notify, show_window, secret_get, secret_set, secret_delete, autostart_get, autostart_set])
-        .run(tauri::generate_context!())
-        .expect("errore nell'avvio di JARVIS");
+        .invoke_handler(tauri::generate_handler![run_action, notify, show_window, secret_get, secret_set, secret_delete, autostart_get, autostart_set,
+            voice::voice_status, voice::voice_install, voice::voice_start, voice::voice_stop, voice::voice_uninstall])
+        .build(tauri::generate_context!())
+        .expect("errore nell'avvio di JARVIS")
+        .run(|app, event| {
+            // qualunque uscita (anche da Windows) chiude la voce: nessun processo Python rimane in giro
+            if let tauri::RunEvent::Exit = event {
+                voice::stop(&app.state::<voice::Voice>());
+            }
+        });
 }

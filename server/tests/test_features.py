@@ -259,23 +259,31 @@ async def test_hf_backup_encrypts_commits_and_keeps_only_recent():
 
 
 @pytest.mark.asyncio
-async def test_voice_proxy_caches_and_reports_errors():
+async def test_voice_is_relayed_to_the_pc_and_cached():
+    import base64
+
+    from app.pc import PCBridge
     from app.voice import TTSError, VoiceService
 
-    calls = []
+    class FakePC(PCBridge):
+        calls = 0
 
-    def handler(req: httpx.Request) -> httpx.Response:
-        calls.append(req.headers["authorization"])
-        return httpx.Response(200, content=b"RIFFwav") if b"ciao" in req.content else httpx.Response(500)
+        async def call(self, action, args, timeout=60.0):
+            self.calls += 1
+            return base64.b64encode(b"RIFFwav").decode() if args["text"] == "ciao" else "Voce non installata sul PC."
 
-    v = VoiceService(Settings(tts_url="https://x.hf.space/", tts_token="t"), httpx.AsyncClient(transport=httpx.MockTransport(handler)))
-    assert v.enabled and not VoiceService(Settings()).enabled
+    pc = FakePC()
+    v = VoiceService(pc)
+    with pytest.raises(TTSError):  # PC scollegato
+        await v.speak("ciao")
+    pc.ws, pc.caps = object(), {"voice": True}
+    assert v.enabled
     assert await v.speak("ciao") == b"RIFFwav" and await v.speak("ciao") == b"RIFFwav"
-    assert calls == ["Bearer t"]  # la seconda è dalla cache
-    with pytest.raises(TTSError):
+    assert pc.calls == 1  # la seconda è dalla cache
+    with pytest.raises(TTSError, match="non installata"):
         await v.speak("altro")
 
 
-def test_tts_endpoint_needs_config(client):
+def test_tts_endpoint_without_pc(client):
     assert client.post("/api/tts", json={"text": "ciao"}, headers=AUTH).status_code == 404
     assert client.post("/api/tts", json={"text": "ciao"}).status_code == 401

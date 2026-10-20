@@ -12,6 +12,7 @@ class PCBridge:
 
     def __init__(self) -> None:
         self.ws: WebSocket | None = None
+        self.caps: dict = {}  # funzioni dichiarate dal PC (es. voce locale)
         self._pending: dict[int, asyncio.Future] = {}
         self._ids = itertools.count(1)
 
@@ -54,6 +55,7 @@ class PCBridge:
                 on_auth_fail()
             await ws.close(code=4401)
             return
+        self.caps = hello.get("caps") if isinstance(hello.get("caps"), dict) else {}
         old, self.ws = self.ws, ws  # un solo PC alla volta: il nuovo sostituisce il vecchio
         if old:
             try:
@@ -64,10 +66,12 @@ class PCBridge:
         try:
             while True:
                 msg = await ws.receive_json()
-                if msg.get("type") == "result" and (fut := self._pending.get(msg.get("id"))) and not fut.done():
+                if msg.get("type") == "caps":
+                    self.caps = {"voice": bool(msg.get("voice"))}
+                elif msg.get("type") == "result" and (fut := self._pending.get(msg.get("id"))) and not fut.done():
                     fut.set_result(str(msg.get("output", "")))
         except (WebSocketDisconnect, RuntimeError):
             pass
         finally:
             if self.ws is ws:
-                self.ws = None
+                self.ws, self.caps = None, {}

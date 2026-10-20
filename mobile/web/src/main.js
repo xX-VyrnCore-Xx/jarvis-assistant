@@ -229,7 +229,7 @@ function buildMore() {
       row("Google", st ? (st.google ? "collegato" : "non collegato") : "—", st ? st.google : undefined),
       row("Memoria", st ? (st.memory === "supabase" ? "permanente" : "temporanea") : "—", st ? st.memory === "supabase" : undefined),
       st ? row("Attivo da", fmtUptime(st.uptime_s)) : null),
-    el("div", { class: "m-card" }, el("label", { class: "m-row" }, el("span", {}, st?.voice ? "Voce di JARVIS" : "Voce di JARVIS (non configurata)"),
+    el("div", { class: "m-card" }, el("label", { class: "m-row" }, el("span", {}, st?.voice ? "Voce di JARVIS" : "Voce di JARVIS (serve il PC acceso)"),
       el("input", { type: "checkbox", checked: voiceOn(), onchange: (e) => { localStorage.setItem("jarvis.speak", e.target.checked ? "1" : "0"); if (!e.target.checked) speaker.stop(); } }))),
     el("div", { class: "m-card safe" }, icon("shield", 20), el("p", {}, "Le azioni sensibili, come inviare un'email, richiedono sempre la tua conferma.")),
     el("button", { class: "m-danger", onclick: () => { teardownPush(api).catch(() => {}); localStorage.removeItem("jarvis.token"); cfg.token = ""; stop(); renderTab(); toast("Token rimosso da questo telefono"); } }, "Rimuovi il token da questo telefono"));
