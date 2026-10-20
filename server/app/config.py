@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     freellm_base_url: str = ""
     freellm_api_key: str = ""
     freellm_model: str = "auto"
+    freellm_db_path: str = ""  # se FREELLM_API_KEY è vuota, la chiave unificata si legge da questo DB SQLite
     llm_timeout_s: float = 90.0
     max_tool_rounds: int = 5
 

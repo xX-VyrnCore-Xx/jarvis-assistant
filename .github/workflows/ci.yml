@@ -47,3 +47,28 @@ jobs:
       - run: pip install pytest numpy python-dotenv
       - run: pytest -q
         working-directory: voice
+
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t jarvis-all .
+      - name: Smoke test del container unico
+        run: |
+          docker run -d --name jarvis-ci -p 10000:10000 -e PORT=10000 \
+            -e ENCRYPTION_KEY=$(openssl rand -hex 32) -e JARVIS_API_TOKEN=ci jarvis-all
+          ok=0; for i in $(seq 1 60); do curl -fsS localhost:10000/health && ok=1 && break; sleep 2; done
+          test $ok = 1
+          ok=0; for i in $(seq 1 60); do
+            docker exec jarvis-ci node -e "fetch('http://127.0.0.1:3001/api/ping').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))" && ok=1 && break; sleep 2
+          done
+          test $ok = 1
+          # JARVIS (utente node) legge la chiave unificata dal DB di FreeLLMAPI
+          docker exec -u node -w /srv/jarvis jarvis-ci /opt/venv/bin/python -c \
+            "from app.llm import read_unified_key as r; k=r('/app/server/data/freellmapi.db'); assert k.startswith('freellmapi-'); print('chiave unificata ok')"
+          # FreeLLMAPI non deve essere raggiungibile dall'esterno del container (solo loopback)
+          if docker exec jarvis-ci node -e "const ip=Object.values(require('os').networkInterfaces()).flat().find(i=>!i.internal&&i.family==='IPv4').address;fetch('http://'+ip+':3001/api/ping').then(()=>process.exit(0)).catch(()=>process.exit(1))"; then
+            echo "FreeLLMAPI è esposto fuori dal loopback"; exit 1
+          fi
+      - if: failure()
+        run: docker logs jarvis-ci

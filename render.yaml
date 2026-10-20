@@ -1,25 +1,18 @@
+# Un solo servizio Free (744 h/mese < 750 h gratuite): JARVIS pubblico + FreeLLMAPI interno.
 services:
   - type: web
-    name: jarvis
-    runtime: python
+    name: jarvis-ai
+    runtime: docker
     plan: free
-    rootDir: server
-    buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    region: frankfurt
+    dockerfilePath: ./Dockerfile
     healthCheckPath: /health
     envVars:
-      - key: PYTHON_VERSION
-        value: 3.13.1
-      - key: JARVIS_API_TOKEN
-        sync: false
       - key: OWNER_NAME
         value: signore
-      - key: FREELLM_BASE_URL
-        sync: false
-      - key: FREELLM_API_KEY
-        sync: false
-      - key: FREELLM_MODEL
-        value: auto
+      # JARVIS
+      - key: JARVIS_API_TOKEN
+        generateValue: true
       - key: SUPABASE_URL
         sync: false
       - key: SUPABASE_SERVICE_KEY
@@ -30,3 +23,18 @@ services:
         sync: false
       - key: TELEGRAM_WEBHOOK_SECRET
         generateValue: true
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_REFRESH_TOKEN
+        sync: false
+      # FreeLLMAPI: il disco è effimero, quindi DB cifrato salvato su Hugging Face e chiavi dei provider da config
+      - key: ENCRYPTION_KEY
+        generateValue: true
+      - key: FREEAPI_DB_BACKUP_URL
+        sync: false
+      - key: FREEAPI_DB_BACKUP_TOKEN
+        sync: false
+      - key: FREEAPI_CONFIG_JSON
+        sync: false

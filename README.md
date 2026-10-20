@@ -18,10 +18,21 @@ pytest
 ```
 `POST /chat` con `Authorization: Bearer $JARVIS_API_TOKEN` e body `{"message": "ciao"}`.
 
-## Deploy
-1. Supabase: esegui `supabase/migrations/0001_init.sql` nello SQL editor.
-2. Render: New → Blueprint dal repo (`render.yaml`), poi imposta le variabili segrete.
-3. Anti-sleep (piano Free): modifica l'URL in `supabase/keepalive.sql` ed eseguilo.
+## Deploy (tutto gratuito su Render)
+Un solo servizio Docker (`Dockerfile`, `render.yaml`) contiene **JARVIS** (pubblico) e **FreeLLMAPI** (solo loopback,
+mai esposto). Un unico servizio basta per restare nelle 750 ore gratuite/mese di Render (due servizi H24 non ci stanno).
+
+1. **Supabase**: migrazioni in `supabase/migrations/`, anti-sleep in `supabase/keepalive.sql` (con l'URL del servizio).
+2. **Render**: New → Blueprint dal repo. Variabili: `SUPABASE_*`, `TELEGRAM_*`, `GOOGLE_*` (opzionali) e quelle sotto.
+   `JARVIS_API_TOKEN`, `ENCRYPTION_KEY` e il secret Telegram si generano da soli: leggili dalla dashboard.
+3. **Persistenza di FreeLLMAPI** (il disco Free si azzera ai riavvii): crea un dataset **privato** su Hugging Face e un token
+   con scrittura solo su quel repo, poi imposta
+   `FREEAPI_DB_BACKUP_URL=https://huggingface.co/datasets/<utente>/<repo>/resolve/main/freellmapi.db.backup`
+   e `FREEAPI_DB_BACKUP_TOKEN`. Il DB, cifrato con `ENCRYPTION_KEY`, viene salvato ogni 5 minuti e ripristinato all'avvio.
+   **Conserva `ENCRYPTION_KEY`**: senza di essa il backup non si decifra.
+4. **Chiavi dei provider** in `FREEAPI_CONFIG_JSON` (applicato a ogni avvio), per esempio:
+   `{"keys":[{"platform":"groq","key":"gsk_..."},{"platform":"google","key":"AIza..."}],"routing":{"strategy":"balanced"}}`
+   Le piattaforme valide sono quelle del catalogo FreeLLMAPI. JARVIS legge da solo la chiave unificata dal DB.
 
 ## Telegram
 1. Crea il bot con @BotFather e copia il token; il tuo ID numerico si legge con @userinfobot.
