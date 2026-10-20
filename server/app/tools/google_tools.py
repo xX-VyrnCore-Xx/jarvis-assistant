@@ -84,36 +84,125 @@ def register_google_tools(reg: ToolRegistry, settings: Settings, g: GoogleClient
         return (f"Invio in attesa di conferma dell'utente (richiesta {p.id}): NON è stata inviata. "
                 "L'utente deve approvarla dall'app o da Telegram.")
 
-    async def calendar_list_events(days: int = 7) -> str:
-        now = datetime.now(tz)
-        r = await g.request(
-            "GET",
-            f"{CAL}/events",
-            params={
-                "timeMin": now.isoformat(),
-                "timeMax": (now + timedelta(days=min(days, 60))).isoformat(),
-                "singleEvents": "true",
-                "orderBy": "startTime",
-                "maxResults": 25,
-            },
-        )
-        rows = []
-        for e in r.json().get("items", []):
-            start = e["start"].get("dateTime") or e["start"].get("date")
-            rows.append(f"[{e['id']}] {start} — {e.get('summary', '(senza titolo)')}")
-        return "\n".join(rows) or "Nessun evento nel periodo."
+    def _when(e: dict) -> str:
+        st, en = e["start"], e.get("end", {})
+        if st.get("date"):  # giornata intera
+            return f"{st['date']} (tutto il giorno)"
+        end = (en.get("dateTime") or "")[11:16]
+        return f"{st['dateTime'][:16].replace('T', ' ')}" + (f"–{end}" if end else "")
 
-    async def calendar_create_event(summary: str, start: str, duration_minutes: int = 60, description: str = "") -> str:
-        s = datetime.fromisoformat(start)
-        s = s.replace(tzinfo=tz) if s.tzinfo is None else s
-        body = {
-            "summary": summary,
-            "description": description,
-            "start": {"dateTime": s.isoformat(), "timeZone": settings.timezone},
-            "end": {"dateTime": (s + timedelta(minutes=duration_minutes)).isoformat(), "timeZone": settings.timezone},
-        }
-        r = await g.request("POST", f"{CAL}/events", json=body)
-        return f"Evento creato: {summary} il {s:%d/%m/%Y %H:%M} ({r.json()['id']})."
+    def _line(e: dict) -> str:
+        extra = (f" @ {e['location']}" if e.get("location") else "") + (f" · {len(e['attendees'])} invitati" if e.get("attendees") else "")
+        return f"[{e['id']}] {_when(e)} — {e.get('summary', '(senza titolo)')}{extra}"
+
+    def _local(value: str) -> datetime:
+        d = datetime.fromisoformat(value)
+        return d.replace(tzinfo=tz) if d.tzinfo is None else d.astimezone(tz)
+
+    async def calendar_list_events(days: int = 7, query: str = "", from_date: str = "") -> str:
+        start = _local(from_date) if from_date else datetime.now(tz)
+        params = {"timeMin": start.isoformat(), "timeMax": (start + timedelta(days=max(1, min(days, 90)))).isoformat(),
+                  "singleEvents": "true", "orderBy": "startTime", "maxResults": 40}
+        if query:
+            params["q"] = query
+        r = await g.request("GET", f"{CAL}/events", params=params)
+        rows = [_line(e) for e in r.json().get("items", [])]
+        return UNTRUSTED + "\n".join(rows) if rows else "Nessun evento nel periodo."
+
+    async def calendar_create_event(summary: str, start: str, duration_minutes: int = 60, description: str = "",
+                                    location: str = "", all_day: bool = False, attendees: str = "") -> str:
+        s0 = _local(start)
+        body: dict = {"summary": summary, "description": description, "location": location}
+        if all_day:
+            body["start"] = {"date": f"{s0:%Y-%m-%d}"}
+            body["end"] = {"date": f"{s0 + timedelta(days=max(1, duration_minutes // 1440 or 1)):%Y-%m-%d}"}
+        else:
+            body["start"] = {"dateTime": s0.isoformat(), "timeZone": settings.timezone}
+            body["end"] = {"dateTime": (s0 + timedelta(minutes=duration_minutes)).isoformat(), "timeZone": settings.timezone}
+        mails = [m.strip() for m in attendees.split(",") if "@" in m]
+        if mails:
+            body["attendees"] = [{"email": m} for m in mails]
+        # sendUpdates=none: nessun invito parte da solo
+        r = await g.request("POST", f"{CAL}/events", params={"sendUpdates": "none"}, json=body)
+        return f"Evento creato: {summary} il {s0:%d/%m/%Y %H:%M} ({r.json()['id']})." + (" Inviti non spediti." if mails else "")
+
+    async def calendar_update_event(event_id: str, summary: str = "", start: str = "", duration_minutes: int = 0,
+                                    description: str = "", location: str = "") -> str:
+        patch: dict = {}
+        if summary:
+            patch["summary"] = summary
+        if description:
+            patch["description"] = description
+        if location:
+            patch["location"] = location
+        if start:
+            s0 = _local(start)
+            minutes = duration_minutes
+            if not minutes:  # mantiene la durata che l'evento aveva
+                cur = (await g.request("GET", f"{CAL}/events/{event_id}")).json()
+                try:
+                    minutes = int((datetime.fromisoformat(cur["end"]["dateTime"]) - datetime.fromisoformat(cur["start"]["dateTime"])).total_seconds() // 60)
+                except (KeyError, ValueError):
+                    minutes = 60
+            patch["start"] = {"dateTime": s0.isoformat(), "timeZone": settings.timezone}
+            patch["end"] = {"dateTime": (s0 + timedelta(minutes=minutes)).isoformat(), "timeZone": settings.timezone}
+        elif duration_minutes:
+            cur = (await g.request("GET", f"{CAL}/events/{event_id}")).json()
+            s0 = datetime.fromisoformat(cur["start"]["dateTime"])
+            patch["end"] = {"dateTime": (s0 + timedelta(minutes=duration_minutes)).isoformat(), "timeZone": settings.timezone}
+        if not patch:
+            return "Errore: indica almeno un campo da modificare."
+        r = await g.request("PATCH", f"{CAL}/events/{event_id}", params={"sendUpdates": "none"}, json=patch)
+        return "Evento aggiornato: " + _line(r.json())
+
+    async def calendar_delete_event(event_id: str) -> str:
+        # Cancellare è distruttivo: come per l'invio di email, lo decide l'utente (app o Telegram), non il modello.
+        try:
+            e = (await g.request("GET", f"{CAL}/events/{event_id}")).json()
+            label = f"{e.get('summary', '(senza titolo)')} — {_when(e)}"
+        except Exception:
+            return "Errore: evento non trovato."
+
+        async def delete() -> str:
+            await g.request("DELETE", f"{CAL}/events/{event_id}", params={"sendUpdates": "none"})
+            return "Evento eliminato."
+
+        p = pending.create("calendar_delete", f"Eliminare l'evento «{label}»", delete)
+        return (f"Eliminazione in attesa di conferma dell'utente (richiesta {p.id}): l'evento NON è stato eliminato. "
+                "L'utente deve approvarla dall'app o da Telegram.")
+
+    async def calendar_find_free_time(date: str, duration_minutes: int = 60, day_start: int = 9, day_end: int = 19) -> str:
+        day = _local(date).replace(hour=0, minute=0, second=0, microsecond=0)
+        lo, hi = day.replace(hour=day_start), day.replace(hour=day_end)
+        r = await g.request("POST", "https://www.googleapis.com/calendar/v3/freeBusy",
+                            json={"timeMin": lo.isoformat(), "timeMax": hi.isoformat(), "timeZone": settings.timezone, "items": [{"id": "primary"}]})
+        busy = sorted((datetime.fromisoformat(b["start"]).astimezone(tz), datetime.fromisoformat(b["end"]).astimezone(tz))
+                      for b in r.json()["calendars"]["primary"]["busy"])
+        free, cursor = [], lo
+        for b0, b1 in busy + [(hi, hi)]:
+            if b0 - cursor >= timedelta(minutes=duration_minutes):
+                free.append(f"{cursor:%H:%M}–{b0:%H:%M}")
+            cursor = max(cursor, b1)
+        return f"Fasce libere il {day:%d/%m/%Y} (almeno {duration_minutes} min): " + (", ".join(free) or "nessuna.")
+
+    async def gmail_reply_draft(message_id: str, body: str) -> str:
+        d = (await g.request("GET", f"{GMAIL}/messages/{message_id}", params={"format": "metadata", "metadataHeaders": ["From", "Reply-To", "Subject", "Message-ID", "References"]})).json()
+        m = EmailMessage()
+        m["To"] = _header(d, "Reply-To") or _header(d, "From")
+        subj = _header(d, "Subject")
+        m["Subject"] = subj if subj.lower().startswith("re:") else f"Re: {subj}"
+        if mid := _header(d, "Message-ID"):
+            m["In-Reply-To"], m["References"] = mid, f"{_header(d, 'References')} {mid}".strip()
+        m.set_content(body)
+        raw = base64.urlsafe_b64encode(m.as_bytes()).decode()
+        r = await g.request("POST", f"{GMAIL}/drafts", json={"message": {"raw": raw, "threadId": d.get("threadId")}})
+        return f"Bozza di risposta creata (id {r.json()['id']}) per {m['To']}. Non è stata inviata."
+
+    async def drive_recent(count: int = 10) -> str:
+        r = await g.request("GET", f"{DRIVE}/files", params={"orderBy": "modifiedTime desc", "pageSize": min(count, 25),
+                                                              "q": "trashed = false", "fields": "files(id,name,mimeType,modifiedTime)"})
+        rows = [f"[{f['id']}] {f['name']} ({f['mimeType'].split('.')[-1]}, {f['modifiedTime'][:10]})" for f in r.json()["files"]]
+        return UNTRUSTED + "\n".join(rows) if rows else "Nessun file."
 
     async def drive_search(query: str) -> str:
         safe = query.replace("\\", "\\\\").replace("'", "\\'")
@@ -146,12 +235,18 @@ def register_google_tools(reg: ToolRegistry, settings: Settings, g: GoogleClient
     R("gmail_read", "Legge il contenuto di una email dato il suo id.", obj({"message_id": s_}, ["message_id"]), gmail_read)
     R("gmail_create_draft", "Crea una bozza email (NON la invia).", obj({"to": s_, "subject": s_, "body": s_}, ["to", "subject", "body"]), gmail_create_draft)
     R("gmail_send_draft", "Chiede all'utente di approvare l'invio di una bozza (non la invia da sola: serve la sua conferma nell'app o su Telegram).", obj({"draft_id": s_}, ["draft_id"]), gmail_send_draft)
-    R("calendar_list_events", "Elenca i prossimi eventi del calendario.", obj({"days": i_}, []), calendar_list_events)
-    R(
-        "calendar_create_event",
-        "Crea un evento. 'start' è data/ora locale ISO 8601; calcolala da get_datetime.",
-        obj({"summary": s_, "start": s_, "duration_minutes": i_, "description": s_}, ["summary", "start"]),
-        calendar_create_event,
-    )
+    b_ = {"type": "boolean"}
+    R("gmail_reply_draft", "Crea la bozza di risposta a una email (nello stesso thread). NON la invia.", obj({"message_id": s_, "body": s_}, ["message_id", "body"]), gmail_reply_draft)
+    R("calendar_list_events", "Elenca gli eventi del calendario (con id). 'days' = quanti giorni (default 7), 'from_date' = data di partenza ISO (anche nel passato), 'query' = testo da cercare.",
+      obj({"days": i_, "query": s_, "from_date": s_}, []), calendar_list_events)
+    R("calendar_create_event", "Crea un evento. 'start' è data/ora locale ISO 8601 (calcolala da get_datetime); 'attendees' = email separate da virgola (gli inviti NON partono).",
+      obj({"summary": s_, "start": s_, "duration_minutes": i_, "description": s_, "location": s_, "all_day": b_, "attendees": s_}, ["summary", "start"]), calendar_create_event)
+    R("calendar_update_event", "Modifica un evento esistente (id da calendar_list_events): titolo, orario di inizio (mantiene la durata se non indicata), durata, descrizione, luogo.",
+      obj({"event_id": s_, "summary": s_, "start": s_, "duration_minutes": i_, "description": s_, "location": s_}, ["event_id"]), calendar_update_event)
+    R("calendar_delete_event", "Elimina un evento (id da calendar_list_events). Serve la conferma dell'utente nell'app o su Telegram: dopo la chiamata di' che l'attende.",
+      obj({"event_id": s_}, ["event_id"]), calendar_delete_event)
+    R("calendar_find_free_time", "Trova le fasce libere di un giorno (data ISO) di almeno N minuti, tra 'day_start' e 'day_end' (ore, default 9-19).",
+      obj({"date": s_, "duration_minutes": i_, "day_start": i_, "day_end": i_}, ["date"]), calendar_find_free_time)
+    R("drive_recent", "Elenca i file di Drive modificati più di recente.", obj({"count": i_}, []), drive_recent)
     R("drive_search", "Cerca file su Google Drive per contenuto o nome.", obj({"query": s_}, ["query"]), drive_search)
     R("drive_read", "Legge il testo di un file di Drive (Docs, Sheets, testo).", obj({"file_id": s_}, ["file_id"]), drive_read)

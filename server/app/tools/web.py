@@ -166,7 +166,45 @@ def register_web_tools(reg: ToolRegistry, client: httpx.AsyncClient | None = Non
             return f"Errore nel calcolo: {e}"
         return str(round(r, 10) if isinstance(r, float) else r)
 
+    async def web_news(query: str) -> str:
+        def _news() -> list[dict]:
+            from ddgs import DDGS
+
+            return DDGS().news(query, max_results=6, region="it-it")
+
+        rows = await asyncio.to_thread(_news)
+        body = "\n\n".join(f"{r.get('title')} ({r.get('source', '')}, {str(r.get('date', ''))[:10]})\n{r.get('url')}\n{r.get('body', '')}" for r in rows)
+        return UNTRUSTED + body if body else "Nessuna notizia trovata."
+
+    async def wikipedia(topic: str, lang: str = "it") -> str:
+        if not re.fullmatch(r"[a-z]{2,3}", lang):
+            return "Errore: lingua non valida."
+        found = (await http.get(f"https://{lang}.wikipedia.org/w/api.php", params={"action": "opensearch", "search": topic, "limit": 1, "format": "json"})).json()
+        if not found[1]:
+            return f"Nessuna voce trovata per '{topic}'."
+        r = await http.get(f"https://{lang}.wikipedia.org/api/rest_v1/page/summary/{found[1][0].replace(' ', '_')}")
+        r.raise_for_status()
+        j = r.json()
+        return f"{UNTRUSTED}{j.get('title')}: {j.get('extract', '')[:MAX_TEXT]}\n{j.get('content_urls', {}).get('desktop', {}).get('page', '')}"
+
+    async def convert_currency(amount: float, from_currency: str, to_currency: str) -> str:
+        a, b = from_currency.upper(), to_currency.upper()
+        if not (re.fullmatch(r"[A-Z]{3}", a) and re.fullmatch(r"[A-Z]{3}", b)):
+            return "Errore: usa i codici a tre lettere (EUR, USD, GBP…)."
+        r = await http.get("https://api.frankfurter.app/latest", params={"amount": amount, "from": a, "to": b})
+        if r.status_code == 404:
+            return "Valuta non supportata."
+        r.raise_for_status()
+        j = r.json()
+        return f"{amount:g} {a} = {j['rates'][b]:g} {b} (cambio BCE del {j['date']})"
+
     s = {"type": "string"}
+    reg.register("web_news", "Ultime notizie su un argomento.", {"type": "object", "properties": {"query": s}, "required": ["query"]}, web_news)
+    reg.register("wikipedia", "Riassunto di una voce di Wikipedia (lingua predefinita: it). Per definizioni e fatti enciclopedici.",
+                 {"type": "object", "properties": {"topic": s, "lang": {"type": "string", "description": "codice lingua, es. it, en"}}, "required": ["topic"]}, wikipedia)
+    reg.register("convert_currency", "Converte un importo tra valute con il cambio BCE del giorno.",
+                 {"type": "object", "properties": {"amount": {"type": "number"}, "from_currency": s, "to_currency": s}, "required": ["amount", "from_currency", "to_currency"]},
+                 convert_currency)
     reg.register("read_webpage", "Legge il testo di una pagina web pubblica (http/https) dato l'URL, ad esempio un risultato di web_search.",
                  {"type": "object", "properties": {"url": s}, "required": ["url"]}, read_webpage)
     reg.register("get_weather", "Meteo attuale e previsioni dei prossimi 3 giorni per una città.",

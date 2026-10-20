@@ -1,5 +1,5 @@
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from ..config import Settings
@@ -18,7 +18,22 @@ def register_basic_tools(reg: ToolRegistry, settings: Settings, store: Store, bu
     """`budget`: coroutine che restituisce il testo sui token disponibili (se FreeLLMAPI è nel container)."""
     async def get_datetime() -> str:
         now = datetime.now(ZoneInfo(settings.timezone))
-        return f"{_GIORNI[now.weekday()]} {now:%d/%m/%Y %H:%M} ({settings.timezone})"
+        return f"{_GIORNI[now.weekday()]} {now:%d/%m/%Y %H:%M} ({settings.timezone}), ISO {now:%Y-%m-%dT%H:%M:%S}, settimana {now.isocalendar().week}"
+
+    async def date_info(date: str, add_days: int = 0) -> str:
+        """Giorno della settimana e calcoli con le date: il modello sbaglia spesso a farli a mente."""
+        tz = ZoneInfo(settings.timezone)
+        base = parse_due(date, tz) if date else datetime.now(tz)
+        target = base + timedelta(days=add_days)
+        delta = (target.date() - datetime.now(tz).date()).days
+        when = "oggi" if delta == 0 else f"tra {delta} giorni" if delta > 0 else f"{-delta} giorni fa"
+        return f"{_GIORNI[target.weekday()]} {target:%d/%m/%Y} ({when}), settimana {target.isocalendar().week}"
+
+    async def remind_in(minutes: int, text: str) -> str:
+        tz = ZoneInfo(settings.timezone)
+        due = datetime.now(tz) + timedelta(minutes=max(1, minutes))
+        await store.add_reminder(text, due)
+        return f"Promemoria fissato per {due:%d/%m/%Y %H:%M}."
 
     async def remember(content: str) -> str:
         await store.add_memory(content)
@@ -97,6 +112,10 @@ def register_basic_tools(reg: ToolRegistry, settings: Settings, store: Store, bu
     reg.register(
         "list_reminders", "Elenca i promemoria attivi.", {"type": "object", "properties": {}}, list_reminders
     )
+    reg.register("date_info", "Giorno della settimana e distanza da oggi di una data, con eventuale somma di giorni. Usalo per ogni calcolo con le date.",
+                 {"type": "object", "properties": {"date": {"type": "string", "description": "ISO 8601; vuoto = oggi"}, "add_days": {"type": "integer"}}, "required": []}, date_info)
+    reg.register("remind_in", "Promemoria tra N minuti da adesso (es. 'ricordami tra 20 minuti').",
+                 {"type": "object", "properties": {"minutes": {"type": "integer"}, "text": {"type": "string"}}, "required": ["minutes", "text"]}, remind_in)
     obj = lambda props, req=(): {"type": "object", "properties": props, "required": list(req)}  # noqa: E731
     reg.register("delete_reminder", "Elimina un promemoria dato il suo id (vedi list_reminders).",
                  obj({"reminder_id": {"type": "integer"}}, ["reminder_id"]), delete_reminder)
