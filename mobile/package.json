@@ -4,9 +4,15 @@
   "version": "0.1.0",
   "description": "Client Android di JARVIS: stessa interfaccia dell'app Windows, impacchettata con Capacitor",
   "dependencies": {
+    "@capacitor-community/speech-recognition": "^7.0.1",
     "@capacitor/android": "^7.0.0",
+    "@capacitor/app": "^7.1.2",
     "@capacitor/core": "^7.0.0",
-    "@capacitor/push-notifications": "^7.0.7"
+    "@capacitor/haptics": "^7.0.5",
+    "@capacitor/keyboard": "^7.0.6",
+    "@capacitor/push-notifications": "^7.0.7",
+    "@capacitor/splash-screen": "^7.0.5",
+    "@capacitor/status-bar": "^7.0.6"
   },
   "devDependencies": {
     "@capacitor/assets": "^3.0.5",
