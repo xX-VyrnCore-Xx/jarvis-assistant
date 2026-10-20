@@ -14,7 +14,9 @@ from .memory import build_store
 from .scheduler import reminder_loop
 from .telegram import Telegram
 from .tools import ToolRegistry
+from .google import GoogleClient
 from .tools.basic import register_basic_tools
+from .tools.google_tools import register_google_tools
 
 
 class ChatIn(BaseModel):
@@ -32,6 +34,9 @@ async def lifespan(app: FastAPI):
     store = build_store(settings)
     tools = ToolRegistry()
     register_basic_tools(tools, settings, store)
+    google = GoogleClient(settings)
+    if google.enabled:
+        register_google_tools(tools, settings, google)
     app.state.agent = Agent(settings, LLMClient(settings), store, tools)
     tg = app.state.tg = Telegram(settings)
     app.state.settings = settings
