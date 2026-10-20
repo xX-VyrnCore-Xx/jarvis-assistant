@@ -48,7 +48,19 @@ def register_basic_tools(reg: ToolRegistry, settings: Settings, store: Store, bu
 
     async def list_reminders() -> str:
         rows = await store.list_reminders()
-        return "\n".join(f"- {r['due_at']}: {r['text']}" for r in rows) or "Nessun promemoria attivo."
+        return "\n".join(f"- [id {r['id']}] {r['due_at']}: {r['text']}" for r in rows) or "Nessun promemoria attivo."
+
+    async def delete_reminder(reminder_id: int) -> str:
+        await store.delete_reminder(reminder_id)
+        return "Promemoria eliminato."
+
+    async def list_memories() -> str:
+        rows = await store.list_memories(30)
+        return "\n".join(f"- [id {m['id']}] {m['content']}" for m in rows) or "La memoria è vuota."
+
+    async def forget(memory_id: int) -> str:
+        await store.delete_memory(memory_id)
+        return "Dimenticato."
 
     reg.register("get_datetime", "Data e ora correnti.", {"type": "object", "properties": {}}, get_datetime)
     reg.register(
@@ -85,6 +97,12 @@ def register_basic_tools(reg: ToolRegistry, settings: Settings, store: Store, bu
     reg.register(
         "list_reminders", "Elenca i promemoria attivi.", {"type": "object", "properties": {}}, list_reminders
     )
+    obj = lambda props, req=(): {"type": "object", "properties": props, "required": list(req)}  # noqa: E731
+    reg.register("delete_reminder", "Elimina un promemoria dato il suo id (vedi list_reminders).",
+                 obj({"reminder_id": {"type": "integer"}}, ["reminder_id"]), delete_reminder)
+    reg.register("list_memories", "Elenca i ricordi salvati con il loro id.", obj({}), list_memories)
+    reg.register("forget", "Cancella un ricordo dato il suo id (vedi list_memories). Usalo solo se l'utente lo chiede.",
+                 obj({"memory_id": {"type": "integer"}}, ["memory_id"]), forget)
     if budget is not None:
         async def get_token_budget() -> str:
             return await budget()

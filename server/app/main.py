@@ -11,6 +11,7 @@ from .agent import Agent
 from .api import router as api_router
 from .auth import require_token, throttle
 from .backup import HFBackup
+from .bot import COMMANDS, TelegramBot
 from .voice import VoiceService
 from .budget_service import BudgetService
 from .freellm_admin import FreeLLMAdmin
@@ -30,6 +31,7 @@ from .google import GoogleClient
 from .tools.basic import register_basic_tools
 from .tools.google_tools import register_google_tools
 from .tools.pc_tools import register_pc_tools
+from .tools.web import register_web_tools
 
 
 class ChatIn(BaseModel):
@@ -40,6 +42,16 @@ class ChatIn(BaseModel):
 
 class ChatOut(BaseModel):
     reply: str
+
+
+async def _webhook_guard(tg: Telegram, hook: str) -> None:
+    """Se un vecchio servizio con lo stesso bot ripristina il suo webhook, lo riprende (controllo ogni 10 minuti)."""
+    while True:
+        await asyncio.sleep(600)
+        try:
+            await tg.ensure_webhook(hook)
+        except Exception:
+            log.warning("controllo del webhook Telegram fallito")
 
 
 @asynccontextmanager
@@ -53,6 +65,7 @@ async def lifespan(app: FastAPI):
     app.state.gateway_client = make_client()
     pc = app.state.pc = PCBridge()
     register_pc_tools(tools, pc)
+    register_web_tools(tools)
     pending = app.state.pending = PendingStore(settings.pending_ttl_s)
     app.state.chat_limiter = RateLimiter(settings.chat_per_minute)
     google = GoogleClient(settings)
@@ -61,6 +74,7 @@ async def lifespan(app: FastAPI):
     app.state.agent = Agent(settings, LLMClient(settings), store, tools)
     tg = app.state.tg = Telegram(settings)
     app.state.settings = settings
+    app.state.bot = TelegramBot(app)
     if tg.enabled:
         def notify_pending(p) -> None:
             asyncio.get_running_loop().create_task(
@@ -69,6 +83,13 @@ async def lifespan(app: FastAPI):
             )
 
         pending.on_create = notify_pending
+    async def send_notification(title: str, body: str = "") -> str:
+        await app.state.notifier.push("info", title[:120], body[:500])
+        return "Notifica inviata."
+
+    tools.register("send_notification", "Invia una notifica a tutte le app dell'utente (PC e telefono).",
+                   {"type": "object", "properties": {"title": {"type": "string"}, "body": {"type": "string"}}, "required": ["title"]},
+                   send_notification)
     app.state.backup = HFBackup(settings)
     app.state.voice = VoiceService(pc)
     notifier = app.state.notifier = Notifier(settings, store, tg)
@@ -83,16 +104,23 @@ async def lifespan(app: FastAPI):
             pass
 
     pending.on_create = on_pending
+    guard = None
     task = asyncio.create_task(background_loop(settings, store, notifier, budget, app.state.backup))
     if tg.enabled:
         base = settings.public_url or settings.render_external_url
         if base and settings.telegram_webhook_secret:
+            hook = f"{base.rstrip('/')}/telegram/webhook"
             try:
-                await tg.set_webhook(f"{base.rstrip('/')}/telegram/webhook")
+                # prende il posto di un eventuale vecchio bot con lo stesso token e imposta il menu dei comandi
+                await tg.set_webhook(hook, drop_pending=await tg.webhook_url() != hook)
+                await tg.set_commands(COMMANDS)
             except Exception:
-                log.exception("setWebhook fallito")
+                log.exception("configurazione del bot Telegram fallita")
+            guard = asyncio.create_task(_webhook_guard(tg, hook))
     yield
     task.cancel()
+    if guard:
+        guard.cancel()
     await app.state.gateway_client.aclose()
 
 
@@ -147,33 +175,6 @@ async def chat(body: ChatIn) -> ChatOut:
         raise HTTPException(502, str(e)) from e
 
 
-async def _handle_telegram_text(chat_id: int, text: str) -> None:
-    tg: Telegram = app.state.tg
-    try:
-        await tg.typing(chat_id)
-        reply = await app.state.agent.reply(text, f"tg-{chat_id}")
-    except Exception:
-        log.exception("errore gestione messaggio Telegram")
-        reply = "Si è verificato un problema, signore. Riprovi tra un momento."
-    await tg.send(chat_id, reply or "…")
-
-
-async def _handle_telegram_callback(cb: dict) -> None:
-    tg: Telegram = app.state.tg
-    action, _, pid = (cb.get("data") or "").partition(":")
-    msg = cb.get("message") or {}
-    if action not in ("ok", "no") or not pid:
-        return await tg.answer_callback(cb["id"])
-    p = await app.state.pending.decide(pid, action == "ok")
-    if p is None or p.status == "expired":
-        outcome = "Richiesta scaduta o inesistente."
-    else:
-        outcome = {"approved": f"Approvata. {p.result}", "rejected": "Rifiutata.", "failed": p.result}.get(p.status, p.status)
-    await tg.answer_callback(cb["id"], outcome[:150])
-    if msg.get("message_id"):
-        await tg.clear_buttons(msg["chat"]["id"], msg["message_id"], f"{p.summary if p else 'Richiesta'}: {outcome}")
-
-
 @app.post("/telegram/webhook")
 async def telegram_webhook(
     request: Request,
@@ -186,15 +187,10 @@ async def telegram_webhook(
     ):
         raise HTTPException(403, "Forbidden")
     update = await request.json()
-    if cb := update.get("callback_query"):
-        if cb.get("from", {}).get("id") == s.telegram_owner_id:
-            background.add_task(_handle_telegram_callback, cb)
-        return {"ok": True}
-    msg = update.get("message") or {}
     # whitelist: chiunque non sia il proprietario viene ignorato in silenzio
-    if msg.get("from", {}).get("id") == s.telegram_owner_id and msg.get("text"):
-        # risposta immediata a Telegram; l'elaborazione (lenta) va in background per evitare retry
-        background.add_task(_handle_telegram_text, msg["chat"]["id"], msg["text"])
+    # risposta immediata a Telegram; l'elaborazione (lenta) va in background per evitare retry
+    if app.state.bot.accepts(update):
+        background.add_task(app.state.bot.handle_update, update)
     return {"ok": True}
 
 
