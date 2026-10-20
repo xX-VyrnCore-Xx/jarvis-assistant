@@ -69,6 +69,38 @@ def register_basic_tools(reg: ToolRegistry, settings: Settings, store: Store, bu
         await store.delete_reminder(reminder_id)
         return "Promemoria eliminato."
 
+    async def reminder_snooze(reminder_id: int, minutes: int = 10) -> str:
+        """Rimanda un promemoria di N minuti da adesso."""
+        tz = ZoneInfo(settings.timezone)
+        row = next((r for r in await store.list_reminders() if r["id"] == reminder_id), None)
+        if not row:
+            return "Errore: promemoria non trovato (controlla l'id con list_reminders)."
+        due = datetime.now(tz) + timedelta(minutes=max(1, minutes))
+        await store.add_reminder(row["text"], due)
+        await store.delete_reminder(reminder_id)
+        return f"Promemoria rimandato a {due:%d/%m/%Y %H:%M}."
+
+    async def task_add(text: str, list_name: str = "attività") -> str:
+        tid = await store.add_task(text.strip(), list_name.strip().lower() or "attività")
+        return f"Aggiunto alla lista «{list_name}» (id {tid})."
+
+    async def task_list(list_name: str = "", include_done: bool = False) -> str:
+        rows = await store.list_tasks(list_name.strip().lower() or None, include_done)
+        if not rows:
+            return "Nessuna voce."
+        out: dict[str, list[str]] = {}
+        for t in rows:
+            out.setdefault(t["list"], []).append(f"- [id {t['id']}] {'✔ ' if t['done'] else ''}{t['text']}")
+        return "\n".join(f"{name}:\n" + "\n".join(items) for name, items in out.items())
+
+    async def task_done(task_id: int, done: bool = True) -> str:
+        await store.set_task_done(task_id, done)
+        return "Completata." if done else "Riaperta."
+
+    async def task_delete(task_id: int) -> str:
+        await store.delete_task(task_id)
+        return "Eliminata."
+
     async def list_memories() -> str:
         rows = await store.list_memories(30)
         return "\n".join(f"- [id {m['id']}] {m['content']}" for m in rows) or "La memoria è vuota."
@@ -95,6 +127,7 @@ def register_basic_tools(reg: ToolRegistry, settings: Settings, store: Store, bu
         "Cerca sul web informazioni aggiornate (notizie, meteo, fatti recenti).",
         {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
         web_search,
+        cache_ttl=600,
     )
     reg.register(
         "add_reminder",
@@ -119,6 +152,15 @@ def register_basic_tools(reg: ToolRegistry, settings: Settings, store: Store, bu
     obj = lambda props, req=(): {"type": "object", "properties": props, "required": list(req)}  # noqa: E731
     reg.register("delete_reminder", "Elimina un promemoria dato il suo id (vedi list_reminders).",
                  obj({"reminder_id": {"type": "integer"}}, ["reminder_id"]), delete_reminder)
+    reg.register("reminder_snooze", "Rimanda un promemoria di N minuti da adesso (id da list_reminders).",
+                 obj({"reminder_id": {"type": "integer"}, "minutes": {"type": "integer"}}, ["reminder_id"]), reminder_snooze)
+    reg.register("task_add", "Aggiunge una voce a una lista (attività da fare, spesa, idee...). 'list_name' di default 'attività'; usa 'spesa' per la spesa.",
+                 obj({"text": {"type": "string"}, "list_name": {"type": "string"}}, ["text"]), task_add)
+    reg.register("task_list", "Mostra le voci delle liste (con id). Senza 'list_name' le mostra tutte; 'include_done' include le completate.",
+                 obj({"list_name": {"type": "string"}, "include_done": {"type": "boolean"}}), task_list)
+    reg.register("task_done", "Segna una voce come completata (o riaperta con done=false). Id da task_list.",
+                 obj({"task_id": {"type": "integer"}, "done": {"type": "boolean"}}, ["task_id"]), task_done)
+    reg.register("task_delete", "Elimina una voce dalle liste (id da task_list).", obj({"task_id": {"type": "integer"}}, ["task_id"]), task_delete)
     reg.register("list_memories", "Elenca i ricordi salvati con il loro id.", obj({}), list_memories)
     reg.register("forget", "Cancella un ricordo dato il suo id (vedi list_memories). Usalo solo se l'utente lo chiede.",
                  obj({"memory_id": {"type": "integer"}}, ["memory_id"]), forget)

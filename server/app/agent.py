@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo
 from .config import Settings
 from .llm import LLMClient
 from .memory import Store
+from .privacy import Redactor
 from .tools import ToolRegistry
 
 log = logging.getLogger("jarvis.agent")
@@ -19,7 +20,7 @@ Come usare i tool:
 - Più tool indipendenti vanno chiamati insieme nello stesso turno (es. meteo di due città, agenda e email).
 - `calculate` per ogni calcolo; `date_info` per giorni della settimana e calcoli con le date; `convert_currency` per i cambi; `wikipedia` per fatti enciclopedici; `web_news` per le notizie; `get_weather` per il meteo; `web_search` poi `read_webpage` per approfondire una fonte.
 - `remember`/`recall`/`list_memories`/`forget` per la memoria a lungo termine: salva solo ciò che è duraturo (preferenze, persone, dati personali).
-- `add_reminder`/`remind_in`/`list_reminders`/`delete_reminder` per i promemoria; calcola "when" da data e ora qui sopra.
+- `add_reminder`/`remind_in`/`reminder_snooze`/`list_reminders`/`delete_reminder` per i promemoria; `task_*` per liste (da fare, spesa); `crypto_price`, `world_time`, `unit_convert` per prezzi, orari nel mondo e conversioni; calcola "when" da data e ora qui sopra.
 - `send_notification` per mandare un avviso alle app dell'utente.
 - Con i tool `pc_*` agisci sul PC Windows dell'utente (app, siti, file, volume, luminosità, blocco/spegnimento).
 - Con `gmail_*`, `calendar_*`, `drive_*` accedi ai servizi Google: puoi leggere, creare, modificare (`calendar_update_event`) ed eliminare eventi (serve la conferma dell'utente), trovare fasce libere e preparare risposte alle email. Prima di modificare o eliminare un evento cerca il suo id con `calendar_list_events`; `get_token_budget` per i token rimasti.
@@ -37,8 +38,10 @@ class Agent:
         self.s, self.llm, self.store, self.tools = settings, llm, store, tools
 
     async def reply(self, user_text: str, session_id: str, voice: bool = False) -> str:
-        history = await self.store.recent_messages(session_id, self.s.history_messages)
-        memories = await self.store.search_memories(user_text, self.s.memory_hits)
+        # privacy: ciò che va ai provider passa da un filtro che sostituisce dati sensibili con segnaposto (reversibili qui sotto)
+        red = Redactor(self.s.privacy_mode)
+        history = [{**m, "content": red.mask(m["content"])} for m in await self.store.recent_messages(session_id, self.s.history_messages)]
+        memories = [red.mask(m) for m in await self.store.search_memories(user_text, self.s.memory_hits)]
 
         now = datetime.now(ZoneInfo(self.s.timezone))
         system = SYSTEM_PROMPT.format(owner=self.s.owner_name, now=f"{_GIORNI[now.weekday()]} {now:%d/%m/%Y %H:%M} ({self.s.timezone})")
@@ -50,7 +53,10 @@ class Agent:
         if memories:
             system += "\n\nRicordi rilevanti:\n" + "\n".join(f"- {m}" for m in memories)
 
-        messages = [{"role": "system", "content": system}, *history, {"role": "user", "content": user_text}]
+        if red.mode != "off":
+            system += ("\n\nPer privacy alcuni dati sensibili compaiono come segnaposto tra parentesi quadre (es. [IBAN_1], [CARTA_1], [EMAIL_1]): "
+                       "usali tali e quali nelle risposte e negli argomenti dei tool, il sistema li sostituisce con i valori veri.")
+        messages = [{"role": "system", "content": system}, *history, {"role": "user", "content": red.mask(user_text)}]
         answer = ""
         for _ in range(self.s.max_tool_rounds):
             msg = await self.llm.chat(messages, self.tools.specs)
@@ -60,15 +66,18 @@ class Agent:
                 break
             messages.append({"role": "assistant", "content": msg.get("content"), "tool_calls": calls})
             # i tool richiesti nello stesso turno sono indipendenti: si eseguono insieme
-            results = await asyncio.gather(*(self.tools.call(c["function"]["name"], c["function"].get("arguments", "")) for c in calls))
+            results = await asyncio.gather(*(self.tools.call(c["function"]["name"], red.unmask_json(c["function"].get("arguments", ""))) for c in calls))
             for c, result in zip(calls, results):
                 log.info("tool %s -> %d caratteri", c["function"]["name"], len(result))
-                messages.append({"role": "tool", "tool_call_id": c["id"], "content": result})
+                messages.append({"role": "tool", "tool_call_id": c["id"], "content": red.mask(result)})
         else:
             # troppe operazioni: si chiede comunque una risposta con quanto raccolto, senza altri tool
             messages.append({"role": "user", "content": "Rispondi ora con le informazioni raccolte, senza usare altri tool."})
             answer = (await self.llm.chat(messages, [])).get("content") or "Ho superato il limite di operazioni consecutive, signore. Può riformulare la richiesta?"
 
+        answer = red.unmask(answer)  # all'utente (e nel database cifrato) arrivano i valori veri, mai i segnaposto
+        if red.count:
+            log.info("privacy: %d dati sensibili mascherati verso il modello", red.count)
         await self.store.add_message(session_id, "user", user_text)
         await self.store.add_message(session_id, "assistant", answer)
         return answer

@@ -16,6 +16,7 @@ COMMANDS = [
     ("promemoria", "Promemoria attivi (con elimina)"),
     ("ricordi", "Cosa ricordo di te (con elimina)"),
     ("google", "Collega Gmail, Calendar e Drive"),
+    ("liste", "Liste e attività (spesa, da fare)"),
     ("nuova", "Azzera la conversazione"),
 ]
 
@@ -26,6 +27,7 @@ Scrivetemi in linguaggio naturale: agenda, email, meteo, ricerche, promemoria, c
 /token — token gratuiti rimasti
 /promemoria — promemoria attivi
 /ricordi — cosa ricordo di lei
+/liste — liste e attività
 /nuova — azzera la conversazione
 
 Esempi: «Che tempo fa a Roma domani?», «Ricordami alle 18 di chiamare Luca», «Cosa ho in agenda questa settimana?»."""
@@ -154,6 +156,15 @@ class TelegramBot:
             return await self.tg.send(chat_id, f"Autorizzi l'accesso a Gmail, Calendar e Drive (il link vale 10 minuti). "
                                                f"Il redirect da registrare su Google Cloud è <code>{base}/google/callback</code>.",
                                       {"inline_keyboard": [[{"text": "Collega Google", "url": url}]]})
+        if cmd == "liste":
+            rows = await st.store.list_tasks(None, False)
+            if not rows:
+                return await self.tg.send(chat_id, "Nessuna voce nelle liste, signore. Chieda ad esempio: «aggiungi il latte alla spesa».")
+            out: dict[str, list[str]] = {}
+            for t in rows:
+                out.setdefault(t["list"], []).append(f"• {t['text']}")
+            keys = [[{"text": f"✔ {t['text'][:28]}", "callback_data": f"td:{t['id']}"}] for t in rows[:10]]
+            return await self.tg.send(chat_id, "\n\n".join(f"<b>{name.capitalize()}</b>\n" + "\n".join(items) for name, items in out.items()), {"inline_keyboard": keys})
         if cmd == "nuova":
             await st.store.clear_messages(f"tg-{chat_id}")
             return await self.tg.send(chat_id, "Conversazione azzerata. I ricordi a lungo termine restano, signore.")
@@ -179,6 +190,9 @@ class TelegramBot:
         if action == "rd" and ident.isdigit():
             await st.store.delete_reminder(int(ident))
             outcome = "Promemoria eliminato."
+        elif action == "td" and ident.isdigit():
+            await st.store.set_task_done(int(ident), True)
+            outcome = "Completata."
         elif action == "md" and ident.isdigit():
             await st.store.delete_memory(int(ident))
             outcome = "Dimenticato."

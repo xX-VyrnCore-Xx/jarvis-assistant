@@ -216,3 +216,15 @@ async def test_extra_tools_currency_wikipedia_dates_and_remind_in():
     assert "martedì 22/10/2030" in await reg.call("date_info", json.dumps({"date": "2030-10-21", "add_days": 1}))
     assert "fissato" in await reg.call("remind_in", json.dumps({"minutes": 20, "text": "pasta"}))
     assert len(await store.list_reminders()) == 1
+
+
+@pytest.mark.asyncio
+async def test_bot_lists_and_completes_tasks():
+    bot, st = make_bot()
+    await st.store.add_task("latte", "spesa")
+    msg = {"update_id": 1, "message": {"from": {"id": 42}, "chat": {"id": 42}, "text": "/liste"}}
+    await bot.handle_update(msg)
+    text, markup = st.tg.out[-1]
+    assert "Spesa" in text and "latte" in text and markup["inline_keyboard"][0][0]["callback_data"] == "td:1"
+    await bot.handle_update({"update_id": 2, "callback_query": {"id": "c", "from": {"id": 42}, "data": "td:1", "message": {}}})
+    assert await st.store.list_tasks(None, False) == []

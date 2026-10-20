@@ -19,10 +19,30 @@ const HUMAN = {
   504: "Il server non ha risposto in tempo.",
 };
 
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const TRANSIENT = new Set([0, 502, 503, 504]);
+
 export class Jarvis {
   /** @param {{url: () => string, token: () => string}} cfg */
   constructor(cfg) {
     this.cfg = cfg;
+    this.inflight = new Map(); // letture identiche in corso: una sola richiesta, risposta condivisa
+  }
+
+  /** Le letture (GET) riprovano da sole se il server si sta svegliando (Render Free: 30-60 s) e si fondono se identiche. */
+  #get(path, opts = {}) {
+    const key = `${this.cfg.url()}${path}`;
+    if (this.inflight.has(key)) return this.inflight.get(key);
+    const run = (async () => {
+      for (let attempt = 0; ; attempt++) {
+        try { return await this.#req(path, opts); } catch (e) {
+          if (!(e instanceof ApiError) || !TRANSIENT.has(e.status) || attempt >= 2) throw e;
+          await sleep(2500 * (attempt + 1));
+        }
+      }
+    })().finally(() => this.inflight.delete(key));
+    this.inflight.set(key, run);
+    return run;
   }
 
   async #req(path, { method = "GET", body, timeout = 30_000, auth = true, raw = false } = {}) {
@@ -53,16 +73,16 @@ export class Jarvis {
 
   health() { return this.#req("/health", { auth: false, timeout: 70_000 }); }
   chat(message, session) { return this.#req("/chat", { method: "POST", body: { message, session_id: session }, timeout: 120_000 }).then((r) => r.reply); }
-  status() { return this.#req("/api/status"); }
-  tokens(refresh = false) { return this.#req(`/api/tokens${refresh ? "?refresh=true" : ""}`); }
-  history(session, limit = 40) { return this.#req(`/api/history?session_id=${encodeURIComponent(session)}&limit=${limit}`); }
-  reminders() { return this.#req("/api/reminders"); }
+  status() { return this.#get("/api/status"); }
+  tokens(refresh = false) { return this.#get(`/api/tokens${refresh ? "?refresh=true" : ""}`); }
+  history(session, limit = 40) { return this.#get(`/api/history?session_id=${encodeURIComponent(session)}&limit=${limit}`); }
+  reminders() { return this.#get("/api/reminders"); }
   addReminder(text, when) { return this.#req("/api/reminders", { method: "POST", body: { text, when } }); }
   deleteReminder(id) { return this.#req(`/api/reminders/${id}`, { method: "DELETE" }); }
-  pending() { return this.#req("/api/pending"); }
+  pending() { return this.#get("/api/pending"); }
   decide(id, approve) { return this.#req(`/api/pending/${encodeURIComponent(id)}/${approve ? "approve" : "reject"}`, { method: "POST" }); }
   tts(text) { return this.#req("/api/tts", { method: "POST", body: { text }, timeout: 150_000, raw: true }); }
-  notifications(limit = 50) { return this.#req(`/api/notifications?limit=${limit}`); }
+  notifications(limit = 50) { return this.#get(`/api/notifications?limit=${limit}`); }
   markRead(ids = null) { return this.#req("/api/notifications/read", { method: "POST", body: { ids } }); }
   testNotification() { return this.#req("/api/notifications/test", { method: "POST" }); }
   registerDevice(platform, token, label = "") { return this.#req("/api/devices", { method: "POST", body: { platform, token, label } }); }

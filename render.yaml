@@ -44,3 +44,6 @@ services:
       # notifiche push Android: JSON dell'account di servizio Firebase (vedi README, sezione Notifiche)
       - key: FIREBASE_SERVICE_ACCOUNT_JSON
         sync: false
+      # privacy verso i modelli: off | standard (IBAN, carte, chiavi, password, codice fiscale) | strict (anche email e telefoni)
+      - key: PRIVACY_MODE
+        value: standard

@@ -1,6 +1,8 @@
 import asyncio
 import json
 import logging
+import time
+from collections import OrderedDict
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -57,7 +59,9 @@ class ToolRegistry:
     """Registro dei tool esposti al modello (formato OpenAI function calling)."""
 
     def __init__(self) -> None:
-        self._tools: dict[str, tuple[dict[str, Any], ToolFn, Availability | None, float]] = {}
+        self._tools: dict[str, tuple[dict[str, Any], ToolFn, Availability | None, float, float]] = {}
+        self._cache: OrderedDict[str, tuple[float, str]] = OrderedDict()  # solo in RAM, mai su disco
+        self._inflight: dict[str, asyncio.Future] = {}
 
     def register(
         self,
@@ -67,26 +71,28 @@ class ToolRegistry:
         fn: ToolFn,
         available: Availability | None = None,
         timeout: float = DEFAULT_TIMEOUT_S,
+        cache_ttl: float = 0,
     ) -> None:
-        """`available`: se presente, il tool viene mostrato al modello solo quando restituisce True."""
+        """`available`: se presente, il tool viene mostrato al modello solo quando restituisce True.
+        `cache_ttl`: secondi in cui lo stesso tool con gli stessi argomenti riusa il risultato (solo letture; gli errori non si memorizzano)."""
         spec = {
             "type": "function",
             "function": {"name": name, "description": description, "parameters": parameters},
         }
-        self._tools[name] = (spec, fn, available, timeout)
+        self._tools[name] = (spec, fn, available, timeout, cache_ttl)
 
     @property
     def specs(self) -> list[dict[str, Any]]:
-        return [spec for spec, _, available, _ in self._tools.values() if available is None or available()]
+        return [spec for spec, _, available, _, _ in self._tools.values() if available is None or available()]
 
     @property
     def names(self) -> list[str]:
-        return [n for n, (_, _, available, _) in self._tools.items() if available is None or available()]
+        return [n for n, (_, _, available, _, _) in self._tools.items() if available is None or available()]
 
     async def call(self, name: str, raw_args: str) -> str:
         if name not in self._tools:
             return f"Errore: tool '{name}' inesistente. Disponibili: {', '.join(self.names)}"
-        spec, fn, available, timeout = self._tools[name]
+        spec, fn, available, timeout, ttl = self._tools[name]
         if available is not None and not available():
             return f"Errore: il tool '{name}' al momento non è disponibile."
         try:
@@ -96,6 +102,34 @@ class ToolRegistry:
         args, problem = check_args(spec["function"]["parameters"], raw)
         if problem:
             return f"Errore negli argomenti di {name}: {problem}."
+        key = f"{name}|{json.dumps(args, sort_keys=True, ensure_ascii=False)}" if ttl else ""
+        if key:
+            hit = self._cache.get(key)
+            if hit and hit[0] > time.monotonic():
+                self._cache.move_to_end(key)
+                return hit[1]
+            if key in self._inflight:  # la stessa richiesta è già in corso: si aspetta il suo risultato
+                return await asyncio.shield(self._inflight[key])
+            self._inflight[key] = asyncio.get_running_loop().create_future()
+        result = ""
+        try:
+            result = await self._run(name, fn, args, timeout)
+        finally:
+            if key:
+                fut = self._inflight.pop(key)
+                fut.set_result(result)
+        if key and not result.startswith("Errore"):
+            self._cache[key] = (time.monotonic() + ttl, result)
+            while len(self._cache) > 256:
+                self._cache.popitem(last=False)
+        return result
+
+    def invalidate(self, prefix: str) -> None:
+        """Dopo una scrittura (es. nuovo evento) i risultati in cache dei tool che iniziano per `prefix` non valgono più."""
+        for k in [k for k in self._cache if k.startswith(prefix)]:
+            del self._cache[k]
+
+    async def _run(self, name: str, fn: ToolFn, args: dict, timeout: float) -> str:
         try:
             result = await asyncio.wait_for(fn(**args), timeout)
         except asyncio.TimeoutError:

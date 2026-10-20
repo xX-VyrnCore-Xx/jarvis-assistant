@@ -120,6 +120,8 @@ async def lifespan(app: FastAPI):
             except Exception:
                 log.exception("configurazione del bot Telegram fallita")
             guard = asyncio.create_task(_webhook_guard(tg, hook))
+    vault = getattr(store, "vault", None)
+    log.info("sicurezza: cifratura_dati=%s privacy_modelli=%s", "attiva" if vault and vault.enabled else "NO (manca ENCRYPTION_KEY)", settings.privacy_mode)
     log.info("integrazioni: telegram=%s google=%s(client=%s) firebase=%s backup_hf=%s freellm=%s supabase=%s",
              tg.enabled, google.enabled, google.has_client, notifier.fcm.enabled, app.state.backup.enabled, budget.enabled,
              "sì" if settings.supabase_url and settings.supabase_service_key else "no")

@@ -42,7 +42,7 @@ Per ottenerle: `curl -H "Authorization: Bearer $JARVIS_API_TOKEN" https://<servi
 ## Tool e funzioni dell'assistente
 Tool validati (tipi, parametri obbligatori, valori ammessi), con timeout, risultati limitati e più tool eseguiti insieme nello stesso turno:
 memoria (`remember`, `recall`, `list_memories`, `forget`), promemoria (`add_/list_/delete_reminder`, `remind_in`), `web_search`, `web_news`, `wikipedia`, `read_webpage` (solo indirizzi pubblici),
-`get_weather`, `calculate`, `date_info`, `convert_currency`, `send_notification`, `get_token_budget`, controllo del PC e Google:
+`get_weather`, `calculate`, `date_info`, `convert_currency`, `unit_convert`, `world_time`, `crypto_price`, liste (`task_*`), `reminder_snooze`, `pc_system_info`, `pc_media`, `send_notification`, `get_token_budget`, controllo del PC e Google:
 Gmail (cerca, leggi, bozze, risposte in thread, invio con conferma), Calendar (elenca/cerca, crea con luogo e giornata intera, **modifica**, **elimina con conferma**, fasce libere), Drive (cerca, leggi, recenti).
 
 ## Telegram
@@ -89,6 +89,13 @@ Promemoria, avvisi (token in esaurimento, backup fallito) e richieste di conferm
   2. chiave dell'account di servizio (Impostazioni progetto → Account di servizio → Genera chiave) → variabile Render `FIREBASE_SERVICE_ACCOUNT_JSON` (il JSON intero).
   Senza queste restano le notifiche in-app e Telegram. L'APK registra il proprio token con `POST /api/devices`.
 - **Telegram**: promemoria e avvisi arrivano anche lì.
+
+## Privacy e cifratura
+- **Cifratura a riposo**: messaggi, ricordi, promemoria, notifiche e liste sono salvati su Supabase **cifrati** (AES-256-GCM, chiave derivata da `ENCRYPTION_KEY`): il database non vede mai il testo. La ricerca nei ricordi usa un **indice cieco** (HMAC delle parole, con una chiave diversa). I dati scritti prima vengono cifrati in automatico a lotti dopo l'avvio.
+  **Conserva `ENCRYPTION_KEY`**: se cambia, i dati cifrati non si leggono più. Il refresh token Google e i backup su Hugging Face sono già cifrati.
+- **Privacy verso i modelli** (`PRIVACY_MODE`, default `standard`): prima di uscire verso i provider, IBAN, carte (con controllo Luhn), chiavi/token, password e codice fiscale diventano segnaposto (`[IBAN_1]`…) e vengono rimessi al loro posto nelle risposte e negli argomenti dei tool: il modello non li vede mai ma tutto funziona. `strict` maschera anche email e telefoni; `off` disattiva. I messaggi d'errore non riportano mai il corpo delle risposte dei provider.
+  Nota: FreeLLMAPI instrada su provider gratuiti con condizioni diverse; per dati davvero sensibili controlla le condizioni d'uso sull'addestramento dei piani gratuiti dei provider che hai attivato.
+- Per leggere un backup: `ENCRYPTION_KEY=... python server/scripts/decrypt_backup.py file.json.enc`.
 
 ## Dati e backup
 - Supabase: tabelle `messages`, `memories`, `reminders`, `notifications`, `devices` (RLS attiva, accesso solo dal server). Il server elimina ogni notte i dati vecchi (messaggi 180 giorni, notifiche 90, promemoria completati 60, dispositivi inattivi 90).
