@@ -16,11 +16,16 @@ class Agent:
     def __init__(self, settings: Settings, llm: LLMClient, store: Store, tools: ToolRegistry):
         self.s, self.llm, self.store, self.tools = settings, llm, store, tools
 
-    async def reply(self, user_text: str, session_id: str) -> str:
+    async def reply(self, user_text: str, session_id: str, voice: bool = False) -> str:
         history = await self.store.recent_messages(session_id, self.s.history_messages)
         memories = await self.store.search_memories(user_text, self.s.memory_hits)
 
         system = SYSTEM_PROMPT.format(owner=self.s.owner_name)
+        if voice:
+            system += (
+                "\n\nLa risposta verrà LETTA AD ALTA VOCE: massimo 2-3 frasi brevi, "
+                "niente elenchi, markdown, emoji o URL."
+            )
         if memories:
             system += "\n\nRicordi rilevanti:\n" + "\n".join(f"- {m}" for m in memories)
 

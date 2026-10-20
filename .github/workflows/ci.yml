@@ -36,3 +36,14 @@ jobs:
         with:
           name: JARVIS-windows-installer
           path: desktop/src-tauri/target/release/bundle/nsis/*.exe
+
+  voice:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.13" }
+      # solo la logica pura: le librerie audio/ML non servono ai test
+      - run: pip install pytest numpy python-dotenv
+      - run: pytest -q
+        working-directory: voice

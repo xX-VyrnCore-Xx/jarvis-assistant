@@ -24,6 +24,7 @@ from .tools.pc_tools import register_pc_tools
 class ChatIn(BaseModel):
     message: str = Field(min_length=1, max_length=8000)
     session_id: str = "default"
+    voice: bool = False  # risposta destinata alla sintesi vocale
 
 
 class ChatOut(BaseModel):
@@ -70,7 +71,7 @@ async def health() -> dict:
 @app.post("/chat", response_model=ChatOut, dependencies=[Depends(require_token)])
 async def chat(body: ChatIn) -> ChatOut:
     try:
-        return ChatOut(reply=await app.state.agent.reply(body.message, body.session_id))
+        return ChatOut(reply=await app.state.agent.reply(body.message, body.session_id, voice=body.voice))
     except LLMError as e:
         raise HTTPException(502, str(e)) from e
 

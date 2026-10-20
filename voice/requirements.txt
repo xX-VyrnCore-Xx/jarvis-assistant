@@ -1,0 +1,8 @@
+numpy>=1.26
+sounddevice>=0.5
+openwakeword>=0.6.0
+faster-whisper>=1.0
+edge-tts>=6.1
+miniaudio>=1.60
+httpx>=0.28
+python-dotenv>=1.0
