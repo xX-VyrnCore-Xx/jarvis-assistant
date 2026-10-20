@@ -25,3 +25,12 @@ alter table devices enable row level security;
 revoke all on public.notifications, public.devices from anon, authenticated;
 
 -- La pulizia dei dati vecchi (retention) la esegue il server ogni notte via PostgREST (vedi server/app/memory.py: prune).
+
+-- Impostazioni del server (es. refresh token Google, cifrato).
+create table if not exists app_settings (
+  key text primary key,
+  value text not null,
+  updated_at timestamptz not null default now()
+);
+alter table app_settings enable row level security;
+revoke all on public.app_settings from anon, authenticated;

@@ -1,9 +1,11 @@
 import asyncio
+import html
 import logging
 import secrets
 from contextlib import asynccontextmanager
 
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Request, WebSocket
 from pydantic import BaseModel, Field
 
@@ -68,8 +70,9 @@ async def lifespan(app: FastAPI):
     register_web_tools(tools)
     pending = app.state.pending = PendingStore(settings.pending_ttl_s)
     app.state.chat_limiter = RateLimiter(settings.chat_per_minute)
-    google = GoogleClient(settings)
-    if google.enabled:
+    google = app.state.google = GoogleClient(settings, store=store)
+    await google.load()
+    if google.has_client:
         register_google_tools(tools, settings, google, pending)
     app.state.agent = Agent(settings, LLMClient(settings), store, tools)
     tg = app.state.tg = Telegram(settings)
@@ -117,6 +120,9 @@ async def lifespan(app: FastAPI):
             except Exception:
                 log.exception("configurazione del bot Telegram fallita")
             guard = asyncio.create_task(_webhook_guard(tg, hook))
+    log.info("integrazioni: telegram=%s google=%s(client=%s) firebase=%s backup_hf=%s freellm=%s supabase=%s",
+             tg.enabled, google.enabled, google.has_client, notifier.fcm.enabled, app.state.backup.enabled, budget.enabled,
+             "sì" if settings.supabase_url and settings.supabase_service_key else "no")
     yield
     task.cancel()
     if guard:
@@ -151,6 +157,31 @@ app.add_middleware(
     max_age=600,
 )
 app.add_middleware(SecurityHeaders)
+
+
+def _base_url() -> str:
+    s = app.state.settings
+    return (s.public_url or s.render_external_url).rstrip("/")
+
+
+@app.get("/google/callback", response_class=HTMLResponse)
+async def google_callback(code: str = "", state: str = "", error: str = "") -> HTMLResponse:
+    """Ritorno dalla pagina di consenso Google. Vale solo con uno `state` generato dal comando /google del proprietario."""
+    page = lambda title, text: HTMLResponse(  # noqa: E731
+        f"<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>"
+        f"<body style='font-family:system-ui;background:#07121c;color:#e8f6ff;display:grid;place-items:center;height:100vh;margin:0'>"
+        f"<div style='max-width:420px;padding:24px;text-align:center'><h2>{title}</h2><p>{text}</p></div>")
+    if error or not code:
+        return page("Collegamento annullato", "Google non ha concesso l'accesso. Puoi riprovare da Telegram con /google.")
+    try:
+        await app.state.google.complete(code, state, f"{_base_url()}/google/callback")
+    except ValueError as e:
+        return page("Collegamento non riuscito", html.escape(str(e)))
+    except Exception:
+        log.exception("collegamento Google fallito")
+        return page("Collegamento non riuscito", "Errore imprevisto: riprova tra poco.")
+    await app.state.notifier.push("info", "Google collegato", "Gmail, Calendar e Drive sono ora attivi.", telegram=True)
+    return page("Google collegato", "Gmail, Calendar e Drive sono attivi. Puoi chiudere questa scheda.")
 
 
 @app.api_route("/", methods=["GET", "HEAD"])

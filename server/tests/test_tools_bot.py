@@ -163,3 +163,32 @@ async def test_telegram_takes_over_a_foreign_webhook():
     assert await tg.ensure_webhook("https://new.onrender.com/telegram/webhook") is True
     assert tg.hook.startswith("https://new") and tg.dropped is True
     assert await tg.ensure_webhook("https://new.onrender.com/telegram/webhook") is False
+
+
+@pytest.mark.asyncio
+async def test_google_guided_link_stores_encrypted_token_only_for_issued_state():
+    from urllib.parse import parse_qs, urlparse
+
+    from app.google import GoogleClient
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        assert b"code=abc" in req.content and b"redirect_uri=" in req.content
+        return httpx.Response(200, json={"refresh_token": "rt-segreto", "access_token": "at"})
+
+    store = MemoryStore()
+    s = Settings(jarvis_api_token="t", google_client_id="cid", google_client_secret="sec")
+    g = GoogleClient(s, httpx.AsyncClient(transport=httpx.MockTransport(handler)), store=store)
+    assert g.has_client and not g.enabled
+    url = g.authorize_url("https://x.onrender.com/google/callback")
+    q = parse_qs(urlparse(url).query)
+    assert q["access_type"] == ["offline"] and q["client_id"] == ["cid"]
+    with pytest.raises(ValueError):  # state non emesso da /google
+        await g.complete("abc", "inventato", "https://x.onrender.com/google/callback")
+    await g.complete("abc", q["state"][0], "https://x.onrender.com/google/callback")
+    assert g.enabled and g.refresh_token == "rt-segreto"
+    assert "rt-segreto" not in store.settings["google_refresh_token"]  # cifrato a riposo
+    with pytest.raises(ValueError):  # lo state vale una volta sola
+        await g.complete("abc", q["state"][0], "https://x.onrender.com/google/callback")
+    g2 = GoogleClient(s, store=store)
+    await g2.load()
+    assert g2.enabled and g2.refresh_token == "rt-segreto"  # sopravvive al riavvio
