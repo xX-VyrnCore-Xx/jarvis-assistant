@@ -7,7 +7,11 @@ def register_pc_tools(reg: ToolRegistry, pc: PCBridge) -> None:
         async def fn(**args) -> str:
             return await pc.call(name, args)
 
-        reg.register(name, description, {"type": "object", "properties": props, "required": required}, fn)
+        # i tool del PC compaiono solo se l'app Windows è collegata: meno token e niente promesse a vuoto
+        reg.register(
+            name, description, {"type": "object", "properties": props, "required": required}, fn,
+            available=lambda: pc.connected,
+        )
 
     s = {"type": "string"}
     tool("pc_open_url", "Apre un sito nel browser del PC dell'utente (solo http/https).", {"url": s}, ["url"])
