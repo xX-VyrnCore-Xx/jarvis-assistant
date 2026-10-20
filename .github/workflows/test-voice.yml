@@ -28,7 +28,7 @@ jobs:
           Invoke-WebRequest http://127.0.0.1:8777/tts -Method Post -ContentType 'application/json' `
             -Headers @{ Authorization = 'Bearer prova' } -Body '{"text":"Buongiorno, signore. Tutti i sistemi sono operativi."}' -OutFile out.wav
           Write-Output "Sintesi in $($sw.Elapsed.TotalSeconds) s, $((Get-Item out.wav).Length) byte"
-          $head = [Text.Encoding]::ASCII.GetString((Get-Content out.wav -Encoding Byte -TotalCount 4))
+          $head = [Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes((Resolve-Path out.wav))[0..3])
           if ($head -ne 'RIFF' -or (Get-Item out.wav).Length -lt 20000) { throw 'audio non valido' }
           Stop-Process $p -Force
       - uses: actions/upload-artifact@v4
