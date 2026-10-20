@@ -6,6 +6,27 @@ on:
   pull_request:
 
 jobs:
+  # GitHub ignora in silenzio i workflow con YAML non valido (nessun errore, il file semplicemente non parte)
+  workflows:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          pip install -q pyyaml
+          python - <<'PY'
+          import glob, sys, yaml
+          bad = 0
+          for f in sorted(glob.glob(".github/workflows/*.yml")):
+              try:
+                  d = yaml.safe_load(open(f))
+                  assert isinstance(d, dict) and "jobs" in d and (True in d or "on" in d), "mancano on/jobs"
+                  print("ok", f)
+              except Exception as e:
+                  bad += 1
+                  print("ERRORE", f, e)
+          sys.exit(1 if bad else 0)
+          PY
+
   server:
     runs-on: ubuntu-latest
     steps:
