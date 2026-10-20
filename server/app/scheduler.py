@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import time
 from datetime import datetime
@@ -72,9 +73,12 @@ async def background_loop(settings: Settings, store: Store, notifier: Notifier, 
         # il primo backup parte 10 minuti dopo l'avvio, per non appesantire il risveglio del servizio
         if backup and backup.enabled and (now - started > 600 if last_backup is None else now - last_backup >= PRUNE_EVERY_S):
             try:
-                log.info("backup Supabase: %s", await backup.run())
+                detail = await backup.run()
+                log.info("backup Supabase: %s", detail)
+                await store.set_setting("backup_status", json.dumps({"ok": True, "at": datetime.now(tz).isoformat(), "detail": detail}))
             except Exception as e:
                 log.warning("backup Supabase fallito: %s", type(e).__name__)
+                await store.set_setting("backup_status", json.dumps({"ok": False, "at": datetime.now(tz).isoformat(), "detail": type(e).__name__}))
                 await notifier.push("alert", "Backup non riuscito", "Il backup notturno su Hugging Face è fallito.")
             last_backup = time.monotonic()
         await asyncio.sleep(settings.reminder_poll_s)
@@ -136,4 +140,30 @@ async def brain_loop(settings: Settings, store: Store, brain, agent, notifier) -
                     await morning_briefing(settings, brain, agent, notifier)
         except Exception:
             log.exception("errore nel ciclo del secondo cervello")
+        await asyncio.sleep(300)
+
+
+async def maintenance_loop(settings: Settings, store: Store, usage, updates, notifier) -> None:
+    """Ogni 5 minuti: salva i consumi, controlla la memoria del processo; ogni `update_check_minutes` cerca nuove Release e avvisa le app."""
+    from .health import container_mb, rss_mb
+
+    await asyncio.sleep(60)
+    last_update = 0.0
+    mem_alert = False
+    while True:
+        try:
+            await usage.flush(store)
+            mem = container_mb() or rss_mb() * 1.6  # il container comprende anche FreeLLMAPI
+            if mem > 440 and not mem_alert:
+                mem_alert = True
+                await notifier.push("alert", "Memoria quasi al limite", f"Il server usa circa {mem:.0f} MB su 512: potrebbe riavviarsi.")
+            elif mem < 380:
+                mem_alert = False
+            if time.monotonic() - last_update >= settings.update_check_minutes * 60:
+                last_update = time.monotonic()
+                result = await updates.poll_and_notify()
+                if result.startswith("notificata"):
+                    log.info("aggiornamenti: %s", result)
+        except Exception:
+            log.exception("errore nella manutenzione periodica")
         await asyncio.sleep(300)

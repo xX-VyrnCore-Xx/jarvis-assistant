@@ -263,7 +263,7 @@ class Brain:
             await self.store.update_doc(doc.id, enriched=True)
             return True
         try:
-            msg = await self.llm.chat([{"role": "system", "content": ENRICH_PROMPT}, {"role": "user", "content": self._mask([text])[0]}])
+            msg = await self.llm.chat([{"role": "system", "content": ENRICH_PROMPT}, {"role": "user", "content": self._mask([text])[0]}], kind="enrich")
         except Exception as e:
             log.info("arricchimento rimandato: %s", type(e).__name__)
             return False
@@ -330,7 +330,7 @@ class Brain:
         if not self.llm or len(transcript) < 80:
             return {"status": "saltato"}
         try:
-            msg = await self.llm.chat([{"role": "system", "content": JOURNAL_PROMPT}, {"role": "user", "content": self._mask([transcript[:12000]])[0]}])
+            msg = await self.llm.chat([{"role": "system", "content": JOURNAL_PROMPT}, {"role": "user", "content": self._mask([transcript[:12000]])[0]}], kind="journal")
         except Exception as e:
             return {"status": f"rimandato ({type(e).__name__})"}
         text = (msg.get("content") or "").strip()

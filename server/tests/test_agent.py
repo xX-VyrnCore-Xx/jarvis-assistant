@@ -15,7 +15,7 @@ class FakeLLM:
     def __init__(self, script):
         self.script, self.calls = list(script), []
 
-    async def chat(self, messages, tools=None):
+    async def chat(self, messages, tools=None, model=None, kind="chat"):
         self.calls.append(messages)
         return self.script.pop(0)
 
@@ -94,6 +94,11 @@ async def test_reminder_tool_and_delivery():
     class FakeTG:
         enabled = True
         sent = []
+        s = Settings(telegram_owner_id=42)
+
+        async def send_buttons(self, chat_id, text, buttons):
+            self.sent.append(text)
+            self.buttons = buttons
 
         async def notify_owner(self, text):
             self.sent.append(text)

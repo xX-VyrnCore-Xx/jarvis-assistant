@@ -32,8 +32,9 @@ def dequantize(raw: bytes) -> np.ndarray:
 
 
 class Embedder:
-    def __init__(self, settings: Settings, client: httpx.AsyncClient | None = None):
+    def __init__(self, settings: Settings, client: httpx.AsyncClient | None = None, usage=None):
         self.s = settings
+        self.usage = usage
         self.model = settings.rag_embed_model
         self._client = client or httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=10.0), limits=httpx.Limits(max_keepalive_connections=2))
         self._key = settings.freellm_api_key
@@ -73,6 +74,8 @@ class Embedder:
                         data = sorted(r.json()["data"], key=lambda d: d.get("index", 0))
                         if len(data) != len(texts):
                             raise EmbedError("risposta incompleta")
+                        if self.usage:
+                            self.usage.record("embed", self.model, (r.json().get("usage") or {}).get("prompt_tokens") or sum(len(t) for t in texts) // 4, 0, 0)
                         return [d["embedding"] for d in data]
                 except (httpx.TransportError, LLMError) as e:
                     last = e

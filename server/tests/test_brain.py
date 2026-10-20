@@ -45,7 +45,7 @@ class FakeLLM:
     def __init__(self, reply):
         self.reply, self.seen = reply, []
 
-    async def chat(self, messages, tools=None):
+    async def chat(self, messages, tools=None, model=None, kind="chat"):
         self.seen.append(messages)
         return {"content": self.reply}
 

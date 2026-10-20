@@ -1,6 +1,8 @@
 """Bot Telegram di JARVIS: comandi, pulsanti, indicatore di scrittura e risposte formattate. Risponde solo al proprietario."""
 import asyncio
+import json
 import logging
+import time
 from collections import OrderedDict, deque
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -16,6 +18,12 @@ COMMANDS = [
     ("promemoria", "Promemoria attivi (con elimina)"),
     ("ricordi", "Cosa ricordo di te (con elimina)"),
     ("google", "Collega Gmail, Calendar e Drive"),
+    ("riepilogo", "Il tuo buongiorno, adesso"),
+    ("uso", "Token e consumo dei modelli"),
+    ("modello", "Scegli il modello AI"),
+    ("impostazioni", "Notifiche e ore silenziose"),
+    ("aggiornamenti", "Nuove versioni delle app"),
+    ("salute", "Stato tecnico del server"),
     ("nota", "Salva una nota nel secondo cervello"),
     ("cerca", "Cerca nel secondo cervello"),
     ("cervello", "Statistiche del secondo cervello"),
@@ -26,6 +34,11 @@ COMMANDS = [
 HELP = """<b>JARVIS a sua disposizione, {owner}.</b>
 Scrivetemi in linguaggio naturale: agenda, email, meteo, ricerche, promemoria, calcoli, controllo del PC.
 
+/riepilogo — il buongiorno adesso
+/uso — token e consumo dei modelli
+/modello — scegli il modello AI
+/impostazioni — notifiche e ore silenziose
+/aggiornamenti — nuove versioni delle app
 /stato — stato dei sistemi
 /token — token gratuiti rimasti
 /promemoria — promemoria attivi
@@ -43,6 +56,8 @@ class TelegramBot:
         self.app = app
         self._seen: deque[int] = deque(maxlen=300)
         self._locks: OrderedDict[int, asyncio.Lock] = OrderedDict()
+        self._replies: OrderedDict[tuple[int, int], tuple[str, str]] = OrderedDict()  # (chat, messaggio) -> (domanda, risposta)
+        self._models: list[str] = []
 
     @property
     def tg(self):
@@ -81,6 +96,8 @@ class TelegramBot:
     async def _message(self, msg: dict) -> None:
         chat_id = msg["chat"]["id"]
         text = (msg.get("text") or "").strip()
+        if (voice := msg.get("voice") or msg.get("audio")) and not text:
+            return await self._voice(chat_id, voice)
         if (doc := msg.get("document")) and not text:
             return await self._document(chat_id, doc, (msg.get("caption") or "").strip())
         if not text:
@@ -92,7 +109,31 @@ class TelegramBot:
         async with self._lock(chat_id):
             await self._ask(chat_id, text)
 
+    async def _voice(self, chat_id: int, voice: dict) -> None:
+        """Vocali: li trascrive con il router (/v1/audio/transcriptions) e poi risponde come a un messaggio scritto."""
+        if (voice.get("file_size") or 0) > 8_000_000 or (voice.get("duration") or 0) > 300:
+            return await self.tg.send(chat_id, "Il vocale è troppo lungo, signore: massimo 5 minuti.")
+        try:
+            text = await self.app.state.agent.llm.transcribe(await self.tg.download_file(voice["file_id"]), "voice.ogg", voice.get("mime_type") or "audio/ogg")
+        except Exception as e:
+            log.info("trascrizione non riuscita: %s", type(e).__name__)
+            return await self.tg.send(chat_id, "Non sono riuscito a trascrivere il vocale, signore. Riprovi o lo scriva.")
+        if not text:
+            return await self.tg.send(chat_id, "Non ho sentito nulla di comprensibile, signore.")
+        await self.tg.send(chat_id, f"🎤 «{text}»")
+        async with self._lock(chat_id):
+            await self._ask(chat_id, text)
+
+    def _buttons(self) -> dict:
+        return {"inline_keyboard": [[{"text": "💾 Salva", "callback_data": "sv"}, {"text": "🔄 Rigenera", "callback_data": "rg"}]]}
+
+    def _remember_reply(self, chat_id: int, mid: int, question: str, answer: str) -> None:
+        self._replies[(chat_id, mid)] = (question, answer)
+        while len(self._replies) > 60:
+            self._replies.popitem(last=False)
+
     async def _ask(self, chat_id: int, text: str) -> None:
+        """Risposta in diretta: un messaggio che si riempie man mano (e mostra lo strumento in uso), poi formattato con i pulsanti."""
         async def typing() -> None:
             while True:
                 try:
@@ -102,36 +143,41 @@ class TelegramBot:
                 await asyncio.sleep(4)
 
         indicator = asyncio.create_task(typing())
+        mid, buf, final, status, last, shown = 0, "", "", "", 0.0, ""
         try:
-            reply = await self.app.state.agent.reply(text, f"tg-{chat_id}")
+            mid = await self.tg.send_id(chat_id, "…", silent=True)
+            model = await self.app.state.store.get_setting("tg_model") or None
+            async for kind, data in self.app.state.agent.reply_stream(text, f"tg-{chat_id}", model=model):
+                if kind == "status":
+                    status = data
+                elif kind == "delta":
+                    buf += data
+                elif kind == "done":
+                    final = data
+                    break
+                now = time.monotonic()
+                view = (buf[:3600] + " ▌") if buf else f"⏳ {status}" if status else ""
+                if view and view != shown and now - last > 1.4 and (len(view) - len(shown) > 24 or not buf):
+                    if await self.tg.edit(chat_id, mid, view, html=False):
+                        shown, last = view, now
         except LLMError:
-            reply = "L'intelligenza artificiale non risponde in questo momento, signore. Riprovo tra poco?"
+            final = "L'intelligenza artificiale non risponde in questo momento, signore. Riprovo tra poco?"
         except Exception:
             log.exception("errore nella risposta")
-            reply = "Si è verificato un problema, signore. Riprovi tra un momento."
+            final = "Si è verificato un problema, signore. Riprovi tra un momento."
         finally:
             indicator.cancel()
-        await self.tg.send(chat_id, reply or "…")
+        final = final or buf or "…"
+        from .telegram import split_text
 
-    async def _document(self, chat_id: int, doc: dict, caption: str) -> None:
-        """File inviati al bot (txt, md, pdf fino a 4 MB) entrano nel secondo cervello."""
-        name = doc.get("file_name", "documento")
-        ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
-        if ext not in ("txt", "md", "pdf") or (doc.get("file_size") or 0) > 4_000_000:
-            return await self.tg.send(chat_id, "Posso leggere solo file .txt, .md e .pdf fino a 4 MB, signore.")
-        raw = await self.tg.download_file(doc["file_id"])
-        if ext == "pdf":
-            import io
-
-            from pypdf import PdfReader
-
-            text = "\n\n".join((p.extract_text() or "") for p in PdfReader(io.BytesIO(raw)).pages[:200])
-        else:
-            text = raw.decode("utf-8", errors="replace")
-        if len(text.strip()) < 20:
-            return await self.tg.send(chat_id, "Non riesco a estrarre testo da questo file (forse è una scansione).")
-        r = await self.app.state.brain.ingest(text, title=name, source="file", uri=f"file:{name}", tags=[caption] if caption else None, importance=0.6)
-        await self.tg.send(chat_id, f"«{name}» salvato nel secondo cervello (#{r['doc_id']}, {r['chunks']} frammenti, {r['status']}).")
+        parts = split_text(final)
+        if len(parts) <= 1:
+            if not await self.tg.edit(chat_id, mid, final, self._buttons()):
+                mid = await self.tg.send_id(chat_id, final, self._buttons())
+        else:  # risposta lunga: il primo messaggio si completa, il resto segue
+            await self.tg.edit(chat_id, mid, parts[0])
+            mid = await self.tg.send_id(chat_id, "\n\n".join(parts[1:]), self._buttons())
+        self._remember_reply(chat_id, mid, text, final)
 
     # ------------------------------------------------------------------ comandi
     async def _command(self, chat_id: int, cmd: str, arg: str = "") -> None:
@@ -183,6 +229,33 @@ class TelegramBot:
             return await self.tg.send(chat_id, f"Autorizzi l'accesso a Gmail, Calendar e Drive (il link vale 10 minuti). "
                                                f"Il redirect da registrare su Google Cloud è <code>{base}/google/callback</code>.",
                                       {"inline_keyboard": [[{"text": "Collega Google", "url": url}]]})
+        if cmd == "uso":
+            return await self._usage(chat_id)
+        if cmd == "salute":
+            return await self._health(chat_id)
+        if cmd == "riepilogo":
+            from .scheduler import morning_briefing
+
+            await self.tg.typing(chat_id)
+            text = await st.agent.reply("Prepara il mio buongiorno: agenda di oggi, promemoria e attività aperte. Massimo 8 righe.", "briefing")
+            return await self.tg.send(chat_id, text)
+        if cmd == "aggiornamenti":
+            rel = await st.updates.latest(force=True)
+            if not rel:
+                return await self.tg.send(chat_id, "Nessuna versione pubblicata, signore.")
+            lines = [f"<b>Ultima versione: {rel['version']}</b> ({rel['published_at'][:10]})"] + [f"• {k}: {a['name']} ({a['size'] // 1_000_000} MB)" for k, a in rel["assets"].items()]
+            keys = [[{"text": f"Scarica {k}", "url": a["url"]}] for k, a in rel["assets"].items()]
+            return await self.tg.send(chat_id, "\n".join(lines) + "\nLe app propongono l'aggiornamento da sole.", {"inline_keyboard": keys + [[{"text": "Novità", "url": rel["page"]}]]})
+        if cmd == "impostazioni":
+            return await self._settings(chat_id)
+        if cmd == "modello":
+            try:
+                self._models = ["auto"] + [m["id"] for m in await st.agent.llm.models()][:14]
+            except Exception:
+                return await self.tg.send(chat_id, "L'elenco dei modelli non è disponibile ora: FreeLLMAPI si sta avviando.")
+            cur = await st.store.get_setting("tg_model") or "auto"
+            keys = [[{"text": ("● " if m == cur else "") + m, "callback_data": f"md2:{i}"}] for i, m in enumerate(self._models)]
+            return await self.tg.send(chat_id, f"<b>Modello AI</b> (ora: {cur})\nAutomatico lascia scegliere al router il migliore disponibile.", {"inline_keyboard": keys})
         if cmd in ("nota", "cerca", "cervello"):
             brain = st.brain
             if not brain.enabled:
@@ -214,6 +287,61 @@ class TelegramBot:
             return await self.tg.send(chat_id, "Conversazione azzerata. I ricordi a lungo termine restano, signore.")
         await self.tg.send(chat_id, "Comando sconosciuto. /aiuto elenca ciò che so fare.")
 
+    async def _usage(self, chat_id: int) -> None:
+        st = self.app.state
+        await st.usage.flush(st.store)
+        rows = await st.store.usage_series(7)
+        by_day: dict[str, int] = {}
+        for r in rows:
+            by_day[str(r["day"])] = by_day.get(str(r["day"]), 0) + r["prompt_tokens"] + r["completion_tokens"]
+        bars = "▁▂▃▄▅▆▇█"
+        peak = max(by_day.values(), default=1) or 1
+        spark = "".join(bars[min(7, int(v / peak * 7))] for _, v in sorted(by_day.items())) or "—"
+        t = st.usage.today()
+        from .budget import fmt_tokens
+
+        lines = [f"<b>Consumo dei modelli</b>", f"Oggi: {t['requests']} richieste, {fmt_tokens(t['prompt_tokens'] + t['completion_tokens'])} token, latenza media {t['avg_latency_ms'] / 1000:.1f} s"
+                 + (f", {t['errors']} errori" if t["errors"] else ""), f"Ultimi giorni: {spark}"]
+        if st.budget.enabled:
+            try:
+                from .api import forecast
+
+                b = await st.budget.get()
+                f = forecast(b)
+                lines += ["", await st.budget.text()]
+                if f["days_left"] is not None:
+                    lines.append(f"Al ritmo attuale ({fmt_tokens(f['burn_per_day'])}/giorno): {f['days_left']:.0f} giorni" + (" ⚠️ finiscono prima del rinnovo" if f["runs_out_before_reset"] else ""))
+            except Exception:
+                lines.append("(token di FreeLLMAPI non disponibili ora)")
+        await self.tg.send(chat_id, "\n".join(lines))
+
+    async def _health(self, chat_id: int) -> None:
+        from .health import deep_health
+
+        h = await deep_health(self.app)
+        m = h["memory"]
+        lines = ["<b>Salute del server</b>", f"• Database: {'ok' if h['db']['ok'] else 'NON RAGGIUNGIBILE'} ({h['db']['latency_ms']} ms)",
+                 f"• Memoria: {m['container_mb'] or m['process_mb']} MB su {m['limit_mb']}", f"• Intelligenza: {'pronta' if h['freellm_ready'] else 'in avvio' if h['freellm_ready'] is not None else '—'}",
+                 f"• Secondo cervello: {h['brain']['indexed']} frammenti in memoria", f"• App collegate in diretta: {h['realtime_listeners']}"]
+        b = h["backup"]
+        if b:
+            lines.append(f"• Ultimo backup: {'ok' if b.get('ok') else 'FALLITO'} ({str(b.get('at', ''))[:16].replace('T', ' ')})")
+        if h["update"]["last_error"]:
+            lines.append(f"• Controllo aggiornamenti: errore {h['update']['last_error']}")
+        await self.tg.send(chat_id, "\n".join(lines))
+
+    async def _settings(self, chat_id: int, message_id: int = 0) -> None:
+        prefs = await self.app.state.notifier.prefs()
+        names = {"reminder": "Promemoria", "alert": "Avvisi", "pending": "Conferme", "update": "Aggiornamenti", "brain": "Cervello", "info": "Informazioni"}
+        keys = [[{"text": f"{'✅' if v['telegram'] else '⬜'} {names[k]} su Telegram", "callback_data": f"np:{k}"}] for k, v in prefs["kinds"].items()]
+        q = prefs["quiet"]
+        keys.append([{"text": f"{'🌙 Ore silenziose: ' + q['from'] + '–' + q['to'] if q['enabled'] else '🔔 Ore silenziose: spente'}", "callback_data": "nq"}])
+        text = "<b>Notifiche</b>\nScegli cosa arriva anche qui. Promemoria, avvisi e conferme passano sempre, anche nelle ore silenziose."
+        if message_id:
+            await self.tg.edit(chat_id, message_id, text, {"inline_keyboard": keys})
+        else:
+            await self.tg.send(chat_id, text, {"inline_keyboard": keys})
+
     # ------------------------------------------------------------------ pulsanti
     async def _callback(self, cb: dict) -> None:
         st = self.app.state
@@ -231,7 +359,45 @@ class TelegramBot:
             if msg.get("message_id"):
                 await self.tg.clear_buttons(msg["chat"]["id"], msg["message_id"], f"{label}: {outcome}")
             return
-        if action == "rd" and ident.isdigit():
+        chat = (msg.get("chat") or {}).get("id") or self.s.telegram_owner_id
+        if action == "rs":  # promemoria scattato: rimanda o chiudi
+            nid, _, mins = ident.partition(":")
+            n = await st.store.get_notification(int(nid)) if nid.isdigit() else None
+            if n and n["kind"] == "reminder":
+                if int(mins or 0):
+                    from datetime import timedelta
+                    from zoneinfo import ZoneInfo
+
+                    await st.store.add_reminder(n["body"], datetime.now(ZoneInfo(self.s.timezone)) + timedelta(minutes=int(mins)))
+                await st.notifier.mark_read([n["id"]])
+                outcome = f"Rimandato di {mins} min." if int(mins or 0) else "Fatto."
+                if msg.get("message_id"):
+                    await self.tg.clear_buttons(chat, msg["message_id"], f"{n['body']} — {outcome}")
+            else:
+                outcome = "Promemoria non trovato."
+        elif action == "sv" and (key := (chat, msg.get("message_id"))) in self._replies:
+            q, a = self._replies[key]
+            r = await st.brain.ingest(f"Domanda: {q}\n\nRisposta: {a}", title=q[:80], source="note", importance=0.55)
+            outcome = f"Salvato nel secondo cervello (#{r['doc_id']})."
+        elif action == "rg" and (key := (chat, msg.get("message_id"))) in self._replies:
+            await self.tg.answer_callback(cb["id"], "Rigenero…")
+            async with self._lock(chat):
+                await self._ask(chat, self._replies[key][0])
+            return
+        elif action == "np" and ident in (await st.notifier.prefs())["kinds"]:
+            cur = (await st.notifier.prefs())["kinds"][ident]["telegram"]
+            await st.notifier.set_prefs({"kinds": {ident: {"telegram": not cur}}})
+            await self.tg.answer_callback(cb["id"], "Aggiornato")
+            return await self._settings(chat, msg.get("message_id", 0))
+        elif action == "nq":
+            cur = (await st.notifier.prefs())["quiet"]["enabled"]
+            await st.notifier.set_prefs({"quiet": {"enabled": not cur}})
+            await self.tg.answer_callback(cb["id"], "Aggiornato")
+            return await self._settings(chat, msg.get("message_id", 0))
+        elif action == "md2" and ident.isdigit() and int(ident) < len(self._models):
+            await st.store.set_setting("tg_model", "" if self._models[int(ident)] == "auto" else self._models[int(ident)])
+            outcome = f"Modello: {self._models[int(ident)]}"
+        elif action == "rd" and ident.isdigit():
             await st.store.delete_reminder(int(ident))
             outcome = "Promemoria eliminato."
         elif action == "td" and ident.isdigit():

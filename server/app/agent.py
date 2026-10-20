@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 from .config import Settings
 from .llm import LLMClient
 from .memory import Store
-from .privacy import Redactor
+from .privacy import Redactor, StreamUnmasker
 from .tools import ToolRegistry
 
 log = logging.getLogger("jarvis.agent")
@@ -37,10 +37,29 @@ class Agent:
     def __init__(self, settings: Settings, llm: LLMClient, store: Store, tools: ToolRegistry, brain=None):
         self.s, self.llm, self.store, self.tools, self.brain = settings, llm, store, tools, brain
 
-    async def reply(self, user_text: str, session_id: str, voice: bool = False) -> str:
-        # privacy: ciò che va ai provider passa da un filtro che sostituisce dati sensibili con segnaposto (reversibili qui sotto)
+    TOOL_LABELS = {
+        "web_search": "Cerco sul web…", "web_news": "Leggo le notizie…", "read_webpage": "Leggo la pagina…", "get_weather": "Controllo il meteo…",
+        "calendar_list_events": "Leggo il calendario…", "calendar_create_event": "Creo l'evento…", "calendar_update_event": "Modifico l'evento…",
+        "calendar_delete_event": "Preparo la conferma…", "gmail_search": "Cerco nelle email…", "gmail_read": "Leggo l'email…", "drive_search": "Cerco su Drive…",
+        "brain_search": "Cerco nel secondo cervello…", "brain_add_note": "Salvo nel secondo cervello…", "recall": "Ricordo…", "remember": "Memorizzo…",
+        "calculate": "Calcolo…", "convert_currency": "Controllo il cambio…", "get_token_budget": "Controllo i token…",
+    }
+
+    def _trim_history(self, rows: list[dict]) -> list[dict]:
+        """Cronologia entro un budget di caratteri: le conversazioni lunghe si accorciano dai messaggi più vecchi (meno token spesi)."""
+        out, used = [], 0
+        for m in reversed(rows):
+            used += len(m["content"])
+            if used > self.s.history_chars and len(out) >= 2:
+                break
+            out.append(m)
+        return list(reversed(out))
+
+    async def _prepare(self, user_text: str, session_id: str, voice: bool) -> tuple[list[dict], Redactor]:
+        # privacy: ciò che va ai provider passa da un filtro che sostituisce dati sensibili con segnaposto (reversibili alla fine)
         red = Redactor(self.s.privacy_mode)
-        history = [{**m, "content": red.mask(m["content"])} for m in await self.store.recent_messages(session_id, self.s.history_messages)]
+        rows = self._trim_history(await self.store.recent_messages(session_id, self.s.history_messages))
+        history = [{**m, "content": red.mask(m["content"])} for m in rows]
         brain_ctx = red.mask(await self.brain.context(user_text)) if self.brain else ""  # secondo cervello: contesto pertinente, mascherato
         memories = [] if brain_ctx else [red.mask(m) for m in await self.store.search_memories(user_text, self.s.memory_hits)]
 
@@ -55,32 +74,66 @@ class Agent:
             system += "\n\n" + brain_ctx
         elif memories:
             system += "\n\nRicordi rilevanti:\n" + "\n".join(f"- {m}" for m in memories)
-
         if red.mode != "off":
             system += ("\n\nPer privacy alcuni dati sensibili compaiono come segnaposto tra parentesi quadre (es. [IBAN_1], [CARTA_1], [EMAIL_1]): "
                        "usali tali e quali nelle risposte e negli argomenti dei tool, il sistema li sostituisce con i valori veri.")
-        messages = [{"role": "system", "content": system}, *history, {"role": "user", "content": red.mask(user_text)}]
-        answer = ""
-        for _ in range(self.s.max_tool_rounds):
-            msg = await self.llm.chat(messages, self.tools.specs)
-            calls = msg.get("tool_calls") or []
-            if not calls:
-                answer = msg.get("content") or ""
-                break
-            messages.append({"role": "assistant", "content": msg.get("content"), "tool_calls": calls})
-            # i tool richiesti nello stesso turno sono indipendenti: si eseguono insieme
-            results = await asyncio.gather(*(self.tools.call(c["function"]["name"], red.unmask_json(c["function"].get("arguments", ""))) for c in calls))
-            for c, result in zip(calls, results):
-                log.info("tool %s -> %d caratteri", c["function"]["name"], len(result))
-                messages.append({"role": "tool", "tool_call_id": c["id"], "content": red.mask(result)})
-        else:
-            # troppe operazioni: si chiede comunque una risposta con quanto raccolto, senza altri tool
-            messages.append({"role": "user", "content": "Rispondi ora con le informazioni raccolte, senza usare altri tool."})
-            answer = (await self.llm.chat(messages, [])).get("content") or "Ho superato il limite di operazioni consecutive, signore. Può riformulare la richiesta?"
+        return [{"role": "system", "content": system}, *history, {"role": "user", "content": red.mask(user_text)}], red
 
+    async def _run_tools(self, calls: list[dict], red: Redactor, messages: list[dict]) -> None:
+        # i tool richiesti nello stesso turno sono indipendenti: si eseguono insieme
+        results = await asyncio.gather(*(self.tools.call(c["function"]["name"], red.unmask_json(c["function"].get("arguments", ""))) for c in calls))
+        for c, result in zip(calls, results):
+            log.info("tool %s -> %d caratteri", c["function"]["name"], len(result))
+            messages.append({"role": "tool", "tool_call_id": c["id"], "content": red.mask(result)})
+
+    async def _finish(self, session_id: str, user_text: str, answer: str, red: Redactor) -> str:
         answer = red.unmask(answer)  # all'utente (e nel database cifrato) arrivano i valori veri, mai i segnaposto
         if red.count:
             log.info("privacy: %d dati sensibili mascherati verso il modello", red.count)
         await self.store.add_message(session_id, "user", user_text)
         await self.store.add_message(session_id, "assistant", answer)
         return answer
+
+    async def reply(self, user_text: str, session_id: str, voice: bool = False, model: str | None = None) -> str:
+        messages, red = await self._prepare(user_text, session_id, voice)
+        answer = ""
+        for _ in range(self.s.max_tool_rounds):
+            msg = await self.llm.chat(messages, self.tools.specs, model=model)
+            calls = msg.get("tool_calls") or []
+            if not calls:
+                answer = msg.get("content") or ""
+                break
+            messages.append({"role": "assistant", "content": msg.get("content"), "tool_calls": calls})
+            await self._run_tools(calls, red, messages)
+        else:
+            # troppe operazioni: si chiede comunque una risposta con quanto raccolto, senza altri tool
+            messages.append({"role": "user", "content": "Rispondi ora con le informazioni raccolte, senza usare altri tool."})
+            answer = (await self.llm.chat(messages, [], model=model)).get("content") or "Ho superato il limite di operazioni consecutive, signore. Può riformulare la richiesta?"
+        return await self._finish(session_id, user_text, answer, red)
+
+    async def reply_stream(self, user_text: str, session_id: str, voice: bool = False, model: str | None = None):
+        """Come `reply`, ma a eventi: ("status", testo) mentre usa i tool, ("delta", testo) man mano che scrive, ("done", risposta intera)."""
+        messages, red = await self._prepare(user_text, session_id, voice)
+        answer = ""
+        for _ in range(self.s.max_tool_rounds + 1):
+            last_round = _ == self.s.max_tool_rounds
+            if last_round:
+                messages.append({"role": "user", "content": "Rispondi ora con le informazioni raccolte, senza usare altri tool."})
+            unmask, msg = StreamUnmasker(red), {}
+            async for kind, data in self.llm.chat_stream(messages, [] if last_round else self.tools.specs, model=model):
+                if kind == "delta":
+                    if out := unmask.feed(data):
+                        yield ("delta", out)
+                else:
+                    msg = data
+            if tail := unmask.flush():
+                yield ("delta", tail)
+            calls = msg.get("tool_calls") or []
+            if not calls or last_round:
+                answer = msg.get("content") or ""
+                break
+            messages.append({"role": "assistant", "content": msg.get("content"), "tool_calls": calls})
+            for c in calls:
+                yield ("status", self.TOOL_LABELS.get(c["function"]["name"], f"Uso {c['function']['name']}…"))
+            await self._run_tools(calls, red, messages)
+        yield ("done", await self._finish(session_id, user_text, answer or "…", red))

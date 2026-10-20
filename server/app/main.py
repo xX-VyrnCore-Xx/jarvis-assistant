@@ -1,11 +1,14 @@
 import asyncio
+import hashlib
+import hmac
 import html
+import json
 import logging
 import secrets
 from contextlib import asynccontextmanager
 
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Request, WebSocket
 from pydantic import BaseModel, Field
 
@@ -31,7 +34,9 @@ from .gateway import router as gateway_router
 from .memory import build_store
 from .pc import PCBridge
 from .notify import Notifier
-from .scheduler import background_loop, brain_loop
+from .scheduler import background_loop, brain_loop, maintenance_loop
+from .updates import UpdateService
+from .usage import UsageTracker
 from .telegram import Telegram
 from .tools import ToolRegistry
 from .google import GoogleClient
@@ -45,6 +50,7 @@ class ChatIn(BaseModel):
     message: str = Field(min_length=1, max_length=8000)
     session_id: str = Field(default="default", pattern=r"^[A-Za-z0-9_.:-]{1,64}$")
     voice: bool = False  # risposta destinata alla sintesi vocale
+    model: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_.:/-]{1,80}$")  # modello scelto nell'app; vuoto = automatico
 
 
 class ChatOut(BaseModel):
@@ -74,8 +80,9 @@ async def lifespan(app: FastAPI):
     else:
         bstore = MemoryBrainStore()
         bstore.vault = vault
-    llm = LLMClient(settings)
-    brain = app.state.brain = Brain(settings, bstore, Embedder(settings), vault, llm)
+    usage = app.state.usage = UsageTracker()
+    llm = LLMClient(settings, usage=usage)
+    brain = app.state.brain = Brain(settings, bstore, Embedder(settings, usage=usage), vault, llm)
     register_basic_tools(tools, settings, store, budget=budget.text if budget.enabled else None, brain=brain)
     register_brain_tools(tools, brain)
     app.state.gateway_client = make_client()
@@ -123,7 +130,9 @@ async def lifespan(app: FastAPI):
     pending.on_create = on_pending
     guard = None
     task = asyncio.create_task(background_loop(settings, store, notifier, budget, app.state.backup))
+    updates = app.state.updates = UpdateService(settings, store, notifier)
     brain_task = asyncio.create_task(brain_loop(settings, store, brain, app.state.agent, notifier))
+    maint_task = asyncio.create_task(maintenance_loop(settings, store, usage, updates, notifier))
     if tg.enabled:
         base = settings.public_url or settings.render_external_url
         if base and settings.telegram_webhook_secret:
@@ -144,6 +153,8 @@ async def lifespan(app: FastAPI):
     yield
     task.cancel()
     brain_task.cancel()
+    maint_task.cancel()
+    await usage.flush(store)  # non perde i consumi dell'ultima ora allo spegnimento
     if guard:
         guard.cancel()
     await app.state.gateway_client.aclose()
@@ -156,6 +167,18 @@ if not logging.getLogger("jarvis").handlers:
     _h.setFormatter(logging.Formatter("%(levelname)s:     %(name)s: %(message)s"))
     logging.getLogger("jarvis").addHandler(_h)
 log = logging.getLogger("jarvis")
+
+
+class _RedactQuery(logging.Filter):
+    """I log di accesso non devono mostrare i parametri dell'indirizzo (es. codici di autorizzazione Google): si tiene solo il percorso."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.args, tuple) and len(record.args) >= 3 and isinstance(record.args[2], str) and "?" in record.args[2]:
+            record.args = (*record.args[:2], record.args[2].split("?")[0] + "?[…]", *record.args[3:])
+        return True
+
+
+logging.getLogger("uvicorn.access").addFilter(_RedactQuery())
 app = FastAPI(title="JARVIS", lifespan=lifespan)
 app.include_router(gateway_router)
 app.include_router(api_router)
@@ -178,7 +201,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins(),
     allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type"],
+    allow_headers=["Authorization", "Content-Type", "Accept"],
     max_age=600,
 )
 app.add_middleware(SecurityHeaders)
@@ -219,6 +242,45 @@ async def health() -> dict:
     return {"status": "ok"}
 
 
+@app.post("/chat/stream", dependencies=[Depends(require_token)])
+async def chat_stream(body: ChatIn) -> StreamingResponse:
+    """Come /chat ma a eventi SSE: `status` (uso di un tool), `delta` (testo man mano), `done` (risposta intera), `error`."""
+    limiter: RateLimiter = app.state.chat_limiter
+    if wait := limiter.retry_after():
+        raise HTTPException(429, "Troppe richieste: rallenta un momento", headers={"Retry-After": str(wait)})
+    limiter.hit()
+
+    async def gen():
+        try:
+            async for kind, data in app.state.agent.reply_stream(body.message, body.session_id, voice=body.voice, model=body.model):
+                yield f"event: {kind}\ndata: {json.dumps({'text': data}, ensure_ascii=False)}\n\n"
+        except LLMError as e:
+            yield f"event: error\ndata: {json.dumps({'text': str(e)}, ensure_ascii=False)}\n\n"
+        except Exception:
+            log.exception("errore nella risposta in streaming")
+            yield f"event: error\ndata: {json.dumps({'text': 'Si è verificato un problema, riprova.'})}\n\n"
+
+    return StreamingResponse(gen(), media_type="text/event-stream", headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
+
+
+@app.post("/github/webhook")
+async def github_webhook(request: Request) -> dict:
+    """Facoltativo: GitHub avvisa alla pubblicazione di una Release e le app lo sanno subito (altrimenti basta il controllo ogni 30 minuti)."""
+    secret = app.state.settings.github_webhook_secret
+    if not secret:
+        raise HTTPException(404, "Not found")
+    raw = await request.body()
+    sig = request.headers.get("x-hub-signature-256", "")
+    expected = "sha256=" + hmac.new(secret.encode(), raw, hashlib.sha256).hexdigest()
+    if not secrets.compare_digest(sig, expected):
+        raise HTTPException(403, "Forbidden")
+    if request.headers.get("x-github-event") == "release":
+        payload = json.loads(raw or b"{}")
+        if payload.get("action") in ("published", "released"):
+            return {"ok": True, "result": await app.state.updates.poll_and_notify(force=True)}
+    return {"ok": True}
+
+
 @app.post("/chat", response_model=ChatOut, dependencies=[Depends(require_token)])
 async def chat(body: ChatIn) -> ChatOut:
     limiter: RateLimiter = app.state.chat_limiter
@@ -226,7 +288,7 @@ async def chat(body: ChatIn) -> ChatOut:
         raise HTTPException(429, "Troppe richieste: rallenta un momento", headers={"Retry-After": str(wait)})
     limiter.hit()
     try:
-        return ChatOut(reply=await app.state.agent.reply(body.message, body.session_id, voice=body.voice))
+        return ChatOut(reply=await app.state.agent.reply(body.message, body.session_id, voice=body.voice, model=body.model))
     except LLMError as e:
         raise HTTPException(502, str(e)) from e
 

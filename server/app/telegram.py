@@ -70,6 +70,33 @@ class Telegram:
         d.raise_for_status()
         return d.content
 
+    async def send_id(self, chat_id: int, text: str, markup: dict | None = None, silent: bool = False) -> int:
+        """Come send ma restituisce l'id dell'ultimo messaggio (serve per modificarlo mentre la risposta arriva)."""
+        chunks = split_text(text or "…") or ["…"]
+        mid = 0
+        for n, part in enumerate(chunks):
+            extra = {"reply_markup": markup} if markup and n == len(chunks) - 1 else {}
+            r = await self._client.post(f"{self.api}/sendMessage", json={
+                "chat_id": chat_id, "text": to_html(part), "parse_mode": "HTML", "disable_notification": silent,
+                "link_preview_options": {"is_disabled": True}, **extra})
+            if r.status_code == 400:
+                r = await self._client.post(f"{self.api}/sendMessage", json={"chat_id": chat_id, "text": part[:MAX_LEN], "disable_notification": silent, **extra})
+            r.raise_for_status()
+            mid = r.json()["result"]["message_id"]
+        return mid
+
+    async def edit(self, chat_id: int, message_id: int, text: str, markup: dict | None = None, html: bool = True) -> bool:
+        """Modifica un messaggio (HTML, con ripiego sul testo semplice). False se non è cambiato o non si può modificare."""
+        body: dict = {"chat_id": chat_id, "message_id": message_id, "text": (to_html(text) if html else text)[:MAX_LEN]}
+        if html:
+            body["parse_mode"] = "HTML"
+        if markup is not None:
+            body["reply_markup"] = markup
+        r = await self._client.post(f"{self.api}/editMessageText", json=body)
+        if r.status_code == 400 and html:
+            return await self.edit(chat_id, message_id, text, markup, html=False)
+        return r.status_code == 200
+
     async def set_commands(self, commands: list[tuple[str, str]]) -> None:
         r = await self._client.post(f"{self.api}/setMyCommands", json={
             "commands": [{"command": c, "description": d} for c, d in commands]})
