@@ -78,3 +78,62 @@ async def background_loop(settings: Settings, store: Store, notifier: Notifier, 
                 await notifier.push("alert", "Backup non riuscito", "Il backup notturno su Hugging Face è fallito.")
             last_backup = time.monotonic()
         await asyncio.sleep(settings.reminder_poll_s)
+
+
+async def brain_cycle(settings: Settings, store: Store, brain, state: dict) -> None:
+    """Manutenzione del secondo cervello: indice, ricordi vecchi, vettori mancanti, arricchimento."""
+    if not state.get("loaded"):
+        log.info("secondo cervello: indice caricato (%d frammenti)", await brain.load())
+        state["loaded"] = True
+    if not state.get("imported"):
+        done = await store.get_setting("brain_memories_imported")
+        if not done:
+            n = await brain.import_memories(await store.list_memories(500))
+            await store.set_setting("brain_memories_imported", "1")
+            log.info("secondo cervello: importati %d ricordi", n)
+        state["imported"] = True
+    n = await brain.reindex_vectors(32)
+    if n:
+        log.info("secondo cervello: %d vettori aggiunti", n)
+    if settings.rag_enrich_per_cycle:
+        await brain.enrich_pending()
+
+
+async def consolidate_yesterday(settings: Settings, store: Store, brain, tz: ZoneInfo) -> str:
+    from datetime import timedelta
+
+    day = (datetime.now(tz) - timedelta(days=1)).date()
+    start = datetime(day.year, day.month, day.day, tzinfo=tz)
+    rows = await store.messages_between(start.astimezone(ZoneInfo("UTC")).isoformat(), (start + timedelta(days=1)).astimezone(ZoneInfo("UTC")).isoformat(), 400)
+    transcript = "\n".join(f"{'Utente' if m['role'] == 'user' else 'JARVIS'}: {m['content']}" for m in rows if m.get("session_id") != "briefing")
+    return (await brain.consolidate_day(day.isoformat(), transcript)).get("status", "")
+
+
+async def morning_briefing(settings: Settings, brain, agent, notifier) -> None:
+    review = await brain.resurface(1)
+    extra = f" Includi in fondo un ripasso breve di questo documento del mio secondo cervello: «{review[0].title}» (#{review[0].id})." if review else ""
+    text = await agent.reply("Prepara il mio buongiorno: agenda di oggi, promemoria e attività aperte, e se serve un consiglio pratico. "
+                             f"Massimo 8 righe, tono da JARVIS.{extra}", "briefing")
+    await notifier.push("info", "Buongiorno, signore", text[:600], telegram=True)
+
+
+async def brain_loop(settings: Settings, store: Store, brain, agent, notifier) -> None:
+    """Primo ciclo dopo 45 s (il risveglio di Render non va appesantito), poi ogni 5 minuti; diario alle 03:30 e buongiorno all'ora scelta."""
+    tz = ZoneInfo(settings.timezone)
+    state: dict = {}
+    await asyncio.sleep(45)
+    while True:
+        try:
+            if brain.enabled:
+                await brain_cycle(settings, store, brain, state)
+                now = datetime.now(tz)
+                today = now.date().isoformat()
+                if now.hour >= 3 and await store.get_setting("last_journal") != today:
+                    await store.set_setting("last_journal", today)
+                    log.info("diario di ieri: %s", await consolidate_yesterday(settings, store, brain, tz))
+                if settings.briefing_hour and settings.briefing_hour <= now.hour < settings.briefing_hour + 4 and await store.get_setting("last_briefing") != today:
+                    await store.set_setting("last_briefing", today)
+                    await morning_briefing(settings, brain, agent, notifier)
+        except Exception:
+            log.exception("errore nel ciclo del secondo cervello")
+        await asyncio.sleep(300)

@@ -9,7 +9,7 @@ import { initPush, teardownPush } from "./push.js";
 // URL pubblico del server (non è un segreto); il token personale resta nella memoria privata dell'app
 const DEFAULT_URL = "https://jarvis-ai-841t.onrender.com";
 const SESSION = "mobile";
-const TABS = [["chat", "Chat", "chat"], ["tokens", "Token", "gauge"], ["reminders", "Promemoria", "clock"], ["more", "Altro", "sliders"]];
+const TABS = [["chat", "Chat", "chat"], ["brain", "Cervello", "sparkle"], ["tokens", "Token", "gauge"], ["reminders", "Promemoria", "clock"], ["more", "Altro", "sliders"]];
 const QUICK = [
   ["Agenda", "calendar", "Cosa ho in agenda oggi e domani?"],
   ["Email", "mail", "Ho email non lette importanti?"],
@@ -27,7 +27,7 @@ const cfg = { url: (store.get("jarvis.url") || DEFAULT_URL).replace(/\/+$/, ""),
 const api = new Jarvis({ url: () => cfg.url, token: () => cfg.token });
 const speaker = new Speaker({ tts: (t) => api.tts(t) });
 const voiceOn = () => store.get("jarvis.speak") !== "0";
-const S = { tab: "chat", status: null, checked: false, tokens: null, tokensErr: "", tokensAt: null, reminders: [], remindersLoaded: false, notes: [], pending: [], online: false, busy: false, mic: false, canMic: false, sheets: [] };
+const S = { brain: { q: "", results: null, docs: null, stats: null, busy: false }, tab: "chat", status: null, checked: false, tokens: null, tokensErr: "", tokensAt: null, reminders: [], remindersLoaded: false, notes: [], pending: [], online: false, busy: false, mic: false, canMic: false, sheets: [] };
 
 const $app = document.getElementById("m-app");
 let top, content, tabs, log, input, sendBtn, micBtn, downBtn, chatView, hello, chips;
@@ -115,13 +115,14 @@ function renderTabs() {
 function setTab(id) {
   S.tab = id;
   renderTabs(); renderTab();
+  if (id === "brain") loadBrain();
   if (id === "tokens") loadTokens();
   if (id === "reminders") loadReminders();
 }
 
 function renderTab() {
   content.className = `tab-${S.tab}`;
-  const v = { chat: buildChat, tokens: buildTokens, reminders: buildReminders, more: buildMore }[S.tab]();
+  const v = { chat: buildChat, brain: buildBrain, tokens: buildTokens, reminders: buildReminders, more: buildMore }[S.tab]();
   content.replaceChildren(v);
   if (S.tab === "chat") requestAnimationFrame(() => { log.scrollTop = log.scrollHeight; });
 }
@@ -221,6 +222,88 @@ async function loadHistory() {
     rows.forEach((r) => bubble(r.role === "user" ? "user" : "bot", r.content, { fresh: false }));
     log.scrollTop = log.scrollHeight;
   } catch { /* offline: resta la schermata di benvenuto */ }
+}
+
+// ---------------------------------------------------------------- secondo cervello
+const SRC = { note: "nota", memory: "ricordo", journal: "diario", web: "web", file: "file", drive: "drive", gmail: "email", chat: "chat" };
+
+async function loadBrain() {
+  if (!cfg.token) return;
+  try { [S.brain.docs, S.brain.stats] = await Promise.all([api.brainDocs(30), api.brainStats()]); } catch (e) { if (e.status !== 404) toast(errText(e), true); S.brain.docs = S.brain.docs || []; }
+  if (S.tab === "brain") renderTab();
+}
+
+let brainTimer = null;
+function brainSearch(q, input) {
+  S.brain.q = q;
+  clearTimeout(brainTimer);
+  if (q.trim().length < 2) { S.brain.results = null; return renderBrainBody(); }
+  brainTimer = setTimeout(async () => {
+    S.brain.busy = true; renderBrainBody();
+    try { S.brain.results = await api.brainSearch(q.trim(), 10); } catch (e) { toast(errText(e), true); S.brain.results = []; }
+    S.brain.busy = false; renderBrainBody(); input?.focus();
+  }, 450);
+}
+
+function docCard(d, text) {
+  return el("button", { class: "m-card doc", onclick: () => openDoc(d.doc_id || d.id) },
+    el("div", { class: "doc-top" }, el("b", {}, d.title || "(senza titolo)"), el("span", { class: "doc-src" }, SRC[d.source] || d.source)),
+    text ? el("p", {}, text) : d.summary ? el("p", {}, d.summary) : null,
+    el("small", {}, [d.pinned ? "📌 " : "", fmtDate(d.created_at), ...(d.why?.length ? [` · ${d.why.join(", ")}`] : []), ...(d.tags?.length ? [` · ${d.tags.slice(0, 3).join(", ")}`] : [])].join("")));
+}
+
+function renderBrainBody() {
+  const box = document.getElementById("brain-body");
+  if (!box) return;
+  const { results, docs, busy } = S.brain;
+  box.replaceChildren(...(busy ? [el("div", { class: "skel" }), el("div", { class: "skel" })]
+    : results ? (results.length ? results.map((r) => docCard(r, r.snippet)) : [el("div", { class: "m-empty" }, el("div", { class: "ico" }, icon("sparkle", 30)), "Nessun risultato.", el("small", {}, "Prova con altre parole: cerco per significato.")) ])
+    : docs == null ? [el("div", { class: "skel" }), el("div", { class: "skel" })]
+    : docs.length ? [el("div", { class: "m-day" }, "Recenti"), ...docs.map((d) => docCard(d))]
+    : [el("div", { class: "m-empty" }, el("div", { class: "ico" }, icon("sparkle", 32)), el("b", {}, "Il tuo secondo cervello è vuoto"), "Aggiungi una nota con +, oppure scrivi a JARVIS «ricorda che…».")]));
+}
+
+function buildBrain() {
+  const wrap = el("div", { class: "m-chat" });
+  const page = el("div", { class: "m-page" });
+  const st = S.brain.stats;
+  const search = el("input", { type: "text", placeholder: "Cerca nei tuoi ricordi…", value: S.brain.q, "aria-label": "Cerca", enterkeyhint: "search", autocomplete: "off" });
+  search.addEventListener("input", () => brainSearch(search.value, search));
+  page.append(el("div", { class: "m-head" }, el("h2", {}, "Cervello"), st ? el("span", { class: "m-pill" }, `${st.docs} doc`) : null), search,
+    st ? el("p", { class: "m-note" }, `${st.chunks} frammenti${st.vectors < st.chunks ? ` · ${st.vectors} con ricerca per significato` : ""}`) : null, el("div", { id: "brain-body" }));
+  pullToRefresh(page, () => { S.brain.results = null; loadBrain(); });
+  wrap.append(page, el("button", { class: "m-fab", "aria-label": "Nuova nota", onclick: () => { haptic(); newNote(); } }, icon("plus", 26)));
+  setTimeout(renderBrainBody, 0);
+  return wrap;
+}
+
+function newNote() {
+  const title = el("input", { type: "text", placeholder: "Titolo (facoltativo)", maxlength: 200 });
+  const text = el("textarea", { rows: 6, placeholder: "Scrivi o incolla qui… oppure un link da salvare", style: "width:100%;border-radius:16px;background:var(--surf2);border:1px solid var(--line);padding:13px 15px;font-size:16px;margin-bottom:12px;resize:none" });
+  const tags = el("input", { type: "text", placeholder: "Tag separati da virgola", maxlength: 120 });
+  const s = openSheet("Nuova nota", title, text, tags, el("button", { class: "m-primary", style: "width:100%", onclick: async () => {
+    const body = text.value.trim();
+    if (body.length < 3) return toast("Scrivi qualcosa", true);
+    try {
+      const tg = tags.value.split(",").map((t) => t.trim()).filter(Boolean);
+      const r = /^https?:\/\/\S+$/.test(body) ? await api.brainAddUrl(body, tg) : await api.brainAddNote(body, title.value.trim(), tg);
+      s.close(); haptic("medium"); toast(r.status === "duplicato" ? "Già presente" : "Salvato nel cervello"); S.brain.results = null; loadBrain();
+    } catch (e) { toast(errText(e), true); }
+  } }, "Salva"));
+  setTimeout(() => text.focus(), 280);
+}
+
+async function openDoc(id) {
+  let d;
+  try { d = await api.brainDoc(id); } catch (e) { return toast(errText(e), true); }
+  const s = openSheet(d.title || "Documento",
+    el("small", { class: "m-note" }, `${SRC[d.source] || d.source} · ${fmtDate(d.created_at)}${d.tags.length ? ` · ${d.tags.join(", ")}` : ""}`),
+    d.summary ? el("p", { class: "ask-t", style: "text-align:left" }, d.summary) : null,
+    el("div", { class: "notes-list", style: "white-space:pre-wrap;max-height:40vh" }, d.text + (d.truncated ? "\n[…]" : "")),
+    d.related?.length ? el("div", {}, el("h3", { class: "m-sub" }, "Collegati"), ...d.related.map((r) => el("button", { class: "m-ghost", style: "margin:0 6px 6px 0", onclick: () => { s.close(); openDoc(r.doc_id); } }, r.title))) : null,
+    el("div", { class: "m-btns", style: "margin-top:14px" },
+      el("button", { class: "m-ghost", onclick: async () => { await api.brainPin(id, !d.pinned); s.close(); toast(d.pinned ? "Staccato" : "Fissato"); loadBrain(); } }, d.pinned ? "Stacca" : "Fissa"),
+      el("button", { class: "m-ghost", style: "color:var(--bad)", onclick: async () => { await api.brainDelete(id); s.close(); toast("Eliminato"); S.brain.results = null; loadBrain(); } }, "Elimina")));
 }
 
 // ---------------------------------------------------------------- token

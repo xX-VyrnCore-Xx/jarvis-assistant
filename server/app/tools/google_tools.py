@@ -31,7 +31,7 @@ def _body_text(payload: dict) -> str:
     return ""
 
 
-def register_google_tools(reg: ToolRegistry, settings: Settings, g: GoogleClient, pending: PendingStore) -> None:
+def register_google_tools(reg: ToolRegistry, settings: Settings, g: GoogleClient, pending: PendingStore, brain=None) -> None:
     tz = ZoneInfo(settings.timezone)
 
     def R(name, description, parameters, fn, ttl=0):
@@ -238,6 +238,24 @@ def register_google_tools(reg: ToolRegistry, settings: Settings, g: GoogleClient
             return f"Formato non leggibile come testo: {meta['mimeType']}."
         return f"{UNTRUSTED}{meta['name']}\n\n{r.text[:MAX_TEXT]}"
 
+    async def drive_save_to_brain(file_id: str) -> str:
+        meta = (await g.request("GET", f"{DRIVE}/files/{file_id}", params={"fields": "name,mimeType"})).json()
+        if meta["mimeType"].startswith("application/vnd.google-apps."):
+            r = await g.request("GET", f"{DRIVE}/files/{file_id}/export", params={"mimeType": "text/plain"})
+        elif meta["mimeType"].startswith("text/"):
+            r = await g.request("GET", f"{DRIVE}/files/{file_id}", params={"alt": "media"})
+        else:
+            return f"Errore: formato non leggibile come testo ({meta['mimeType']})."
+        res = await brain.ingest(r.text, title=meta["name"], source="drive", uri=f"drive:{file_id}", importance=0.5)
+        return f"Salvato nel secondo cervello (#{res['doc_id']}: {meta['name']}, {res['chunks']} frammenti, {res['status']})."
+
+    async def gmail_save_to_brain(message_id: str) -> str:
+        d = (await g.request("GET", f"{GMAIL}/messages/{message_id}", params={"format": "full"})).json()
+        subject = _header(d, "Subject") or "(senza oggetto)"
+        text = f"Da: {_header(d, 'From')}\nData: {_header(d, 'Date')}\nOggetto: {subject}\n\n{_body_text(d['payload']) or d.get('snippet', '')}"
+        res = await brain.ingest(text, title=f"Email: {subject}", source="gmail", uri=f"gmail:{message_id}", importance=0.5)
+        return f"Email salvata nel secondo cervello (#{res['doc_id']}, {res['status']})."
+
     obj = lambda props, req: {"type": "object", "properties": props, "required": req}  # noqa: E731
     s_ = {"type": "string"}
     i_ = {"type": "integer"}
@@ -260,3 +278,6 @@ def register_google_tools(reg: ToolRegistry, settings: Settings, g: GoogleClient
     R("drive_recent", "Elenca i file di Drive modificati più di recente.", obj({"count": i_}, []), drive_recent, ttl=120)
     R("drive_search", "Cerca file su Google Drive per contenuto o nome.", obj({"query": s_}, ["query"]), drive_search, ttl=300)
     R("drive_read", "Legge il testo di un file di Drive (Docs, Sheets, testo).", obj({"file_id": s_}, ["file_id"]), drive_read, ttl=300)
+    if brain is not None:
+        R("drive_save_to_brain", "Salva nel secondo cervello il testo di un file di Drive (id da drive_search), per ritrovarlo per significato.", obj({"file_id": s_}, ["file_id"]), drive_save_to_brain)
+        R("gmail_save_to_brain", "Salva nel secondo cervello una email (id da gmail_search), per ritrovarla per significato.", obj({"message_id": s_}, ["message_id"]), gmail_save_to_brain)

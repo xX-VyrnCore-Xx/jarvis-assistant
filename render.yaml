@@ -47,3 +47,9 @@ services:
       # privacy verso i modelli: off | standard (IBAN, carte, chiavi, password, codice fiscale) | strict (anche email e telefoni)
       - key: PRIVACY_MODE
         value: standard
+      # secondo cervello: famiglia di embedding di FreeLLMAPI (bge-m3 = multilingue, serve la chiave Cloudflare o Hugging Face; 'auto' = predefinita del router)
+      - key: RAG_EMBED_MODEL
+        value: bge-m3
+      # ora del buongiorno automatico (0 = spento)
+      - key: BRIEFING_HOUR
+        value: "8"

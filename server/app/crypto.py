@@ -54,15 +54,21 @@ class Vault:
         except (InvalidTag, ValueError):
             return UNREADABLE
 
+    def blind(self, text: str) -> str:
+        """HMAC stabile di un testo (chiavi di deduplicazione, URI, nomi di entità): il database non può risalire al contenuto."""
+        norm = unicodedata.normalize("NFKD", text.strip().lower())
+        norm = "".join(c for c in norm if not unicodedata.combining(c))
+        if not self.enabled:
+            return hashlib.sha256(norm.encode()).hexdigest()
+        return hmac.new(self._index_key, norm.encode(), hashlib.sha256).hexdigest()
+
     def terms(self, text: str, limit: int = 64) -> list[str]:
         """Indice cieco: HMAC delle parole (senza accenti, minuscole, troncate a 6 lettere come stemmer grezzo)."""
-        if not self.enabled:
-            return []
         plain = unicodedata.normalize("NFKD", text.lower())
         words = re.findall(r"[a-z0-9]{3,}", "".join(c for c in plain if not unicodedata.combining(c)))
         out: list[str] = []
         for w in words:
-            h = hmac.new(self._index_key, w[:6].encode(), hashlib.sha256).hexdigest()[:12]
+            h = (hmac.new(self._index_key, w[:6].encode(), hashlib.sha256) if self.enabled else hashlib.sha256(w[:6].encode())).hexdigest()[:12]
             if h not in out:
                 out.append(h)
         return out[:limit]

@@ -13,6 +13,11 @@ from .agent import Agent
 from .api import router as api_router
 from .auth import require_token, throttle
 from .backup import HFBackup
+from .brain.embed import Embedder
+from .brain.service import Brain
+from .brain.store import MemoryBrainStore, SupabaseBrainStore
+from .brain.tools import register_brain_tools
+from .crypto import Vault
 from .bot import COMMANDS, TelegramBot
 from .voice import VoiceService
 from .budget_service import BudgetService
@@ -26,7 +31,7 @@ from .gateway import router as gateway_router
 from .memory import build_store
 from .pc import PCBridge
 from .notify import Notifier
-from .scheduler import background_loop
+from .scheduler import background_loop, brain_loop
 from .telegram import Telegram
 from .tools import ToolRegistry
 from .google import GoogleClient
@@ -63,7 +68,16 @@ async def lifespan(app: FastAPI):
     tools = ToolRegistry()
     admin = app.state.admin = FreeLLMAdmin(settings)
     budget = app.state.budget = BudgetService(admin)
-    register_basic_tools(tools, settings, store, budget=budget.text if budget.enabled else None)
+    vault = Vault(settings.encryption_key or settings.jarvis_api_token)
+    if settings.supabase_url and settings.supabase_service_key:
+        bstore = SupabaseBrainStore(settings, vault)
+    else:
+        bstore = MemoryBrainStore()
+        bstore.vault = vault
+    llm = LLMClient(settings)
+    brain = app.state.brain = Brain(settings, bstore, Embedder(settings), vault, llm)
+    register_basic_tools(tools, settings, store, budget=budget.text if budget.enabled else None, brain=brain)
+    register_brain_tools(tools, brain)
     app.state.gateway_client = make_client()
     pc = app.state.pc = PCBridge()
     register_pc_tools(tools, pc)
@@ -73,8 +87,8 @@ async def lifespan(app: FastAPI):
     google = app.state.google = GoogleClient(settings, store=store)
     await google.load()
     if google.has_client:
-        register_google_tools(tools, settings, google, pending)
-    app.state.agent = Agent(settings, LLMClient(settings), store, tools)
+        register_google_tools(tools, settings, google, pending, brain)
+    app.state.agent = Agent(settings, llm, store, tools, brain)
     tg = app.state.tg = Telegram(settings)
     app.state.settings = settings
     app.state.bot = TelegramBot(app)
@@ -109,6 +123,7 @@ async def lifespan(app: FastAPI):
     pending.on_create = on_pending
     guard = None
     task = asyncio.create_task(background_loop(settings, store, notifier, budget, app.state.backup))
+    brain_task = asyncio.create_task(brain_loop(settings, store, brain, app.state.agent, notifier))
     if tg.enabled:
         base = settings.public_url or settings.render_external_url
         if base and settings.telegram_webhook_secret:
@@ -122,16 +137,24 @@ async def lifespan(app: FastAPI):
             guard = asyncio.create_task(_webhook_guard(tg, hook))
     vault = getattr(store, "vault", None)
     log.info("sicurezza: cifratura_dati=%s privacy_modelli=%s", "attiva" if vault and vault.enabled else "NO (manca ENCRYPTION_KEY)", settings.privacy_mode)
+    log.info("secondo_cervello: attivo=%s embedding=%s modello=%s", brain.enabled, brain.embedder.enabled, brain.embedder.model)
     log.info("integrazioni: telegram=%s google=%s(client=%s) firebase=%s backup_hf=%s freellm=%s supabase=%s",
              tg.enabled, google.enabled, google.has_client, notifier.fcm.enabled, app.state.backup.enabled, budget.enabled,
              "sì" if settings.supabase_url and settings.supabase_service_key else "no")
     yield
     task.cancel()
+    brain_task.cancel()
     if guard:
         guard.cancel()
     await app.state.gateway_client.aclose()
 
 
+logging.getLogger("jarvis").setLevel(logging.INFO)
+logging.getLogger("jarvis").propagate = False
+if not logging.getLogger("jarvis").handlers:
+    _h = logging.StreamHandler()
+    _h.setFormatter(logging.Formatter("%(levelname)s:     %(name)s: %(message)s"))
+    logging.getLogger("jarvis").addHandler(_h)
 log = logging.getLogger("jarvis")
 app = FastAPI(title="JARVIS", lifespan=lifespan)
 app.include_router(gateway_router)

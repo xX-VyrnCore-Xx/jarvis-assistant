@@ -62,6 +62,14 @@ class Telegram:
                 r = await self._client.post(f"{self.api}/sendMessage", json={"chat_id": chat_id, "text": part[:MAX_LEN], **extra})
             r.raise_for_status()
 
+    async def download_file(self, file_id: str) -> bytes:
+        r = await self._client.post(f"{self.api}/getFile", json={"file_id": file_id})
+        r.raise_for_status()
+        path = r.json()["result"]["file_path"]
+        d = await self._client.get(f"https://api.telegram.org/file/bot{self.s.telegram_bot_token}/{path}", timeout=60)
+        d.raise_for_status()
+        return d.content
+
     async def set_commands(self, commands: list[tuple[str, str]]) -> None:
         r = await self._client.post(f"{self.api}/setMyCommands", json={
             "commands": [{"command": c, "description": d} for c, d in commands]})

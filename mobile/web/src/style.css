@@ -136,11 +136,16 @@ input[type=text], input[type=password], input[type=datetime-local] { display: bl
 .m-note-row p { margin: 3px 0 0; font-size: 14px; opacity: .85; } .m-note-row small { display: block; margin-top: 4px; opacity: .6; font-size: 11.5px; } .m-note-ic { color: var(--amber); flex: none; margin-top: 2px; }
 
 /* ---- barra di navigazione */
-.m-tabs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; padding: 8px 10px calc(8px + var(--bot)); background: var(--glass); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); border-top: 1px solid var(--line); }
+.m-tabs { display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; padding: 8px 10px calc(8px + var(--bot)); background: var(--glass); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); border-top: 1px solid var(--line); }
 .m-tab { display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 4px 0; color: var(--muted); font-size: 11.5px; font-weight: 600; position: relative; }
-.m-tab-ic { width: 58px; height: 32px; border-radius: 16px; display: grid; place-items: center; transition: background .25s, transform .2s; position: relative; } .m-tab.on { color: var(--amber); } .m-tab.on .m-tab-ic { background: rgba(255, 179, 71, .16); transform: scale(1.04); } .m-tab:active .m-tab-ic { transform: scale(.92); }
+.m-tab-ic { width: 50px; height: 32px; border-radius: 16px; display: grid; place-items: center; transition: background .25s, transform .2s; position: relative; } .m-tab.on { color: var(--amber); } .m-tab.on .m-tab-ic { background: rgba(255, 179, 71, .16); transform: scale(1.04); } .m-tab:active .m-tab-ic { transform: scale(.92); }
 .m-tab .dot { position: absolute; top: 1px; right: 10px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; background: var(--coral); color: #fff; font: 700 10px/16px system-ui; text-align: center; }
 
 #m-toast { position: fixed; left: 16px; right: 16px; bottom: calc(90px + var(--bot)); display: flex; align-items: center; justify-content: center; gap: 10px; padding: 12px 16px; border-radius: 18px; background: var(--surf2); border: 1px solid var(--line); box-shadow: var(--shadow); transform: translateY(20px); opacity: 0; transition: .25s; pointer-events: none; z-index: 60; }
 #m-toast.show { opacity: 1; transform: none; } #m-toast.bad { border-color: var(--bad); } #m-toast.act { pointer-events: auto; } #m-toast button { color: var(--amber); font-weight: 700; padding: 4px 8px; }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+
+/* secondo cervello */
+.doc { display: block; width: 100%; text-align: left; } .doc-top { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; } .doc-src { color: var(--amber); font-size: 11.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; flex: none; }
+.doc p { margin: 6px 0 4px; color: var(--muted); font-size: 14px; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; } .doc small { color: var(--muted); font-size: 12px; }
+.m-page > input[type=text] { margin: 0 0 4px; }

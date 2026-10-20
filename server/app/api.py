@@ -34,6 +34,27 @@ class SpeakIn(BaseModel):
     text: str = Field(min_length=1, max_length=500)
 
 
+class NoteIn(BaseModel):
+    text: str = Field(min_length=3, max_length=100_000)
+    title: str = Field(default="", max_length=200)
+    tags: list[str] = Field(default_factory=list, max_length=12)
+    important: bool = False
+
+
+class UrlIn(BaseModel):
+    url: str = Field(min_length=8, max_length=2000)
+    tags: list[str] = Field(default_factory=list, max_length=12)
+
+
+class PinIn(BaseModel):
+    pinned: bool = True
+
+
+def _doc(d) -> dict:
+    return {"id": d.id, "source": d.source, "title": d.title, "summary": d.summary, "tags": d.tags, "importance": d.importance,
+            "pinned": d.pinned, "created_at": d.created_at, "updated_at": d.updated_at, "entities": [{"kind": k, "name": n} for k, n in d.entities]}
+
+
 class ReadIn(BaseModel):
     ids: list[int] | None = None  # None = tutte
 
@@ -178,3 +199,67 @@ async def tts(body: SpeakIn, request: Request) -> Response:
         return Response(await voice.speak(body.text.strip()), media_type="audio/wav", headers={"Cache-Control": "no-store"})
     except TTSError as e:
         raise HTTPException(503, str(e)) from e
+
+
+# ---------------------------------------------------------------- secondo cervello
+def _brain(request: Request):
+    b = request.app.state.brain
+    if not b.enabled:
+        raise HTTPException(404, "Il secondo cervello è disattivato")
+    return b
+
+
+@router.get("/brain/search")
+async def brain_search(request: Request, q: str = Query(min_length=2, max_length=500), k: int = Query(8, ge=1, le=20), source: str = "") -> list[dict]:
+    res = await _brain(request).search(q, k=k, source=source or None)
+    return [{k2: v for k2, v in r.items() if k2 != "uri"} | {"snippet": r["text"][:600]} for r in res]
+
+
+@router.get("/brain/docs")
+async def brain_docs(request: Request, limit: int = Query(30, ge=1, le=100), offset: int = Query(0, ge=0), source: str = "") -> list[dict]:
+    return [_doc(d) for d in await _brain(request).store.list_docs(limit, offset, source or None)]
+
+
+@router.get("/brain/docs/{doc_id}")
+async def brain_doc(doc_id: int, request: Request) -> dict:
+    r = await _brain(request).read(doc_id, 20_000)
+    if not r:
+        raise HTTPException(404, "Documento inesistente")
+    return {**_doc(r["doc"]), "text": r["text"], "truncated": r["truncated"], "related": await _brain(request).related(doc_id, 4)}
+
+
+@router.post("/brain/notes", status_code=201)
+async def brain_note(body: NoteIn, request: Request) -> dict:
+    return await _brain(request).ingest(body.text, title=body.title, source="note", tags=body.tags, importance=0.85 if body.important else 0.55)
+
+
+@router.post("/brain/url", status_code=201)
+async def brain_url(body: UrlIn, request: Request) -> dict:
+    from .tools.web import fetch_page_data
+
+    data = await fetch_page_data(body.url, request.app.state.gateway_client)
+    if isinstance(data, str):
+        raise HTTPException(422, data)
+    title, text, final = data
+    return await _brain(request).ingest(text, title=title or final, source="web", uri=final, tags=body.tags)
+
+
+@router.post("/brain/docs/{doc_id}/pin")
+async def brain_pin(doc_id: int, body: PinIn, request: Request) -> dict:
+    b = _brain(request)
+    if not await b.store.get_doc(doc_id):
+        raise HTTPException(404, "Documento inesistente")
+    await b.store.update_doc(doc_id, pinned=body.pinned)
+    return {"ok": True}
+
+
+@router.delete("/brain/docs/{doc_id}")
+async def brain_forget(doc_id: int, request: Request) -> dict:
+    if not await _brain(request).forget(doc_id):
+        raise HTTPException(404, "Documento inesistente")
+    return {"ok": True}
+
+
+@router.get("/brain/stats")
+async def brain_stats(request: Request) -> dict:
+    return await _brain(request).stats()
