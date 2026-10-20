@@ -173,3 +173,34 @@ async def test_voice_flag_adds_spoken_style_instruction():
     await agent.reply("ciao", "t", voice=False)
     assert "AD ALTA VOCE" in agent.llm.calls[0][0]["content"]
     assert "AD ALTA VOCE" not in agent.llm.calls[1][0]["content"]
+
+
+@pytest.mark.asyncio
+async def test_unified_key_is_read_from_freellm_db(tmp_path):
+    import sqlite3
+
+    import httpx
+
+    from app.llm import LLMClient, LLMError
+
+    db = tmp_path / "f.db"
+    seen = {}
+
+    def handler(req):
+        seen["auth"] = req.headers["authorization"]
+        return httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}]})
+
+    s = Settings(freellm_base_url="http://x/v1", freellm_db_path=str(db))
+    llm = LLMClient(s, httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+
+    # DB non ancora creata: errore chiaro, nessun crash
+    with pytest.raises(LLMError):
+        llm._api_key()
+
+    con = sqlite3.connect(db)
+    con.execute("create table settings (key text primary key, value text)")
+    con.execute("insert into settings values ('unified_api_key', 'freellmapi-abc')")
+    con.commit()
+    con.close()
+    assert (await llm.chat([{"role": "user", "content": "x"}]))["content"] == "ok"
+    assert seen["auth"] == "Bearer freellmapi-abc"
