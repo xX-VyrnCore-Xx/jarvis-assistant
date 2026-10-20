@@ -59,7 +59,7 @@ async def status(request: Request) -> dict:
         "freellm": {"enabled": st.budget.enabled, "ready": await st.admin.ready() if st.budget.enabled else False},
         "pc_connected": st.pc.connected,
         "telegram": st.tg.enabled,
-        "google": bool(s.google_refresh_token),
+        "google": st.google.enabled,
         "memory": "supabase" if s.supabase_url and s.supabase_service_key else "ram",
         "voice": st.voice.enabled,
         "pending_actions": len(st.pending.list_pending()),

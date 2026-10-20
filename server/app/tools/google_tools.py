@@ -34,6 +34,10 @@ def _body_text(payload: dict) -> str:
 def register_google_tools(reg: ToolRegistry, settings: Settings, g: GoogleClient, pending: PendingStore) -> None:
     tz = ZoneInfo(settings.timezone)
 
+    def R(name, description, parameters, fn):
+        # i tool compaiono solo quando Google è davvero collegato (anche dopo il collegamento guidato, senza riavvio)
+        reg.register(name, description, parameters, fn, available=lambda: g.enabled)
+
     async def gmail_search(query: str, max_results: int = 5) -> str:
         r = await g.request("GET", f"{GMAIL}/messages", params={"q": query, "maxResults": min(max_results, 10)})
         out = []
@@ -138,16 +142,16 @@ def register_google_tools(reg: ToolRegistry, settings: Settings, g: GoogleClient
     obj = lambda props, req: {"type": "object", "properties": props, "required": req}  # noqa: E731
     s_ = {"type": "string"}
     i_ = {"type": "integer"}
-    reg.register("gmail_search", "Cerca email (sintassi Gmail, es. 'is:unread from:mario').", obj({"query": s_, "max_results": i_}, ["query"]), gmail_search)
-    reg.register("gmail_read", "Legge il contenuto di una email dato il suo id.", obj({"message_id": s_}, ["message_id"]), gmail_read)
-    reg.register("gmail_create_draft", "Crea una bozza email (NON la invia).", obj({"to": s_, "subject": s_, "body": s_}, ["to", "subject", "body"]), gmail_create_draft)
-    reg.register("gmail_send_draft", "Chiede all'utente di approvare l'invio di una bozza (non la invia da sola: serve la sua conferma nell'app o su Telegram).", obj({"draft_id": s_}, ["draft_id"]), gmail_send_draft)
-    reg.register("calendar_list_events", "Elenca i prossimi eventi del calendario.", obj({"days": i_}, []), calendar_list_events)
-    reg.register(
+    R("gmail_search", "Cerca email (sintassi Gmail, es. 'is:unread from:mario').", obj({"query": s_, "max_results": i_}, ["query"]), gmail_search)
+    R("gmail_read", "Legge il contenuto di una email dato il suo id.", obj({"message_id": s_}, ["message_id"]), gmail_read)
+    R("gmail_create_draft", "Crea una bozza email (NON la invia).", obj({"to": s_, "subject": s_, "body": s_}, ["to", "subject", "body"]), gmail_create_draft)
+    R("gmail_send_draft", "Chiede all'utente di approvare l'invio di una bozza (non la invia da sola: serve la sua conferma nell'app o su Telegram).", obj({"draft_id": s_}, ["draft_id"]), gmail_send_draft)
+    R("calendar_list_events", "Elenca i prossimi eventi del calendario.", obj({"days": i_}, []), calendar_list_events)
+    R(
         "calendar_create_event",
         "Crea un evento. 'start' è data/ora locale ISO 8601; calcolala da get_datetime.",
         obj({"summary": s_, "start": s_, "duration_minutes": i_, "description": s_}, ["summary", "start"]),
         calendar_create_event,
     )
-    reg.register("drive_search", "Cerca file su Google Drive per contenuto o nome.", obj({"query": s_}, ["query"]), drive_search)
-    reg.register("drive_read", "Legge il testo di un file di Drive (Docs, Sheets, testo).", obj({"file_id": s_}, ["file_id"]), drive_read)
+    R("drive_search", "Cerca file su Google Drive per contenuto o nome.", obj({"query": s_}, ["query"]), drive_search)
+    R("drive_read", "Legge il testo di un file di Drive (Docs, Sheets, testo).", obj({"file_id": s_}, ["file_id"]), drive_read)

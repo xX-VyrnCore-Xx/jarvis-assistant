@@ -15,6 +15,7 @@ COMMANDS = [
     ("token", "Token gratuiti rimasti"),
     ("promemoria", "Promemoria attivi (con elimina)"),
     ("ricordi", "Cosa ricordo di te (con elimina)"),
+    ("google", "Collega Gmail, Calendar e Drive"),
     ("nuova", "Azzera la conversazione"),
 ]
 
@@ -115,7 +116,9 @@ class TelegramBot:
                 f"• Intelligenza: {'pronta' if (await st.admin.ready() if st.budget.enabled else True) else 'in avvio'}",
                 f"• PC Windows: {'collegato' if st.pc.connected else 'scollegato'}",
                 f"• Voce sul PC: {'sì' if st.voice.enabled else 'no'}",
-                f"• Google: {'collegato' if s.google_refresh_token else 'non collegato'}",
+                f"• Google: {'collegato' if st.google.enabled else 'non collegato (usa /google)' if st.google.has_client else 'non configurato'}",
+                f"• Notifiche push Android: {'attive' if st.notifier.fcm.enabled else 'non configurate'}",
+                f"• Backup su Hugging Face: {'attivo' if st.backup.enabled else 'non configurato'}",
                 f"• Memoria: {'permanente (Supabase)' if s.supabase_url and s.supabase_service_key else 'temporanea'}",
                 f"• Conferme in attesa: {len(st.pending.list_pending())}",
             ]
@@ -141,6 +144,16 @@ class TelegramBot:
                 return await self.tg.send(chat_id, "La memoria è vuota, signore.")
             keys = [[{"text": f"🗑 {m['content'][:28]}", "callback_data": f"md:{m['id']}"}] for m in rows[:10]]
             return await self.tg.send(chat_id, "<b>Ricordi</b>\n" + "\n".join(f"• {m['content']}" for m in rows), {"inline_keyboard": keys})
+        if cmd == "google":
+            if not st.google.has_client:
+                return await self.tg.send(chat_id, "Mancano GOOGLE_CLIENT_ID e GOOGLE_CLIENT_SECRET su Render, signore.")
+            base = (self.s.public_url or self.s.render_external_url).rstrip("/")
+            if not base:
+                return await self.tg.send(chat_id, "Indirizzo pubblico del server non noto: imposta PUBLIC_URL su Render.")
+            url = st.google.authorize_url(f"{base}/google/callback")
+            return await self.tg.send(chat_id, f"Autorizzi l'accesso a Gmail, Calendar e Drive (il link vale 10 minuti). "
+                                               f"Il redirect da registrare su Google Cloud è <code>{base}/google/callback</code>.",
+                                      {"inline_keyboard": [[{"text": "Collega Google", "url": url}]]})
         if cmd == "nuova":
             await st.store.clear_messages(f"tg-{chat_id}")
             return await self.tg.send(chat_id, "Conversazione azzerata. I ricordi a lungo termine restano, signore.")

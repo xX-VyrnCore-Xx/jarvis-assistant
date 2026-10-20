@@ -25,6 +25,8 @@ class Store(Protocol):
     async def upsert_device(self, platform: str, token: str, label: str) -> None: ...
     async def list_devices(self) -> list[dict]: ...
     async def delete_device(self, token: str) -> None: ...
+    async def get_setting(self, key: str) -> str: ...
+    async def set_setting(self, key: str, value: str) -> None: ...
     async def prune(self) -> None: ...
 
 
@@ -37,6 +39,7 @@ class MemoryStore:
         self.reminders: list[dict] = []
         self.notifications: list[dict] = []
         self.devices: dict[str, dict] = {}
+        self.settings: dict[str, str] = {}
 
     async def add_message(self, session_id, role, content):
         self.messages.append({"session_id": session_id, "role": role, "content": content})
@@ -104,6 +107,12 @@ class MemoryStore:
 
     async def delete_device(self, token):
         self.devices.pop(token, None)
+
+    async def get_setting(self, key):
+        return self.settings.get(key, "")
+
+    async def set_setting(self, key, value):
+        self.settings[key] = value
 
     async def prune(self):
         pass
@@ -224,6 +233,16 @@ class SupabaseStore:
 
     async def delete_device(self, token):
         r = await self._client.delete(f"{self.base}/devices", params={"token": f"eq.{token}"}, headers=self.headers)
+        r.raise_for_status()
+
+    async def get_setting(self, key):
+        rows = await self._get("app_settings", {"select": "value", "key": f"eq.{key}"})
+        return rows[0]["value"] if rows else ""
+
+    async def set_setting(self, key, value):
+        h = {**self.headers, "Prefer": "resolution=merge-duplicates,return=minimal"}
+        r = await self._client.post(f"{self.base}/app_settings", params={"on_conflict": "key"},
+                                    json={"key": key, "value": value, "updated_at": datetime.now(timezone.utc).isoformat()}, headers=h)
         r.raise_for_status()
 
     async def prune(self):
