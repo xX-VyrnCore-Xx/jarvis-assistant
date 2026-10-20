@@ -26,6 +26,10 @@ class Settings(BaseSettings):
     render_external_url: str = ""
     reminder_poll_s: float = 30.0
 
+    google_client_id: str = ""
+    google_client_secret: str = ""
+    google_refresh_token: str = ""
+
     history_messages: int = 20
     memory_hits: int = 5
 

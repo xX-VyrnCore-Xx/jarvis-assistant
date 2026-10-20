@@ -3,7 +3,7 @@ import logging
 import secrets
 from contextlib import asynccontextmanager
 
-from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Request
+from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Request, WebSocket
 from pydantic import BaseModel, Field
 
 from .agent import Agent
@@ -11,10 +11,14 @@ from .auth import require_token
 from .config import get_settings
 from .llm import LLMClient, LLMError
 from .memory import build_store
+from .pc import PCBridge
 from .scheduler import reminder_loop
 from .telegram import Telegram
 from .tools import ToolRegistry
+from .google import GoogleClient
 from .tools.basic import register_basic_tools
+from .tools.google_tools import register_google_tools
+from .tools.pc_tools import register_pc_tools
 
 
 class ChatIn(BaseModel):
@@ -32,6 +36,11 @@ async def lifespan(app: FastAPI):
     store = build_store(settings)
     tools = ToolRegistry()
     register_basic_tools(tools, settings, store)
+    pc = app.state.pc = PCBridge()
+    register_pc_tools(tools, pc)
+    google = GoogleClient(settings)
+    if google.enabled:
+        register_google_tools(tools, settings, google)
     app.state.agent = Agent(settings, LLMClient(settings), store, tools)
     tg = app.state.tg = Telegram(settings)
     app.state.settings = settings
@@ -94,3 +103,8 @@ async def telegram_webhook(
         # risposta immediata a Telegram; l'elaborazione (lenta) va in background per evitare retry
         background.add_task(_handle_telegram_text, msg["chat"]["id"], msg["text"])
     return {"ok": True}
+
+
+@app.websocket("/ws/pc")
+async def ws_pc(ws: WebSocket) -> None:
+    await app.state.pc.serve(ws, app.state.settings.jarvis_api_token)

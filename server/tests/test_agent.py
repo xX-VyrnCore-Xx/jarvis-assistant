@@ -125,3 +125,42 @@ def test_telegram_webhook_whitelist(monkeypatch):
         assert c.post("/telegram/webhook", json=upd(42), headers=h).status_code == 200
     assert handled == [(42, "ciao")]
     get_settings.cache_clear()
+
+
+def test_pc_bridge_roundtrip(monkeypatch):
+    monkeypatch.setenv("JARVIS_API_TOKEN", "secret")
+    from app import main
+    from app.config import get_settings
+
+    get_settings.cache_clear()
+    with TestClient(main.app) as c:
+        # token errato: chiusura
+        with c.websocket_connect("/ws/pc") as ws:
+            ws.send_json({"token": "no"})
+            with pytest.raises(Exception):
+                ws.receive_json()
+        assert not main.app.state.pc.connected
+
+        with c.websocket_connect("/ws/pc") as ws:
+            ws.send_json({"token": "secret"})
+            assert ws.receive_json() == {"type": "ready"}
+            import threading
+
+            out = {}
+            t = threading.Thread(
+                target=lambda: out.update(r=c.portal.call(main.app.state.pc.call, "pc_lock", {}, 5))
+            )
+            t.start()
+            cmd = ws.receive_json()
+            assert cmd["action"] == "pc_lock"
+            ws.send_json({"type": "result", "id": cmd["id"], "output": "Bloccato."})
+            t.join(5)
+            assert out["r"] == "Bloccato."
+    get_settings.cache_clear()
+
+
+@pytest.mark.asyncio
+async def test_pc_call_without_connection():
+    from app.pc import PCBridge
+
+    assert "non è connesso" in await PCBridge().call("pc_lock", {})
