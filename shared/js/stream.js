@@ -8,7 +8,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
  * @param {{onNotification: (n: object) => void, onState?: (s: "on"|"off"|"auth") => void}} h
  * @returns {() => void} funzione che chiude il flusso
  */
-export function openStream(cfg, { onNotification, onState = () => {} }) {
+export function openStream(cfg, { onNotification, onRead = () => {}, onState = () => {} }) {
   let stopped = false;
   let ctrl;
   let retry = 0;
@@ -20,8 +20,12 @@ export function openStream(cfg, { onNotification, onState = () => {} }) {
       if (line.startsWith("event:")) event = line.slice(6).trim();
       else if (line.startsWith("data:")) data += line.slice(5).trim();
     }
-    if (event !== "notification" || !data) return;
-    try { onNotification(JSON.parse(data)); } catch { /* messaggio malformato: ignorato */ }
+    if (!data) return;
+    try {
+      const msg = JSON.parse(data);
+      if (event === "notification") onNotification(msg);
+      else if (event === "read") onRead(msg.ids);
+    } catch { /* messaggio malformato: ignorato */ }
   };
 
   (async () => {

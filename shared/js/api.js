@@ -73,7 +73,60 @@ export class Jarvis {
 
   health() { return this.#req("/health", { auth: false, timeout: 70_000 }); }
   chat(message, session) { return this.#req("/chat", { method: "POST", body: { message, session_id: session }, timeout: 120_000 }).then((r) => r.reply); }
+  /** Risposta in streaming: onStatus(testo) durante i tool, onDelta(testo) mentre scrive. Restituisce la risposta intera. Se il server è vecchio ripiega su /chat. */
+  async chatStream(message, session, { model = "", onStatus = () => {}, onDelta = () => {}, signal } = {}) {
+    let res;
+    try {
+      res = await fetch(`${this.cfg.url()}/chat/stream`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${this.cfg.token()}`, "Content-Type": "application/json", Accept: "text/event-stream" },
+        body: JSON.stringify({ message, session_id: session, model: model || undefined }),
+        signal,
+      });
+    } catch (e) {
+      if (e.name === "AbortError") throw e;
+      throw new ApiError(0, "Server non raggiungibile: si sta svegliando o manca la rete.");
+    }
+    if (res.status === 404) return this.chat(message, session);
+    if (!res.ok || !res.body) {
+      let detail = "";
+      try { detail = (await res.json()).detail || ""; } catch { /* non JSON */ }
+      throw new ApiError(res.status, (typeof detail === "string" && detail) || HUMAN[res.status] || `Errore del server (${res.status}).`, res.headers.get("retry-after"));
+    }
+    const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
+    let buf = "", final = "", streamed = "";
+    const handle = (block) => {
+      let ev = "message", data = "";
+      for (const line of block.split("\n")) {
+        if (line.startsWith("event:")) ev = line.slice(6).trim();
+        else if (line.startsWith("data:")) data += line.slice(5).trim();
+      }
+      if (!data) return;
+      let text = "";
+      try { text = JSON.parse(data).text || ""; } catch { return; }
+      if (ev === "status") onStatus(text);
+      else if (ev === "delta") { streamed += text; onDelta(text); }
+      else if (ev === "done") final = text;
+      else if (ev === "error") throw new ApiError(502, text || "Errore del server.");
+    };
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += value;
+      let i;
+      while ((i = buf.indexOf("\n\n")) >= 0) { handle(buf.slice(0, i)); buf = buf.slice(i + 2); }
+    }
+    return final || streamed;
+  }
   status() { return this.#get("/api/status"); }
+  models() { return this.#get("/api/models"); }
+  usage(days = 14) { return this.#get(`/api/usage?days=${days}`); }
+  serverHealth() { return this.#get("/api/health"); }
+  appUpdate(platform, version) { return this.#req(`/api/app/update?platform=${platform}&version=${encodeURIComponent(version)}`, { timeout: 20_000 }); }
+  notifyPrefs() { return this.#get("/api/notify/prefs"); }
+  setNotifyPrefs(patch) { return this.#req("/api/notify/prefs", { method: "POST", body: patch }); }
+  snooze(id, minutes) { return this.#req(`/api/notifications/${id}/snooze`, { method: "POST", body: { minutes } }); }
+  clearNotifications() { return this.#req("/api/notifications?read_only=true", { method: "DELETE" }); }
   tokens(refresh = false) { return this.#get(`/api/tokens${refresh ? "?refresh=true" : ""}`); }
   history(session, limit = 40) { return this.#get(`/api/history?session_id=${encodeURIComponent(session)}&limit=${limit}`); }
   reminders() { return this.#get("/api/reminders"); }

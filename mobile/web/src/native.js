@@ -50,3 +50,19 @@ export async function startDictation(onText, onEnd) {
 export function stopDictation() {
   return SpeechRecognition.stop().catch(() => {});
 }
+
+/** Versione installata dell'app (nel browser di prova: nessuna). */
+export async function appVersion() {
+  if (!isNative) return "";
+  try { return (await App.getInfo()).version; } catch { return ""; }
+}
+
+/** Apre un indirizzo fuori dall'app (per l'APK: lo scarica il browser, poi Android propone l'installazione). */
+export async function openExternal(url) {
+  if (isNative) {
+    try { await App.openUrl({ url }); return; } catch { /* ripiego sotto */ }
+  }
+  window.open(url, "_blank", "noopener");
+}
+
+export const platform = Capacitor.getPlatform();
