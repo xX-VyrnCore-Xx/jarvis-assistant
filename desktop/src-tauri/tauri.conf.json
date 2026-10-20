@@ -11,7 +11,7 @@
   },
   "app": {
     "windows": [
-      { "label": "main", "title": "JARVIS", "width": 420, "height": 680, "minWidth": 340, "minHeight": 420, "visible": false }
+      { "label": "main", "title": "JARVIS", "width": 1180, "height": 760, "minWidth": 900, "minHeight": 620, "visible": false }
     ],
     "security": {
       "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost https: wss:; style-src 'self' 'unsafe-inline'; img-src 'self' data:"

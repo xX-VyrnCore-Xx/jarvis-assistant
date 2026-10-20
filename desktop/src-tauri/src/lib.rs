@@ -41,6 +41,45 @@ fn show_window(app: AppHandle) {
     show(&app);
 }
 
+// Il token personale sta nel Gestore credenziali di Windows, non in un file in chiaro.
+fn secret_entry() -> Result<keyring::Entry, String> {
+    keyring::Entry::new("JARVIS", "api-token").map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn secret_get() -> Result<Option<String>, String> {
+    match secret_entry()?.get_password() {
+        Ok(v) => Ok(Some(v)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+#[tauri::command]
+fn secret_set(value: String) -> Result<(), String> {
+    secret_entry()?.set_password(&value).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn secret_delete() -> Result<(), String> {
+    match secret_entry()?.delete_credential() {
+        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+#[tauri::command]
+fn autostart_get(app: AppHandle) -> Result<bool, String> {
+    app.autolaunch().is_enabled().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn autostart_set(app: AppHandle, enabled: bool) -> Result<(), String> {
+    let launcher = app.autolaunch();
+    let result = if enabled { launcher.enable() } else { launcher.disable() };
+    result.map_err(|e| e.to_string())
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -58,7 +97,6 @@ pub fn run() {
         .setup(|app| {
             // Alt+Spazio mostra/nasconde JARVIS ovunque
             app.global_shortcut().register(Shortcut::new(Some(Modifiers::ALT), Code::Space))?;
-            let _ = app.autolaunch().enable();
 
             let open = MenuItem::with_id(app, "open", "Apri JARVIS", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Esci", true, None::<&str>)?;
@@ -93,7 +131,7 @@ pub fn run() {
                 let _ = window.hide();
             }
         })
-        .invoke_handler(tauri::generate_handler![run_action, notify, show_window])
+        .invoke_handler(tauri::generate_handler![run_action, notify, show_window, secret_get, secret_set, secret_delete, autostart_get, autostart_set])
         .run(tauri::generate_context!())
         .expect("errore nell'avvio di JARVIS");
 }
