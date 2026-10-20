@@ -19,6 +19,13 @@ class Settings(BaseSettings):
     supabase_url: str = ""
     supabase_service_key: str = ""
 
+    telegram_bot_token: str = ""
+    telegram_owner_id: int = 0
+    telegram_webhook_secret: str = ""
+    public_url: str = ""  # su Render viene da RENDER_EXTERNAL_URL
+    render_external_url: str = ""
+    reminder_poll_s: float = 30.0
+
     history_messages: int = 20
     memory_hits: int = 5
 

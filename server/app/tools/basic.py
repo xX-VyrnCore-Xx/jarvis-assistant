@@ -31,6 +31,19 @@ def register_basic_tools(reg: ToolRegistry, settings: Settings, store: Store) ->
         results = await asyncio.to_thread(_search)
         return "\n\n".join(f"{r['title']}\n{r['href']}\n{r['body']}" for r in results) or "Nessun risultato."
 
+    async def add_reminder(text: str, when: str) -> str:
+        tz = ZoneInfo(settings.timezone)
+        due = datetime.fromisoformat(when)
+        due = due.replace(tzinfo=tz) if due.tzinfo is None else due.astimezone(tz)
+        if due <= datetime.now(tz):
+            return "Errore: la data del promemoria è nel passato. Usa get_datetime e riprova."
+        await store.add_reminder(text, due)
+        return f"Promemoria fissato per {due:%d/%m/%Y %H:%M}."
+
+    async def list_reminders() -> str:
+        rows = await store.list_reminders()
+        return "\n".join(f"- {r['due_at']}: {r['text']}" for r in rows) or "Nessun promemoria attivo."
+
     reg.register("get_datetime", "Data e ora correnti.", {"type": "object", "properties": {}}, get_datetime)
     reg.register(
         "remember",
@@ -49,4 +62,20 @@ def register_basic_tools(reg: ToolRegistry, settings: Settings, store: Store) ->
         "Cerca sul web informazioni aggiornate (notizie, meteo, fatti recenti).",
         {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
         web_search,
+    )
+    reg.register(
+        "add_reminder",
+        "Crea un promemoria: l'utente riceverà un messaggio all'ora indicata. Calcola 'when' partendo da get_datetime.",
+        {
+            "type": "object",
+            "properties": {
+                "text": {"type": "string", "description": "Cosa ricordare"},
+                "when": {"type": "string", "description": "Data/ora locale ISO 8601, es. 2026-10-21T09:30:00"},
+            },
+            "required": ["text", "when"],
+        },
+        add_reminder,
+    )
+    reg.register(
+        "list_reminders", "Elenca i promemoria attivi.", {"type": "object", "properties": {}}, list_reminders
     )

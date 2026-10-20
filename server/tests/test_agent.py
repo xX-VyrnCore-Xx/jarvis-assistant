@@ -68,3 +68,60 @@ def test_health_open_and_chat_requires_token(monkeypatch):
         assert c.post("/chat", json={"message": "hi"}).status_code == 401
         assert c.post("/chat", json={"message": "hi"}, headers={"Authorization": "Bearer no"}).status_code == 401
     get_settings.cache_clear()
+
+
+@pytest.mark.asyncio
+async def test_reminder_tool_and_delivery():
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+
+    from app.scheduler import deliver_due_reminders
+
+    s = Settings(jarvis_api_token="t")
+    store = MemoryStore()
+    reg = ToolRegistry()
+    register_basic_tools(reg, s, store)
+    tz = ZoneInfo(s.timezone)
+
+    past = (datetime.now(tz) - timedelta(minutes=1)).isoformat()
+    assert "passato" in await reg.call("add_reminder", json.dumps({"text": "x", "when": past}))
+
+    soon = (datetime.now(tz) + timedelta(hours=1)).replace(tzinfo=None).isoformat()
+    assert "fissato" in await reg.call("add_reminder", json.dumps({"text": "chiama Luca", "when": soon}))
+
+    class FakeTG:
+        sent = []
+
+        async def notify_owner(self, text):
+            self.sent.append(text)
+
+    tg = FakeTG()
+    assert await deliver_due_reminders(store, tg, datetime.now(tz)) == 0
+    assert await deliver_due_reminders(store, tg, datetime.now(tz) + timedelta(hours=2)) == 1
+    assert "chiama Luca" in tg.sent[0]
+    assert await deliver_due_reminders(store, tg, datetime.now(tz) + timedelta(hours=2)) == 0
+
+
+def test_telegram_webhook_whitelist(monkeypatch):
+    monkeypatch.setenv("JARVIS_API_TOKEN", "t")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123:abc")
+    monkeypatch.setenv("TELEGRAM_OWNER_ID", "42")
+    monkeypatch.setenv("TELEGRAM_WEBHOOK_SECRET", "sec")
+    from app import main
+    from app.config import get_settings
+
+    get_settings.cache_clear()
+    handled = []
+
+    async def fake(chat_id, text):
+        handled.append((chat_id, text))
+
+    monkeypatch.setattr(main, "_handle_telegram_text", fake)
+    upd = lambda uid: {"message": {"from": {"id": uid}, "chat": {"id": uid}, "text": "ciao"}}  # noqa: E731
+    with TestClient(main.app) as c:
+        assert c.post("/telegram/webhook", json=upd(42)).status_code == 403
+        h = {"X-Telegram-Bot-Api-Secret-Token": "sec"}
+        assert c.post("/telegram/webhook", json=upd(99), headers=h).status_code == 200
+        assert c.post("/telegram/webhook", json=upd(42), headers=h).status_code == 200
+    assert handled == [(42, "ciao")]
+    get_settings.cache_clear()

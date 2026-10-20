@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Protocol
 
 import httpx
@@ -10,6 +11,10 @@ class Store(Protocol):
     async def recent_messages(self, session_id: str, limit: int) -> list[dict]: ...
     async def add_memory(self, content: str) -> None: ...
     async def search_memories(self, query: str, limit: int) -> list[str]: ...
+    async def add_reminder(self, text: str, due_at: datetime) -> None: ...
+    async def list_reminders(self) -> list[dict]: ...
+    async def due_reminders(self, now: datetime) -> list[dict]: ...
+    async def mark_reminder_done(self, reminder_id: int) -> None: ...
 
 
 class MemoryStore:
@@ -18,6 +23,7 @@ class MemoryStore:
     def __init__(self) -> None:
         self.messages: list[dict] = []
         self.memories: list[str] = []
+        self.reminders: list[dict] = []
 
     async def add_message(self, session_id, role, content):
         self.messages.append({"session_id": session_id, "role": role, "content": content})
@@ -33,6 +39,21 @@ class MemoryStore:
         words = [w for w in query.lower().split() if len(w) > 2]
         hits = [m for m in self.memories if any(w in m.lower() for w in words)]
         return hits[-limit:]
+
+
+    async def add_reminder(self, text, due_at):
+        self.reminders.append({"id": len(self.reminders) + 1, "text": text, "due_at": due_at.isoformat(), "done": False})
+
+    async def list_reminders(self):
+        return sorted((r for r in self.reminders if not r["done"]), key=lambda r: r["due_at"])
+
+    async def due_reminders(self, now):
+        return [r for r in await self.list_reminders() if datetime.fromisoformat(r["due_at"]) <= now]
+
+    async def mark_reminder_done(self, reminder_id):
+        for r in self.reminders:
+            if r["id"] == reminder_id:
+                r["done"] = True
 
 
 class SupabaseStore:
@@ -85,6 +106,27 @@ class SupabaseStore:
             },
         )
         return [r["content"] for r in rows]
+
+
+    async def add_reminder(self, text, due_at):
+        await self._insert("reminders", {"text": text, "due_at": due_at.isoformat()})
+
+    async def list_reminders(self):
+        return await self._get(
+            "reminders", {"select": "id,text,due_at", "done": "eq.false", "order": "due_at.asc", "limit": 50}
+        )
+
+    async def due_reminders(self, now):
+        return await self._get(
+            "reminders",
+            {"select": "id,text,due_at", "done": "eq.false", "due_at": f"lte.{now.isoformat()}", "order": "due_at.asc"},
+        )
+
+    async def mark_reminder_done(self, reminder_id):
+        r = await self._client.patch(
+            f"{self.base}/reminders", params={"id": f"eq.{reminder_id}"}, json={"done": True}, headers=self.headers
+        )
+        r.raise_for_status()
 
 
 def build_store(settings: Settings) -> Store:
