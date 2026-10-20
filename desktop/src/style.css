@@ -151,3 +151,10 @@ button, input, textarea { font: inherit; color: inherit; }
 
 .voice-box { margin-top: 14px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 13px; background: var(--panel2); }
 .voice-log { margin: 10px 0 0; max-height: 160px; overflow: auto; font: 11px/1.5 var(--mono); color: var(--muted); white-space: pre-wrap; }
+
+/* secondo cervello */
+.brain-note { flex: 1; resize: none; background: var(--panel2); border: 1px solid var(--line); border-radius: 12px; padding: 10px 14px; color: var(--text); font: inherit; outline: none; } .brain-note:focus { border-color: var(--cy); }
+.brain-cols { display: grid; grid-template-columns: minmax(260px, 1fr) minmax(0, 1.2fr); gap: 16px; align-items: start; } .brain-cols:has(> .list:only-child) { grid-template-columns: 1fr; }
+.brain-item { text-align: left; width: 100%; cursor: pointer; color: inherit; font: inherit; } .brain-item:hover, .brain-item.on { border-color: var(--cy); }
+.brain-doc { position: sticky; top: 0; padding: 16px 18px; border: 1px solid var(--line); border-radius: 14px; background: var(--panel2); display: flex; flex-direction: column; gap: 10px; } .brain-doc h2 { margin: 0; font-size: 18px; }
+.brain-text { margin: 0; max-height: 46vh; overflow: auto; white-space: pre-wrap; font: 13px/1.55 var(--mono); color: var(--text); opacity: .9; }

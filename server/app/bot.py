@@ -16,6 +16,9 @@ COMMANDS = [
     ("promemoria", "Promemoria attivi (con elimina)"),
     ("ricordi", "Cosa ricordo di te (con elimina)"),
     ("google", "Collega Gmail, Calendar e Drive"),
+    ("nota", "Salva una nota nel secondo cervello"),
+    ("cerca", "Cerca nel secondo cervello"),
+    ("cervello", "Statistiche del secondo cervello"),
     ("liste", "Liste e attività (spesa, da fare)"),
     ("nuova", "Azzera la conversazione"),
 ]
@@ -27,6 +30,8 @@ Scrivetemi in linguaggio naturale: agenda, email, meteo, ricerche, promemoria, c
 /token — token gratuiti rimasti
 /promemoria — promemoria attivi
 /ricordi — cosa ricordo di lei
+/nota testo — salva nel secondo cervello
+/cerca testo — cerca nel secondo cervello
 /liste — liste e attività
 /nuova — azzera la conversazione
 
@@ -76,12 +81,14 @@ class TelegramBot:
     async def _message(self, msg: dict) -> None:
         chat_id = msg["chat"]["id"]
         text = (msg.get("text") or "").strip()
+        if (doc := msg.get("document")) and not text:
+            return await self._document(chat_id, doc, (msg.get("caption") or "").strip())
         if not text:
             kind = "vocale" if "voice" in msg or "audio" in msg else "foto" if "photo" in msg else "documento" if "document" in msg else "contenuto"
             return await self.tg.send(chat_id, f"Per ora leggo solo testo, signore: il {kind} non so ancora interpretarlo.")
         if text.startswith("/"):
             cmd = text.split()[0][1:].split("@")[0].lower()
-            return await self._command(chat_id, cmd)
+            return await self._command(chat_id, cmd, text.partition(" ")[2].strip())
         async with self._lock(chat_id):
             await self._ask(chat_id, text)
 
@@ -106,8 +113,28 @@ class TelegramBot:
             indicator.cancel()
         await self.tg.send(chat_id, reply or "…")
 
+    async def _document(self, chat_id: int, doc: dict, caption: str) -> None:
+        """File inviati al bot (txt, md, pdf fino a 4 MB) entrano nel secondo cervello."""
+        name = doc.get("file_name", "documento")
+        ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+        if ext not in ("txt", "md", "pdf") or (doc.get("file_size") or 0) > 4_000_000:
+            return await self.tg.send(chat_id, "Posso leggere solo file .txt, .md e .pdf fino a 4 MB, signore.")
+        raw = await self.tg.download_file(doc["file_id"])
+        if ext == "pdf":
+            import io
+
+            from pypdf import PdfReader
+
+            text = "\n\n".join((p.extract_text() or "") for p in PdfReader(io.BytesIO(raw)).pages[:200])
+        else:
+            text = raw.decode("utf-8", errors="replace")
+        if len(text.strip()) < 20:
+            return await self.tg.send(chat_id, "Non riesco a estrarre testo da questo file (forse è una scansione).")
+        r = await self.app.state.brain.ingest(text, title=name, source="file", uri=f"file:{name}", tags=[caption] if caption else None, importance=0.6)
+        await self.tg.send(chat_id, f"«{name}» salvato nel secondo cervello (#{r['doc_id']}, {r['chunks']} frammenti, {r['status']}).")
+
     # ------------------------------------------------------------------ comandi
-    async def _command(self, chat_id: int, cmd: str) -> None:
+    async def _command(self, chat_id: int, cmd: str, arg: str = "") -> None:
         st = self.app.state
         if cmd in ("start", "aiuto", "help"):
             return await self.tg.send(chat_id, HELP.format(owner=self.s.owner_name))
@@ -156,6 +183,23 @@ class TelegramBot:
             return await self.tg.send(chat_id, f"Autorizzi l'accesso a Gmail, Calendar e Drive (il link vale 10 minuti). "
                                                f"Il redirect da registrare su Google Cloud è <code>{base}/google/callback</code>.",
                                       {"inline_keyboard": [[{"text": "Collega Google", "url": url}]]})
+        if cmd in ("nota", "cerca", "cervello"):
+            brain = st.brain
+            if not brain.enabled:
+                return await self.tg.send(chat_id, "Il secondo cervello è disattivato, signore.")
+            if cmd == "cervello":
+                x = await brain.stats()
+                return await self.tg.send(chat_id, f"<b>Secondo cervello</b>\n• {x['docs']} documenti, {x['chunks']} frammenti ({x['vectors']} con vettore)\n• {x['entities']} entità\n"
+                                                    f"• Fonti: {', '.join(f'{k} {v}' for k, v in x['by_source'].items()) or 'vuoto'}\n• Modello: {x['model']}")
+            if not arg:
+                return await self.tg.send(chat_id, f"Scriva ad esempio: /{cmd} " + ("riunione con Luca: decidiamo il budget a gennaio" if cmd == "nota" else "budget con Luca"))
+            if cmd == "nota":
+                r = await brain.ingest(arg, source="note", importance=0.6)
+                return await self.tg.send(chat_id, f"Annotato nel secondo cervello (#{r['doc_id']})." if r["status"] != "duplicato" else f"Già presente (#{r['doc_id']}).")
+            from .brain.tools import format_results
+
+            res = await brain.search(arg, k=5)
+            return await self.tg.send(chat_id, format_results(res, 300) if res else "Non trovo nulla di pertinente, signore.")
         if cmd == "liste":
             rows = await st.store.list_tasks(None, False)
             if not rows:

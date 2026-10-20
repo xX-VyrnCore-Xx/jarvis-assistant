@@ -19,7 +19,7 @@ Adesso è {now}.
 Come usare i tool:
 - Più tool indipendenti vanno chiamati insieme nello stesso turno (es. meteo di due città, agenda e email).
 - `calculate` per ogni calcolo; `date_info` per giorni della settimana e calcoli con le date; `convert_currency` per i cambi; `wikipedia` per fatti enciclopedici; `web_news` per le notizie; `get_weather` per il meteo; `web_search` poi `read_webpage` per approfondire una fonte.
-- `remember`/`recall`/`list_memories`/`forget` per la memoria a lungo termine: salva solo ciò che è duraturo (preferenze, persone, dati personali).
+- `remember`/`recall`/`list_memories`/`forget` per i ricordi brevi; `brain_*` per il secondo cervello: `brain_add_note` per note, idee, riunioni, decisioni; `brain_search` quando serve ritrovare qualcosa di passato (cita gli id [#n]); `brain_save_url` per conservare una pagina; `brain_related` per i collegamenti. Il contesto pertinente del secondo cervello è già nel prompt: usalo senza ripeterlo. Salva solo ciò che è duraturo.
 - `add_reminder`/`remind_in`/`reminder_snooze`/`list_reminders`/`delete_reminder` per i promemoria; `task_*` per liste (da fare, spesa); `crypto_price`, `world_time`, `unit_convert` per prezzi, orari nel mondo e conversioni; calcola "when" da data e ora qui sopra.
 - `send_notification` per mandare un avviso alle app dell'utente.
 - Con i tool `pc_*` agisci sul PC Windows dell'utente (app, siti, file, volume, luminosità, blocco/spegnimento).
@@ -34,14 +34,15 @@ _GIORNI = ["lunedì", "martedì", "mercoledì", "giovedì", "venerdì", "sabato"
 
 
 class Agent:
-    def __init__(self, settings: Settings, llm: LLMClient, store: Store, tools: ToolRegistry):
-        self.s, self.llm, self.store, self.tools = settings, llm, store, tools
+    def __init__(self, settings: Settings, llm: LLMClient, store: Store, tools: ToolRegistry, brain=None):
+        self.s, self.llm, self.store, self.tools, self.brain = settings, llm, store, tools, brain
 
     async def reply(self, user_text: str, session_id: str, voice: bool = False) -> str:
         # privacy: ciò che va ai provider passa da un filtro che sostituisce dati sensibili con segnaposto (reversibili qui sotto)
         red = Redactor(self.s.privacy_mode)
         history = [{**m, "content": red.mask(m["content"])} for m in await self.store.recent_messages(session_id, self.s.history_messages)]
-        memories = [red.mask(m) for m in await self.store.search_memories(user_text, self.s.memory_hits)]
+        brain_ctx = red.mask(await self.brain.context(user_text)) if self.brain else ""  # secondo cervello: contesto pertinente, mascherato
+        memories = [] if brain_ctx else [red.mask(m) for m in await self.store.search_memories(user_text, self.s.memory_hits)]
 
         now = datetime.now(ZoneInfo(self.s.timezone))
         system = SYSTEM_PROMPT.format(owner=self.s.owner_name, now=f"{_GIORNI[now.weekday()]} {now:%d/%m/%Y %H:%M} ({self.s.timezone})")
@@ -50,7 +51,9 @@ class Agent:
                 "\n\nLa risposta verrà LETTA AD ALTA VOCE: massimo 2-3 frasi brevi, "
                 "niente elenchi, markdown, emoji o URL."
             )
-        if memories:
+        if brain_ctx:
+            system += "\n\n" + brain_ctx
+        elif memories:
             system += "\n\nRicordi rilevanti:\n" + "\n".join(f"- {m}" for m in memories)
 
         if red.mode != "off":

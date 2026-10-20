@@ -87,4 +87,12 @@ export class Jarvis {
   testNotification() { return this.#req("/api/notifications/test", { method: "POST" }); }
   registerDevice(platform, token, label = "") { return this.#req("/api/devices", { method: "POST", body: { platform, token, label } }); }
   unregisterDevice(token) { return this.#req(`/api/devices?token=${encodeURIComponent(token)}`, { method: "DELETE" }); }
+  brainSearch(q, k = 8) { return this.#get(`/api/brain/search?q=${encodeURIComponent(q)}&k=${k}`); }
+  brainDocs(limit = 30, source = "") { return this.#get(`/api/brain/docs?limit=${limit}${source ? `&source=${source}` : ""}`); }
+  brainDoc(id) { return this.#get(`/api/brain/docs/${id}`); }
+  brainStats() { return this.#get("/api/brain/stats"); }
+  brainAddNote(text, title = "", tags = [], important = false) { return this.#req("/api/brain/notes", { method: "POST", body: { text, title, tags, important }, timeout: 90_000 }); }
+  brainAddUrl(url, tags = []) { return this.#req("/api/brain/url", { method: "POST", body: { url, tags }, timeout: 90_000 }); }
+  brainPin(id, pinned) { return this.#req(`/api/brain/docs/${id}/pin`, { method: "POST", body: { pinned } }); }
+  brainDelete(id) { return this.#req(`/api/brain/docs/${id}`, { method: "DELETE" }); }
 }

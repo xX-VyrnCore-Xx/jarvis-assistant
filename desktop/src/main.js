@@ -24,6 +24,7 @@ const CHIPS = [
 const VIEWS = [
   ["chat", "Conversazione", "chat"],
   ["tokens", "Token", "gauge"],
+  ["brain", "Cervello", "sparkle"],
   ["notifications", "Notifiche", "bell"],
   ["reminders", "Promemoria", "clock"],
   ["pc", "Controllo PC", "monitor"],
@@ -34,7 +35,7 @@ const cfg = { url: (localStorage.getItem("jarvis.url") || DEFAULT_URL).replace(/
 const api = new Jarvis({ url: () => cfg.url, token: () => cfg.token });
 const speaker = new Speaker({ tts: (t) => synth(t) });
 const voiceOn = () => localStorage.getItem("jarvis.speak") !== "0";
-const S = { view: "chat", status: null, tokens: null, tokensErr: "", pending: [], reminders: [], notes: [], live: "off", online: false, ws: false, pcLog: [], busy: false };
+const S = { view: "chat", status: null, tokens: null, tokensErr: "", pending: [], reminders: [], notes: [], brain: { q: "", results: null, docs: null, stats: null, doc: null }, live: "off", online: false, ws: false, pcLog: [], busy: false };
 
 const $app = document.getElementById("app");
 let rail, viewBox, side, chatLog, chatInput, chatView;
@@ -84,6 +85,7 @@ function setView(v) {
   if (v === "tokens") loadTokens();
   if (v === "reminders") loadReminders();
   if (v === "notifications") loadNotes();
+  if (v === "brain") loadBrain();
 }
 
 function renderView() {
@@ -92,6 +94,7 @@ function renderView() {
   if (S.view === "tokens") return viewBox.replaceChildren(buildTokens());
   if (S.view === "reminders") return viewBox.replaceChildren(buildReminders());
   if (S.view === "notifications") return viewBox.replaceChildren(buildNotes());
+  if (S.view === "brain") return viewBox.replaceChildren(buildBrain());
   if (S.view === "pc") return viewBox.replaceChildren(buildPc());
   return viewBox.replaceChildren(buildSettings());
 }
@@ -269,6 +272,62 @@ function buildNotes() {
         el("div", {}, el("b", {}, n.title), n.body ? el("p", { class: "note-body" }, n.body) : null, el("small", {}, fmtDate(n.created_at))))))
       : el("div", { class: "empty" }, "Nessuna notifica."),
   );
+}
+
+// ------------------------------------------------------------------ secondo cervello
+const SRC = { note: "nota", memory: "ricordo", journal: "diario", web: "web", file: "file", drive: "drive", gmail: "email", chat: "chat" };
+let brainTimer = null;
+
+async function loadBrain() {
+  if (!cfg.token) return;
+  try { [S.brain.docs, S.brain.stats] = await Promise.all([api.brainDocs(50), api.brainStats()]); } catch (e) { if (e.status !== 404) toast(errText(e), true); S.brain.docs = S.brain.docs || []; }
+  if (S.view === "brain") renderView();
+}
+
+async function openBrainDoc(id) {
+  try { S.brain.doc = await api.brainDoc(id); } catch (e) { return toast(errText(e), true); }
+  if (S.view === "brain") renderView();
+}
+
+function brainSearch(q) {
+  S.brain.q = q;
+  clearTimeout(brainTimer);
+  if (q.trim().length < 2) { S.brain.results = null; return renderView(); }
+  brainTimer = setTimeout(async () => {
+    try { S.brain.results = await api.brainSearch(q.trim(), 12); } catch (e) { toast(errText(e), true); S.brain.results = []; }
+    if (S.view === "brain") { renderView(); document.getElementById("brain-q")?.focus(); }
+  }, 450);
+}
+
+function buildBrain() {
+  const { results, docs, stats, doc } = S.brain;
+  const q = el("input", { id: "brain-q", type: "text", placeholder: "Cerca nei tuoi ricordi (per significato)…", value: S.brain.q, "aria-label": "Cerca" });
+  q.addEventListener("input", () => brainSearch(q.value));
+  const note = el("textarea", { rows: 3, placeholder: "Nuova nota, oppure incolla un link da salvare…", "aria-label": "Nuova nota", class: "brain-note" });
+  const save = async () => {
+    const body = note.value.trim();
+    if (body.length < 3) return toast("Scrivi qualcosa", true);
+    try {
+      const r = /^https?:\/\/\S+$/.test(body) ? await api.brainAddUrl(body) : await api.brainAddNote(body);
+      toast(r.status === "duplicato" ? "Già presente" : "Salvato nel cervello"); note.value = ""; S.brain.results = null; loadBrain();
+    } catch (e) { toast(errText(e), true); }
+  };
+  const row = (d, text) => el("button", { class: `item brain-item${doc && doc.id === (d.doc_id || d.id) ? " on" : ""}`, onclick: () => openBrainDoc(d.doc_id || d.id) },
+    el("div", {}, el("b", {}, d.title || "(senza titolo)"), text || d.summary ? el("p", { class: "note-body" }, text || d.summary) : null,
+      el("small", {}, `${SRC[d.source] || d.source} · ${fmtDate(d.created_at)}${d.why?.length ? ` · ${d.why.join(", ")}` : ""}`)));
+  const list = results ? (results.length ? results.map((r) => row(r, r.snippet)) : [el("div", { class: "empty" }, "Nessun risultato: prova con altre parole.")])
+    : docs == null ? [el("div", { class: "empty" }, "Carico…")] : docs.length ? docs.map((d) => row(d)) : [el("div", { class: "empty" }, "Il secondo cervello è vuoto: aggiungi una nota o scrivi a JARVIS «ricorda che…».")];
+  const reader = doc ? el("aside", { class: "brain-doc" },
+    el("h2", {}, doc.title || "Documento"), el("small", {}, `${SRC[doc.source] || doc.source} · ${fmtDate(doc.created_at)}${doc.tags.length ? ` · ${doc.tags.join(", ")}` : ""}`),
+    doc.summary ? el("p", { class: "note-body" }, doc.summary) : null, el("pre", { class: "brain-text" }, doc.text + (doc.truncated ? "\n[…]" : "")),
+    doc.related?.length ? el("div", {}, el("small", {}, "Collegati"), el("div", { class: "row" }, doc.related.map((r) => el("button", { class: "btn", onclick: () => openBrainDoc(r.doc_id) }, r.title)))) : null,
+    el("div", { class: "row" },
+      el("button", { class: "btn", onclick: async () => { await api.brainPin(doc.id, !doc.pinned); openBrainDoc(doc.id); loadBrain(); } }, doc.pinned ? "Stacca" : "Fissa"),
+      el("button", { class: "btn danger", onclick: async () => { await api.brainDelete(doc.id); S.brain.doc = null; S.brain.results = null; toast("Eliminato"); loadBrain(); } }, "Elimina"))) : null;
+  return el("div", { class: "page brain" },
+    panelHead("Secondo cervello", stats ? `${stats.docs} documenti · ${stats.chunks} frammenti · ${stats.entities} entità · ${stats.model}` : "Note, ricordi, pagine e file: li ritrovi per significato."),
+    el("div", { class: "form-row" }, q), el("div", { class: "form-row" }, note, el("button", { class: "btn primary", onclick: save }, icon("plus", 16), "Salva")),
+    el("div", { class: "brain-cols" }, el("div", { class: "list" }, list), reader));
 }
 
 // ------------------------------------------------------------------ promemoria

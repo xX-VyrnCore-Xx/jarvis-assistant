@@ -50,3 +50,56 @@ create table if not exists tasks (
 create index if not exists tasks_open_idx on tasks (list) where not done;
 alter table tasks enable row level security;
 revoke all on public.tasks from anon, authenticated;
+
+-- Secondo cervello (RAG): documenti, frammenti con embedding cifrato e indice cieco, entità. Tutti i testi sono cifrati dal server.
+create table if not exists brain_docs (
+  id bigint generated always as identity primary key,
+  source text not null default 'note',
+  uri_hash text,
+  title text not null default '',
+  uri text not null default '',
+  summary text not null default '',
+  tags text not null default '',
+  tag_terms text[] not null default '{}',
+  entities text not null default '',
+  content_hash text not null default '',
+  importance real not null default 0.5,
+  pinned boolean not null default false,
+  accessed_at timestamptz,
+  access_count int not null default 0,
+  enriched boolean not null default false,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create unique index if not exists brain_docs_uri_idx on brain_docs (uri_hash) where uri_hash is not null;
+create index if not exists brain_docs_created_idx on brain_docs (created_at desc);
+create table if not exists brain_chunks (
+  id bigint generated always as identity primary key,
+  doc_id bigint not null references brain_docs(id) on delete cascade,
+  idx int not null default 0,
+  text text not null,
+  terms text[] not null default '{}',
+  emb text not null default '',
+  emb_model text not null default '',
+  created_at timestamptz not null default now()
+);
+create index if not exists brain_chunks_doc_idx on brain_chunks (doc_id, idx);
+create table if not exists brain_entities (
+  id bigint generated always as identity primary key,
+  kind text not null default 'topic',
+  key_hash text not null unique,
+  name text not null,
+  mentions int not null default 1,
+  updated_at timestamptz not null default now()
+);
+create table if not exists brain_doc_entities (
+  doc_id bigint not null references brain_docs(id) on delete cascade,
+  entity_id bigint not null references brain_entities(id) on delete cascade,
+  primary key (doc_id, entity_id)
+);
+create index if not exists brain_doc_entities_ent_idx on brain_doc_entities (entity_id);
+alter table brain_docs enable row level security;
+alter table brain_chunks enable row level security;
+alter table brain_entities enable row level security;
+alter table brain_doc_entities enable row level security;
+revoke all on public.brain_docs, public.brain_chunks, public.brain_entities, public.brain_doc_entities from anon, authenticated;

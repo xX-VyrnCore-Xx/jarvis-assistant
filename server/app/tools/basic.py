@@ -14,7 +14,7 @@ def parse_due(when: str, tz: ZoneInfo) -> datetime:
     return due.replace(tzinfo=tz) if due.tzinfo is None else due.astimezone(tz)
 
 
-def register_basic_tools(reg: ToolRegistry, settings: Settings, store: Store, budget=None) -> None:
+def register_basic_tools(reg: ToolRegistry, settings: Settings, store: Store, budget=None, brain=None) -> None:
     """`budget`: coroutine che restituisce il testo sui token disponibili (se FreeLLMAPI è nel container)."""
     async def get_datetime() -> str:
         now = datetime.now(ZoneInfo(settings.timezone))
@@ -37,9 +37,20 @@ def register_basic_tools(reg: ToolRegistry, settings: Settings, store: Store, bu
 
     async def remember(content: str) -> str:
         await store.add_memory(content)
+        if brain is not None and brain.enabled:  # entra anche nel secondo cervello (ricerca per significato)
+            try:
+                await brain.ingest(content, title=content[:60], source="memory", uri=f"memory:{brain.vault.blind(content)}", importance=0.75)
+            except Exception:
+                pass
         return "Memorizzato."
 
     async def recall(query: str) -> str:
+        if brain is not None and brain.enabled:
+            from ..brain.tools import format_results
+
+            res = await brain.search(query, k=5)
+            if res:
+                return format_results(res)
         hits = await store.search_memories(query, settings.memory_hits)
         return "\n".join(f"- {h}" for h in hits) or "Nessun ricordo trovato."
 

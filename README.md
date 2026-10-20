@@ -90,6 +90,15 @@ Promemoria, avvisi (token in esaurimento, backup fallito) e richieste di conferm
   Senza queste restano le notifiche in-app e Telegram. L'APK registra il proprio token con `POST /api/devices`.
 - **Telegram**: promemoria e avvisi arrivano anche lì.
 
+## Secondo cervello (RAG)
+Memoria a lungo termine per note, ricordi, pagine web, file, email e Drive, con recupero **ibrido** e tutto **cifrato a riposo**:
+- **Acquisizione**: `brain_add_note`, `brain_save_url`, `drive_save_to_brain`, `gmail_save_to_brain`; su Telegram `/nota testo`, e file `.txt/.md/.pdf` inviati al bot; nelle app la scheda **Cervello**. Frammenti coerenti (~1200 caratteri, per titolo e paragrafo, con sovrapposizione), deduplicazione per contenuto e per URI (stesso URI = aggiornamento).
+- **Recupero**: embedding multilingue via FreeLLMAPI (`/v1/embeddings`, famiglia `RAG_EMBED_MODEL`, default `bge-m3`, serve la chiave Cloudflare o Hugging Face) **fusi con BM25** sulle parole (RRF), potenziamento per importanza/fissati/uso, decadimento per il diario, **MMR** contro i duplicati e **espansione tramite il grafo** di persone, luoghi e progetti. Se gli embedding non sono disponibili funziona comunque per parole e i vettori si aggiungono dopo.
+- **Contesto automatico**: a ogni messaggio il contesto pertinente (con id `[#n]`) entra nel prompt, mascherato dai filtri di privacy; le fonti esterne sono marcate come dati, non istruzioni.
+- **Arricchimento**: il modello propone titolo, riassunto, tag, entità e importanza; **diario** notturno che riassume la giornata; **ripasso** di ciò che è importante ma poco rivisto; **buongiorno** alle `BRIEFING_HOUR` (agenda, promemoria, attività, un ricordo da ripassare).
+- **Privacy**: testi ed embedding sono cifrati nel database (l'indice vive in RAM sul server: nessuna ricerca vettoriale sul database); la ricerca per parole usa HMAC. I testi che escono verso i provider (embedding, arricchimento, diario) passano dal mascheramento dei dati sensibili.
+- Tool per il modello: `brain_add_note`, `brain_search`, `brain_read`, `brain_related`, `brain_pin`, `brain_forget`, `brain_save_url`, `brain_resurface`, `brain_stats`. API: `/api/brain/*`.
+
 ## Privacy e cifratura
 - **Cifratura a riposo**: messaggi, ricordi, promemoria, notifiche e liste sono salvati su Supabase **cifrati** (AES-256-GCM, chiave derivata da `ENCRYPTION_KEY`): il database non vede mai il testo. La ricerca nei ricordi usa un **indice cieco** (HMAC delle parole, con una chiave diversa). I dati scritti prima vengono cifrati in automatico a lotti dopo l'avvio.
   **Conserva `ENCRYPTION_KEY`**: se cambia, i dati cifrati non si leggono più. Il refresh token Google e i backup su Hugging Face sono già cifrati.

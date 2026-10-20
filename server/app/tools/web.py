@@ -73,8 +73,9 @@ def _public(host: str) -> bool:
     return bool(infos)
 
 
-async def fetch_page(url: str, client: httpx.AsyncClient) -> str:
-    """Legge una pagina pubblica. Ogni salto (anche i reindirizzamenti) deve restare su indirizzi pubblici."""
+async def fetch_page_data(url: str, client: httpx.AsyncClient) -> tuple[str, str, str] | str:
+    """Legge una pagina pubblica: (titolo, testo, url finale) oppure un messaggio d'errore (str).
+    Ogni salto (anche i reindirizzamenti) deve restare su indirizzi pubblici."""
     for _ in range(4):
         u = urlparse(url)
         if u.scheme not in ("http", "https") or not u.hostname:
@@ -98,9 +99,16 @@ async def fetch_page(url: str, client: httpx.AsyncClient) -> str:
                     break
             body = raw.decode(r.encoding or "utf-8", errors="replace")
         title, text = html_to_text(body) if "html" in ctype or body.lstrip().startswith("<") else ("", body)
-        text = text[:MAX_TEXT]
-        return UNTRUSTED + (f"Titolo: {title}\n" if title else "") + f"URL: {url}\n\n{text}"
+        return title, text, url
     return "Errore: troppi reindirizzamenti."
+
+
+async def fetch_page(url: str, client: httpx.AsyncClient) -> str:
+    data = await fetch_page_data(url, client)
+    if isinstance(data, str):
+        return data
+    title, text, final = data
+    return UNTRUSTED + (f"Titolo: {title}\n" if title else "") + f"URL: {final}\n\n{text[:MAX_TEXT]}"
 
 
 _OPS = {ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul, ast.Div: operator.truediv,

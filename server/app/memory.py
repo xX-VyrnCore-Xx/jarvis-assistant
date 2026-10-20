@@ -30,6 +30,7 @@ class Store(Protocol):
     async def list_tasks(self, list_name: str | None, include_done: bool) -> list[dict]: ...
     async def set_task_done(self, task_id: int, done: bool) -> None: ...
     async def delete_task(self, task_id: int) -> None: ...
+    async def messages_between(self, start: str, end: str, limit: int) -> list[dict]: ...
     async def get_setting(self, key: str) -> str: ...
     async def set_setting(self, key: str, value: str) -> None: ...
     async def prune(self) -> None: ...
@@ -48,7 +49,7 @@ class MemoryStore:
         self.tasks: list[dict] = []
 
     async def add_message(self, session_id, role, content):
-        self.messages.append({"session_id": session_id, "role": role, "content": content})
+        self.messages.append({"session_id": session_id, "role": role, "content": content, "created_at": datetime.now(timezone.utc).isoformat()})
 
     async def recent_messages(self, session_id, limit):
         rows = [m for m in self.messages if m["session_id"] == session_id]
@@ -128,6 +129,9 @@ class MemoryStore:
 
     async def delete_task(self, task_id):
         self.tasks = [t for t in self.tasks if t["id"] != task_id]
+
+    async def messages_between(self, start, end, limit):
+        return [m for m in self.messages if start <= m["created_at"] < end][:limit]
 
     async def get_setting(self, key):
         return self.settings.get(key, "")
@@ -296,6 +300,11 @@ class SupabaseStore:
                 r.raise_for_status()
                 done += 1
         return done
+
+    async def messages_between(self, start, end, limit):
+        rows = await self._get("messages", {"select": "session_id,role,content,created_at", "and": f"(created_at.gte.{start},created_at.lt.{end})",
+                                            "order": "created_at.asc", "limit": limit})
+        return [{**r, "content": self.vault.open(r["content"])} for r in rows]
 
     async def get_setting(self, key):
         rows = await self._get("app_settings", {"select": "value", "key": f"eq.{key}"})

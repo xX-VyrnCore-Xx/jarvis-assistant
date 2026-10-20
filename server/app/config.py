@@ -44,6 +44,13 @@ class Settings(BaseSettings):
     cors_origins: str = ""
 
     privacy_mode: str = "standard"  # off | standard (IBAN, carte, chiavi, password, CF) | strict (anche email e telefoni): mascherati verso i modelli
+    # secondo cervello (RAG)
+    rag_enabled: bool = True
+    rag_embed_model: str = "bge-m3"  # famiglia di embedding di FreeLLMAPI (multilingue, 1024 dimensioni); 'auto' = predefinita del router
+    rag_context_chars: int = 1800  # quanto contesto del secondo cervello entra in ogni risposta
+    rag_min_cosine: float = 0.35  # sotto questa somiglianza (e senza parole in comune) un frammento non entra nel contesto
+    rag_enrich_per_cycle: int = 2  # documenti arricchiti (titolo, riassunto, tag, entità) ogni ciclo; 0 = spento
+    briefing_hour: int = 8  # ora del buongiorno automatico (0 = spento)
     chat_per_minute: int = 20
     auth_fail_limit: int = 8
     auth_lock_s: int = 900
