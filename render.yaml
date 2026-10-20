@@ -1,0 +1,26 @@
+services:
+  - type: web
+    name: jarvis
+    runtime: python
+    plan: free
+    rootDir: server
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.13.1
+      - key: JARVIS_API_TOKEN
+        sync: false
+      - key: OWNER_NAME
+        value: signore
+      - key: FREELLM_BASE_URL
+        sync: false
+      - key: FREELLM_API_KEY
+        sync: false
+      - key: FREELLM_MODEL
+        value: auto
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_KEY
+        sync: false
