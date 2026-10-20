@@ -103,3 +103,5 @@ input[type=text], input[type=password], input[type=datetime-local] { display: bl
 .m-note-row p { margin: 3px 0 0; font-size: 14px; opacity: .85; }
 .m-note-row small { display: block; margin-top: 4px; opacity: .6; font-size: 11.5px; }
 .m-note-ic { color: var(--amber); flex: none; margin-top: 2px; }
+
+.m-speak { display: block; margin: 6px 0 0 auto; background: none; border: 0; color: var(--amber); padding: 2px 0 0; opacity: .8; }

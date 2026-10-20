@@ -11,6 +11,7 @@ from .agent import Agent
 from .api import router as api_router
 from .auth import require_token, throttle
 from .backup import HFBackup
+from .voice import VoiceService
 from .budget_service import BudgetService
 from .freellm_admin import FreeLLMAdmin
 from .pending import PendingStore
@@ -69,6 +70,7 @@ async def lifespan(app: FastAPI):
 
         pending.on_create = notify_pending
     app.state.backup = HFBackup(settings)
+    app.state.voice = VoiceService(settings)
     notifier = app.state.notifier = Notifier(settings, store, tg)
     prev = pending.on_create
 

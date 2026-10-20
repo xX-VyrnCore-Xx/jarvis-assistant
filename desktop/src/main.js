@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { Jarvis, ApiError } from "@shared/api.js";
 import { el, fmtDate, fmtTokens, fmtUptime, markdown, nowLocalInput, pct } from "@shared/format.js";
 import { icon } from "@shared/icons.js";
+import { Speaker } from "@shared/speech.js";
 import { openStream } from "@shared/stream.js";
 import { clearToken, loadToken, saveToken } from "./secrets.js";
 
@@ -30,6 +31,8 @@ const VIEWS = [
 
 const cfg = { url: (localStorage.getItem("jarvis.url") || DEFAULT_URL).replace(/\/+$/, ""), token: "", where: "local" };
 const api = new Jarvis({ url: () => cfg.url, token: () => cfg.token });
+const speaker = new Speaker({ tts: (t) => api.tts(t) });
+const voiceOn = () => localStorage.getItem("jarvis.speak") !== "0";
 const S = { view: "chat", status: null, tokens: null, tokensErr: "", pending: [], reminders: [], notes: [], live: "off", online: false, ws: false, pcLog: [], busy: false };
 
 const $app = document.getElementById("app");
@@ -136,7 +139,8 @@ function renderSide() {
 // ------------------------------------------------------------------ chat
 function addMessage(role, text) {
   const body = role === "bot" ? markdown(text) : el("p", {}, text);
-  const node = el("div", { class: `msg ${role}` }, el("div", { class: "who" }, role === "bot" ? "J.A.R.V.I.S." : role === "user" ? "Tu" : ""), el("div", { class: "bubble" }, body));
+  const play = role === "bot" ? el("button", { class: "speak-btn", title: "Ascolta", "aria-label": "Ascolta", onclick: () => (speaker.speaking ? speaker.stop() : speaker.speak(text)) }, icon("volume", 15)) : null;
+  const node = el("div", { class: `msg ${role}` }, el("div", { class: "who" }, role === "bot" ? "J.A.R.V.I.S." : role === "user" ? "Tu" : "", play), el("div", { class: "bubble" }, body));
   chatLog.append(node);
   chatLog.scrollTop = chatLog.scrollHeight;
   return node;
@@ -170,7 +174,9 @@ async function send(text) {
   const wait = addMessage("sys", "JARVIS sta pensando…");
   wait.classList.add("thinking");
   try {
-    addMessage("bot", await api.chat(msg, SESSION));
+    const reply = await api.chat(msg, SESSION);
+    addMessage("bot", reply);
+    if (voiceOn() && S.status?.voice) speaker.speak(reply);
     refreshStatus();
   } catch (e) {
     addMessage("sys", errText(e));
@@ -344,6 +350,9 @@ function buildSettings() {
   const autostart = el("input", { type: "checkbox", id: "autostart" });
   if (isTauri) invoke("autostart_get").then((v) => (autostart.checked = !!v)).catch(() => {});
   autostart.addEventListener("change", () => invoke("autostart_set", { enabled: autostart.checked }).catch((e) => toast(String(e), true)));
+  const speak = el("input", { type: "checkbox", id: "speak" });
+  speak.checked = voiceOn();
+  speak.addEventListener("change", () => { localStorage.setItem("jarvis.speak", speak.checked ? "1" : "0"); if (!speak.checked) speaker.stop(); });
   return el("div", { class: "page narrow" },
     panelHead("Impostazioni", "Collegamento al tuo JARVIS."),
     el("label", { class: "field" }, "Indirizzo del server", url),
@@ -351,6 +360,7 @@ function buildSettings() {
       el("small", {}, cfg.where === "keyring" ? "Salvato nel Gestore credenziali di Windows, cifrato dall'account." : "Salvato su questo computer (nel browser di prova).")),
     el("div", { class: "row" }, el("button", { class: "btn", onclick: test }, "Prova il collegamento"), el("button", { class: "btn primary", onclick: save }, "Salva")),
     result,
+    el("label", { class: "check" }, speak, S.status?.voice ? "Leggi le risposte con la voce di JARVIS" : "Leggi le risposte con la voce di JARVIS (voce non ancora configurata sul server)"),
     isTauri ? el("label", { class: "check" }, autostart, "Avvia JARVIS con Windows (resta nella barra delle applicazioni)") : null,
     el("div", { class: "row" }, el("button", { class: "btn danger", onclick: async () => { await clearToken(); cfg.token = ""; token.value = ""; stop(); toast("Token rimosso da questo computer"); } }, "Rimuovi il token da questo PC")),
     el("p", { class: "tiny" }, "Scorciatoia: Alt+Spazio mostra o nasconde la finestra."),

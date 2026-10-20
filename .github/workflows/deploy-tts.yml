@@ -1,0 +1,25 @@
+name: Deploy voce (Hugging Face Space)
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ["tts/**"]
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Pubblica sul Space
+        env:
+          HF_TOKEN: ${{ secrets.HF_SPACE_TOKEN }}
+          HF_SPACE: ${{ vars.HF_SPACE || 'VyrnCore/jarvis-voice' }}
+        run: |
+          if [ -z "$HF_TOKEN" ]; then echo "Segreto HF_SPACE_TOKEN assente: salto il deploy"; exit 0; fi
+          pip install -q huggingface_hub
+          python - <<'PY'
+          import os
+          from huggingface_hub import HfApi
+          api = HfApi(token=os.environ["HF_TOKEN"])
+          api.upload_folder(folder_path="tts", repo_id=os.environ["HF_SPACE"], repo_type="space",
+                            commit_message="Deploy da GitHub", delete_patterns="*")
+          PY

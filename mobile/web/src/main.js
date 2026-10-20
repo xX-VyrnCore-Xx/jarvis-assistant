@@ -1,6 +1,7 @@
 import { Jarvis, ApiError } from "@shared/api.js";
 import { el, fmtDate, fmtTokens, fmtUptime, markdown, nowLocalInput, pct } from "@shared/format.js";
 import { icon } from "@shared/icons.js";
+import { Speaker } from "@shared/speech.js";
 import { openStream } from "@shared/stream.js";
 import { initPush, teardownPush } from "./push.js";
 
@@ -12,6 +13,8 @@ const CHIPS = [["Token disponibili", "Quanti token mi restano questo mese?"], ["
 
 const cfg = { url: (localStorage.getItem("jarvis.url") || DEFAULT_URL).replace(/\/+$/, ""), token: localStorage.getItem("jarvis.token") || "" };
 const api = new Jarvis({ url: () => cfg.url, token: () => cfg.token });
+const speaker = new Speaker({ tts: (t) => api.tts(t) });
+const voiceOn = () => localStorage.getItem("jarvis.speak") !== "0";
 const S = { tab: "chat", status: null, tokens: null, tokensErr: "", reminders: [], notes: [], pending: [], online: false, busy: false };
 
 const $app = document.getElementById("m-app");
@@ -67,7 +70,8 @@ function renderTab() {
 
 // ---------------------------------------------------------------- chat
 function bubble(role, text) {
-  const node = el("div", { class: `m-msg ${role}` }, el("div", { class: "m-bubble" }, role === "bot" ? markdown(text) : el("p", {}, text)));
+  const play = role === "bot" ? el("button", { class: "m-speak", "aria-label": "Ascolta", onclick: () => (speaker.speaking ? speaker.stop() : speaker.speak(text)) }, icon("volume", 16)) : null;
+  const node = el("div", { class: `m-msg ${role}` }, el("div", { class: "m-bubble" }, role === "bot" ? markdown(text) : el("p", {}, text), play));
   log.append(node);
   log.scrollTop = log.scrollHeight;
   return node;
@@ -95,7 +99,12 @@ async function send(text) {
   S.busy = true;
   const typing = el("div", { class: "m-msg bot" }, el("div", { class: "m-bubble typing" }, el("i"), el("i"), el("i")));
   log.append(typing); log.scrollTop = log.scrollHeight;
-  try { bubble("bot", await api.chat(msg, SESSION)); refreshStatus(); }
+  try {
+    const reply = await api.chat(msg, SESSION);
+    bubble("bot", reply);
+    if (voiceOn() && S.status?.voice) speaker.speak(reply);
+    refreshStatus();
+  }
   catch (e) { bubble("sys", errText(e)); }
   finally { typing.remove(); S.busy = false; }
 }
@@ -220,6 +229,8 @@ function buildMore() {
       row("Google", st ? (st.google ? "collegato" : "non collegato") : "—", st ? st.google : undefined),
       row("Memoria", st ? (st.memory === "supabase" ? "permanente" : "temporanea") : "—", st ? st.memory === "supabase" : undefined),
       st ? row("Attivo da", fmtUptime(st.uptime_s)) : null),
+    el("div", { class: "m-card" }, el("label", { class: "m-row" }, el("span", {}, st?.voice ? "Voce di JARVIS" : "Voce di JARVIS (non configurata)"),
+      el("input", { type: "checkbox", checked: voiceOn(), onchange: (e) => { localStorage.setItem("jarvis.speak", e.target.checked ? "1" : "0"); if (!e.target.checked) speaker.stop(); } }))),
     el("div", { class: "m-card safe" }, icon("shield", 20), el("p", {}, "Le azioni sensibili, come inviare un'email, richiedono sempre la tua conferma.")),
     el("button", { class: "m-danger", onclick: () => { teardownPush(api).catch(() => {}); localStorage.removeItem("jarvis.token"); cfg.token = ""; stop(); renderTab(); toast("Token rimosso da questo telefono"); } }, "Rimuovi il token da questo telefono"));
 }
@@ -300,7 +311,7 @@ function start() {
 function stop() { closeStream?.(); closeStream = null; timers.forEach(clearInterval); timers = []; S.status = null; S.online = false; S.pending = []; renderTop(); renderPending(); }
 
 // risparmia batteria e dati: nulla gira con l'app in secondo piano
-document.addEventListener("visibilitychange", () => { if (document.hidden) { closeStream?.(); closeStream = null; timers.forEach(clearInterval); timers = []; } else start(); });
+document.addEventListener("visibilitychange", () => { if (document.hidden) { speaker.stop(); closeStream?.(); closeStream = null; timers.forEach(clearInterval); timers = []; } else start(); });
 
 shell();
 if (!cfg.token) S.tab = "more";

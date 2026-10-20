@@ -6,11 +6,12 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 from .auth import require_token
 from .freellm_admin import AdminError
+from .voice import TTSError
 from .tools.basic import parse_due
 
 router = APIRouter(prefix="/api", dependencies=[Depends(require_token)])
@@ -27,6 +28,10 @@ class DeviceIn(BaseModel):
     platform: str = Field(pattern=r"^(android|windows|web)$")
     token: str = Field(min_length=8, max_length=4096)
     label: str = Field(default="", max_length=80)
+
+
+class SpeakIn(BaseModel):
+    text: str = Field(min_length=1, max_length=500)
 
 
 class ReadIn(BaseModel):
@@ -56,6 +61,7 @@ async def status(request: Request) -> dict:
         "telegram": st.tg.enabled,
         "google": bool(s.google_refresh_token),
         "memory": "supabase" if s.supabase_url and s.supabase_service_key else "ram",
+        "voice": st.voice.enabled,
         "pending_actions": len(st.pending.list_pending()),
         "tokens": None,
     }
@@ -161,3 +167,14 @@ async def stream(request: Request) -> StreamingResponse:
 
     return StreamingResponse(gen(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
+
+
+@router.post("/tts")
+async def tts(body: SpeakIn, request: Request) -> Response:
+    voice = request.app.state.voice
+    if not voice.enabled:
+        raise HTTPException(404, "Voce non configurata")
+    try:
+        return Response(await voice.speak(body.text.strip()), media_type="audio/wav", headers={"Cache-Control": "no-store"})
+    except TTSError as e:
+        raise HTTPException(503, str(e)) from e

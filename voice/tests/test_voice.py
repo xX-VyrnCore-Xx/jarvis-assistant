@@ -38,3 +38,11 @@ def test_clean_for_speech():
     out = clean_for_speech("**Ciao!** Vedi https://x.it/a\n- punto uno\n```code```\n😀 fine")
     assert "http" not in out and "*" not in out and "code" not in out and "😀" not in out
     assert out.startswith("Ciao!") and "punto uno" in out and out.endswith("fine")
+
+
+def test_split_sentences_groups_and_caps():
+    from jarvis_voice.speech import split_sentences
+
+    out = split_sentences("Buongiorno, signore. Sono le nove. " + "parola " * 80)
+    assert out[0].startswith("Buongiorno, signore. Sono le nove.")
+    assert all(len(p) <= 225 for p in out) and len(out) >= 3

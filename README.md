@@ -62,6 +62,15 @@ Sviluppo: `cd desktop && npm install && npm run tauri dev` (richiede Rust).
 ## Voce
 Vedi `voice/README.md`.
 
+## Voce di JARVIS (XTTS v2)
+Le risposte si leggono con la voce clonata da `tts/voice/jarvis.wav`, in tutte le app (Windows, Android, voce locale "Hey Jarvis").
+XTTS v2 è pesante (circa 2 GB di RAM), quindi non gira su Render Free: sta in un **Hugging Face Space** gratuito (CPU, 16 GB) nella cartella `tts/`;
+il server JARVIS fa da tramite (`POST /api/tts`), così le app usano solo il token personale. Se lo Space dorme o non risponde, ripiegano sulla voce del dispositivo (Edge-TTS nella voce locale).
+1. Hugging Face → *New Space* → nome `jarvis-voice`, SDK **Docker**, hardware **CPU basic** (gratuito), visibilità a scelta. Nelle *Settings → Variables and secrets* del Space aggiungi il segreto `TTS_TOKEN` (stringa casuale lunga).
+2. Token HF con permesso di scrittura → segreto GitHub `HF_SPACE_TOKEN`; poi *Actions → Deploy voce → Run workflow* (se il Space ha un altro nome, variabile `HF_SPACE`). La prima costruzione scarica il modello e richiede 10-15 minuti.
+3. Su Render imposta `TTS_URL` (`https://<utente>-jarvis-voice.hf.space`) e lo stesso `TTS_TOKEN`.
+Licenza del modello: Coqui CPML, solo uso non commerciale. Lo Space gratuito va in pausa dopo 48 h senza richieste: il ping di UptimeRobot può includere `<TTS_URL>/health`.
+
 ## Notifiche in tempo reale
 Promemoria, avvisi (token in esaurimento, backup fallito) e richieste di conferma arrivano come notifica:
 - **App aperte** (Windows e Android): flusso SSE `GET /api/stream`, con notifica nativa di Windows; l'archivio è in `GET /api/notifications`.

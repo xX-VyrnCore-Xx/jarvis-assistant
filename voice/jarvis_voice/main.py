@@ -60,10 +60,10 @@ def main() -> None:
         if not text:
             continue
         try:
-            speak(ask(cfg, text), cfg.voice)
+            speak(ask(cfg, text), cfg)
         except Exception:
             log.exception("errore durante la risposta")
-            speak("Ho avuto un problema a contattare il server, signore.", cfg.voice)
+            speak("Ho avuto un problema a contattare il server, signore.", cfg)
 
 
 if __name__ == "__main__":

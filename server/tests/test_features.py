@@ -256,3 +256,26 @@ async def test_hf_backup_encrypts_commits_and_keeps_only_recent():
     assert _json.loads(decrypt(derive_key(s), blob))["tables"]["messages"][0]["content"] == "segreto"
     assert any(f["path"] == "README.md" for f in files)
     assert sorted(o["value"]["path"] for o in ops if o["key"] == "deletedFile") == ["jarvis/2020-01-01.json.enc", "jarvis/2020-01-02.json.enc"]
+
+
+@pytest.mark.asyncio
+async def test_voice_proxy_caches_and_reports_errors():
+    from app.voice import TTSError, VoiceService
+
+    calls = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        calls.append(req.headers["authorization"])
+        return httpx.Response(200, content=b"RIFFwav") if b"ciao" in req.content else httpx.Response(500)
+
+    v = VoiceService(Settings(tts_url="https://x.hf.space/", tts_token="t"), httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    assert v.enabled and not VoiceService(Settings()).enabled
+    assert await v.speak("ciao") == b"RIFFwav" and await v.speak("ciao") == b"RIFFwav"
+    assert calls == ["Bearer t"]  # la seconda è dalla cache
+    with pytest.raises(TTSError):
+        await v.speak("altro")
+
+
+def test_tts_endpoint_needs_config(client):
+    assert client.post("/api/tts", json={"text": "ciao"}, headers=AUTH).status_code == 404
+    assert client.post("/api/tts", json={"text": "ciao"}).status_code == 401

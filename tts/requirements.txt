@@ -1,0 +1,7 @@
+torch==2.4.1
+torchaudio==2.4.1
+coqui-tts==0.24.3
+transformers==4.44.2
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+numpy<2
