@@ -3,24 +3,33 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 ToolFn = Callable[..., Awaitable[str]]
+Availability = Callable[[], bool]
 
 
 class ToolRegistry:
     """Registro dei tool esposti al modello (formato OpenAI function calling)."""
 
     def __init__(self) -> None:
-        self._tools: dict[str, tuple[dict[str, Any], ToolFn]] = {}
+        self._tools: dict[str, tuple[dict[str, Any], ToolFn, Availability | None]] = {}
 
-    def register(self, name: str, description: str, parameters: dict[str, Any], fn: ToolFn) -> None:
+    def register(
+        self,
+        name: str,
+        description: str,
+        parameters: dict[str, Any],
+        fn: ToolFn,
+        available: Availability | None = None,
+    ) -> None:
+        """`available`: se presente, il tool viene mostrato al modello solo quando restituisce True."""
         spec = {
             "type": "function",
             "function": {"name": name, "description": description, "parameters": parameters},
         }
-        self._tools[name] = (spec, fn)
+        self._tools[name] = (spec, fn, available)
 
     @property
     def specs(self) -> list[dict[str, Any]]:
-        return [spec for spec, _ in self._tools.values()]
+        return [spec for spec, _, available in self._tools.values() if available is None or available()]
 
     async def call(self, name: str, raw_args: str) -> str:
         if name not in self._tools:

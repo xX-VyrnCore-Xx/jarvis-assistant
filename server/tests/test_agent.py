@@ -277,3 +277,20 @@ def test_cors_allows_app_origins_only(monkeypatch):
         r = c.get("/health", headers={"Origin": "http://tauri.localhost"})
         assert r.headers["access-control-allow-origin"] == "http://tauri.localhost"
     get_settings.cache_clear()
+
+
+def test_pc_tools_hidden_until_pc_connects_and_root_route():
+    from app.pc import PCBridge
+    from app.tools.pc_tools import register_pc_tools
+
+    reg, pc = ToolRegistry(), PCBridge()
+    register_pc_tools(reg, pc)
+    assert reg.specs == []
+    pc.ws = object()  # PC collegato
+    assert {t["function"]["name"] for t in reg.specs} >= {"pc_open_app", "pc_lock", "pc_power"}
+
+    from app import main
+
+    with TestClient(main.app) as c:
+        assert c.get("/").json() == {"name": "JARVIS", "status": "ok"}
+        assert c.head("/").status_code == 200

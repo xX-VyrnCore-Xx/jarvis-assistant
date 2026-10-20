@@ -91,6 +91,11 @@ app.add_middleware(
 )
 
 
+@app.api_route("/", methods=["GET", "HEAD"])
+async def root() -> dict:
+    return {"name": "JARVIS", "status": "ok"}
+
+
 @app.get("/health")
 async def health() -> dict:
     return {"status": "ok"}

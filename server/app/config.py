@@ -35,7 +35,7 @@ class Settings(BaseSettings):
     # origini delle app (Tauri su Windows, Capacitor su Android); altre, separate da virgola
     cors_origins: str = ""
 
-    history_messages: int = 20
+    history_messages: int = 14
     memory_hits: int = 5
 
 
