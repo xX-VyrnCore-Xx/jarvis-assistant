@@ -61,6 +61,7 @@ class Settings(BaseSettings):
     rag_context_chars: int = 1800  # quanto contesto del secondo cervello entra in ogni risposta
     rag_min_cosine: float = 0.35  # sotto questa somiglianza (e senza parole in comune) un frammento non entra nel contesto
     rag_enrich_per_cycle: int = 2  # documenti arricchiti (titolo, riassunto, tag, entità) ogni ciclo; 0 = spento
+    telegram_mode: str = "auto"  # auto | webhook | polling: webhook se c'è un indirizzo pubblico, altrimenti lettura diretta
     github_token: str = ""  # GITHUB_TOKEN: token classico con scope repo (+workflow) per le sessioni di coding; senza, la funzione è spenta
     coding_repos_per_day: int = 3  # repository nuovi che JARVIS può creare ogni giorno
     live_news: bool = True  # notizie in tempo reale dai feed RSS/Atom e salvataggio periodico nel secondo cervello
