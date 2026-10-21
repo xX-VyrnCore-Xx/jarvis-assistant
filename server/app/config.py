@@ -64,6 +64,7 @@ class Settings(BaseSettings):
     telegram_mode: str = "auto"  # auto | webhook | polling: webhook se c'è un indirizzo pubblico, altrimenti lettura diretta
     github_token: str = ""  # GITHUB_TOKEN: token classico con scope repo (+workflow) per le sessioni di coding; senza, la funzione è spenta
     coding_repos_per_day: int = 3  # repository nuovi che JARVIS può creare ogni giorno
+    coding_deletes_per_day: int = 3  # repository che JARVIS può eliminare ogni giorno (solo dopo conferma dell'utente)
     live_news: bool = True  # notizie in tempo reale dai feed RSS/Atom e salvataggio periodico nel secondo cervello
     live_ingest_minutes: int = 20
     live_news_per_cycle: int = 20

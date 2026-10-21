@@ -1,6 +1,7 @@
 import base64
 import json
 import re
+import time
 from pathlib import Path
 
 import httpx
@@ -51,11 +52,43 @@ class FakeGitHub:
                 repo["refs"]["main"] = self.commit(repo, {k: v for k, v in files.items()})
             self.repos[f"mario/{name}"] = repo
             return j({"full_name": f"mario/{name}", "default_branch": "main", "private": True}, 201)
+        if path == "/user/repos" and method == "GET":
+            return j([{"full_name": k, "private": v["private"], "topics": v.get("topics", [])} for k, v in self.repos.items()])
         m = re.match(r"/repos/(mario/[^/]+)(/.*)?$", path)
         assert m, path
         repo, rest = self.repos[m.group(1)], m.group(2) or ""
         if rest == "":
-            return j({"private": repo["private"], "default_branch": "main"})
+            full = m.group(1)
+            if method == "DELETE":
+                self.repos.pop(full)
+                return httpx.Response(204)
+            if method == "PATCH":
+                if "description" in body:
+                    repo["desc"] = body["description"]
+                if "archived" in body:
+                    repo["archived"] = body["archived"]
+                if "name" in body:
+                    self.repos[f"mario/{body['name']}"] = self.repos.pop(full)
+                    full = f"mario/{body['name']}"
+                return j({"full_name": full})
+            return j({"full_name": full, "private": repo["private"], "default_branch": "main", "description": repo["desc"], "pushed_at": "2026-10-21T10:00:00Z", "open_issues_count": 2, "size": 5,
+                      "archived": repo.get("archived", False)})
+        if rest == "/topics" and method == "PUT":
+            repo["topics"] = body["names"]
+            return j({})
+        if rest == "/branches":
+            return j([{"name": b} for b in repo["refs"]])
+        if rest == "/issues" and method == "POST":
+            repo.setdefault("issues", {})[1] = {"title": body["title"], "state": "open"}
+            return j({"number": 1, "html_url": "https://github.com/issue/1"}, 201)
+        if rest == "/issues" and method == "GET":
+            return j([{"number": n, "state": i["state"], "title": i["title"], "labels": []} for n, i in repo.get("issues", {}).items()])
+        if m2 := re.match(r"/issues/(\d+)$", rest):
+            repo["issues"][int(m2.group(1))]["state"] = body["state"]
+            return j({})
+        if rest == "/actions/workflows/ci.yml/dispatches":
+            repo["dispatched"] = body["ref"]
+            return httpx.Response(204)
         if rest.startswith("/contents/") and method == "PUT":
             repo["refs"]["main"] = self.commit(repo, {rest[10:]: body["content"]})
             return j({}, 201)
@@ -228,4 +261,97 @@ async def test_tools_require_user_confirmation_to_create_repo(env):
     assert (await reg.call("code_read", json.dumps({"path": "main.py"}))).startswith("[")  # contenuto marcato come dato
     assert "Errore" in await reg.call("code_write", json.dumps({"path": "../x", "content": "1"}))
     names = [t["function"]["name"] for t in reg.specs]
-    assert "code_commit" in names and "code_merge" in names and not any("delete_repo" in n or "visibility" in n or "force" in n for n in names)
+    assert "code_commit" in names and "code_merge" in names and not any("visibility" in n or "force" in n for n in names)
+
+
+@pytest.mark.asyncio
+async def test_list_edit_adopt_and_audit(env):
+    gh, svc = env
+    await svc.create_repo("uno", "Primo", True, "mit")
+    assert gh.repos["mario/uno"]["topics"] == ["jarvis-managed"]
+    await svc.create_repo("due", "Secondo", True, "none")
+    out = await svc.list_repos()
+    assert "2 repository" in out and "mario/uno" in out and "Secondo" in out and "🔒" in out
+    assert "Aggiornato" in await svc.repo_edit("uno", description="Nuova", topics="Bot, Python bot")
+    assert gh.repos["mario/uno"]["desc"] == "Nuova" and gh.repos["mario/uno"]["topics"] == ["jarvis-managed", "bot", "python-bot"]
+    await svc.repo_edit("uno", new_name="uno-bis")
+    assert "mario/uno-bis" in gh.repos and "mario/uno-bis" in await svc.repos() and svc.session.repo != "mario/uno"
+    with pytest.raises(CodingError, match="Niente da modificare"):
+        await svc.repo_edit("due")
+    with pytest.raises(CodingError, match="non è tra quelli"):
+        await svc.repo_edit("estraneo", description="x")
+    await svc.store.set_setting("coding_repos", "[]")  # elenco perso: si ritrova dall'argomento
+    gh.repos["mario/estraneo"] = {**gh.repos["mario/due"], "topics": []}
+    assert "mario/due" in await svc.adopt() and "mario/estraneo" not in await svc.repos()
+    log = await svc.audit()
+    assert "creato" in log and "rinominato" in log and "adottato" in log
+
+
+@pytest.mark.asyncio
+async def test_delete_repo_needs_confirmation_registry_private_and_limit(env):
+    gh, svc = env
+    pending, reg = PendingStore(), ToolRegistry()
+    register_coding_tools(reg, svc, pending)
+    await svc.create_repo("vecchio", "Da buttare", True, "mit")
+    gh.repos["mario/non-mio"] = {**gh.repos["mario/vecchio"]}
+    out = await reg.call("code_repo_delete", json.dumps({"name": "vecchio"}))
+    assert "conferma" in out and "mario/vecchio" in gh.repos  # niente cancellazione senza OK
+    p = pending.list_pending()[0]
+    assert "DEFINITIVAMENTE" in p.summary and "Da buttare" in p.summary
+    await pending.decide(p.id, False)
+    assert "mario/vecchio" in gh.repos
+    await reg.call("code_repo_delete", json.dumps({"name": "vecchio"}))
+    await pending.decide(pending.list_pending()[0].id, True)
+    assert "mario/vecchio" not in gh.repos and "mario/vecchio" not in await svc.repos() and svc.session is None
+    assert "ELIMINATO" in await svc.audit()
+    assert "Errore" in await reg.call("code_repo_delete", json.dumps({"name": "non-mio"}))  # non creato da JARVIS
+    await svc.create_repo("pubblico", "", True, "mit")
+    gh.repos["mario/pubblico"]["private"] = False
+    with pytest.raises(CodingError, match="non è privato"):
+        await svc.delete_repo("pubblico")
+    gh.repos["mario/pubblico"]["private"] = True
+    await svc.store.set_setting("coding_deleted_today", f"{time.strftime('%Y-%m-%d')}:1")
+    svc.s.coding_deletes_per_day = 1
+    with pytest.raises(CodingError, match="Limite"):
+        await svc.delete_repo("pubblico")
+
+
+@pytest.mark.asyncio
+async def test_sandbox_extras_diff_discard_replace_scaffold_move(env):
+    gh, svc = env
+    await svc.create_repo("lab", "", True, "mit")
+    svc.write("a.py", "x = 1\nprint(x)\n")
+    assert "nuovo" in svc.diff() and "+x = 1" in svc.diff("a.py")
+    await svc.commit("Aggiungi a.py")
+    svc.edit("a.py", "x = 1", "x = 2")
+    assert "-x = 1" in svc.diff() and "+x = 2" in svc.diff()
+    assert "Ripristinato" in svc.discard("a.py") and "x = 1" in svc.read("a.py")
+    assert "Anteprima" in svc.replace_all(r"x\b", "y", "*.py") and "x = 1" in svc.read("a.py")
+    assert "Sostituite" in svc.replace_all(r"x\b", "y", "*.py", dry_run=False) and "y = 1" in svc.read("a.py")
+    svc.move("a.py", "pkg/b.py")
+    assert "pkg/b.py" in svc.find("*.py") and "eliminato" in svc.diff()
+    assert "└──" in svc.tree() and "TODO" in svc.stats()
+    assert "a.py" in svc.search("print", glob="*.py", context=1) or "pkg/b.py" in svc.search("print", glob="*.py", context=1)
+    svc.discard("all")
+    assert "a.py" in svc.find("*.py") and "pkg/b.py" not in svc.find("*.py")
+    assert "creato" in svc.scaffold("fastapi-api", "demo")
+    assert "tests/test_api.py" in svc.find("test_*") and "workflow_dispatch" in svc.read(".github/workflows/ci.yml")
+    assert "già presenti" in svc.scaffold("fastapi-api", "demo")
+    with pytest.raises(CodingError, match="Tipi disponibili"):
+        svc.scaffold("cobol")
+
+
+@pytest.mark.asyncio
+async def test_branches_issues_ci_run(env):
+    gh, svc = env
+    await svc.create_repo("rami", "", True, "mit")
+    svc.write("f.txt", "uno\n")
+    await svc.commit("Aggiungi f.txt")
+    assert "main" in await svc.branches() and "◀ lavoro" in await svc.branches()
+    with pytest.raises(CodingError, match="principale"):
+        await svc.branch_delete("main")
+    assert "creata" in await svc.issue_create("Bug", "descr", "") and "Bug" in await svc.issues()
+    assert "chiusa" in await svc.issue_close(1) and gh.repos["mario/rami"]["issues"][1]["state"] == "closed"
+    assert "avviato" in await svc.ci_run("ci.yml") and gh.repos["mario/rami"]["dispatched"]
+    with pytest.raises(CodingError, match="workflow"):
+        await svc.ci_run("../evil.yml")
