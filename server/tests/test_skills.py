@@ -20,10 +20,10 @@ def top(text, k=2):
 
 
 def test_library_is_complete_and_well_formed():
-    assert len(REG) >= 95
+    assert len(REG) >= 130
     for d in ("comunicazione", "finanza", "marketing", "business", "vita", "tecnologia"):
         assert len(REG.by_domain(d)) >= 6, d
-    assert len(REG.by_domain("programmazione")) >= 25 and len(REG.by_domain("grafica")) >= 15
+    assert len(REG.by_domain("programmazione")) >= 60 and len(REG.by_domain("grafica")) >= 15
     for s in REG.skills.values():
         assert s.domain in DOMAINS and s.builtin
         assert 40 <= len(s.description) <= 300, s.name
@@ -92,12 +92,48 @@ def test_every_skill_is_reachable_from_its_own_trigger_phrases():
     ("progetto con esp32 e sensore, resistenza per il led", "elettronica-arduino-raspberry"),
     ("come imposto un backup 3-2-1 con restic?", "backup-e-cloud-storage"),
     ("scrivi un prompt migliore con esempi few shot per il mio system prompt", "prompt-engineering"),
+    ("come strutturo un servizio fastapi con pydantic e dependency injection?", "fastapi-e-backend-python"),
+    ("devo prevenire gli n+1 in django con select_related", "django-e-flask"),
+    ("uso laravel ed eloquent: come faccio l'eager loading?", "php-e-laravel"),
+    ("come uso async await e linq in c# con asp.net core?", "csharp-e-dotnet"),
+    ("la mia app swiftui non aggiorna la vista, come uso state e binding?", "swift-e-ios"),
+    ("flutter: setstate o riverpod per gestire lo stato?", "flutter-e-dart"),
+    ("viewmodel e hilt in jetpack compose, come li organizzo?", "android-nativo-compose"),
+    ("conviene graphql o grpc al posto di rest? serve dataloader", "graphql-e-grpc"),
+    ("come implemento i websocket con riconnessione e heartbeat?", "websocket-e-realtime"),
+    ("come faccio il login con oauth2 e pkce, jwt o sessioni?", "autenticazione-e-autorizzazione"),
+    ("query lenta su postgres: window function, indice gin e explain analyze", "postgresql-avanzato"),
+    ("sqlalchemy fa troppe query, come evito il problema n+1 dell'orm?", "orm-e-accesso-ai-dati"),
+    ("scrivi una regex per validare e attenzione al backtracking redos", "regex-e-parsing"),
+    ("voglio creare un linguaggio di programmazione con lexer e ast", "interpreti-e-compilatori"),
+    ("come faccio il game loop con delta time in godot?", "sviluppo-giochi"),
+    ("firmware freertos su stm32: interrupt e watchdog", "programmazione-embedded"),
+    ("cos'è un aggregato in ddd e quando uso cqrs ed event sourcing?", "ddd-e-architettura-a-eventi"),
+    ("la build con vite è lenta, come configuro un monorepo con turborepo?", "build-tools-e-bundler"),
+    ("come tengo sicure le dipendenze npm contro il typosquatting?", "gestione-dipendenze-e-supply-chain"),
+    ("che licenza scelgo per il mio progetto open source: mit o gpl?", "open-source-e-licenze"),
+    ("devo costruire una pipeline etl con airflow e dbt su bigquery", "data-engineering"),
+    ("script powershell per creare un'attività pianificata su windows", "powershell-e-automazione-windows"),
+    ("come comunico tra frontend e backend rust in tauri con invoke?", "tauri-e-app-desktop"),
+    ("sto scrivendo un bot telegram con webhook e pulsanti inline", "bot-e-chatbot-sviluppo"),
+    ("voglio fare test di carico con k6 e property based testing", "test-avanzati-e-carico"),
+    ("bug sull'ora legale: come gestisco fusi orari e utc nel codice?", "date-ora-e-fusi-orari"),
+    ("perché 0.1 + 0.2 non fa 0.3? come gestisco i soldi nel codice?", "numeri-precisione-e-denaro"),
+    ("i caratteri accentati escono strani, problema di utf-8 e mojibake", "unicode-e-localizzazione"),
+    ("ho sbagliato un commit: come uso reflog e rebase interattivo?", "git-avanzato"),
+    ("il servizio è giù in produzione, come gestisco l'incidente e il post-mortem?", "affidabilita-incident-e-postmortem"),
+    ("il pod va in crashloopbackoff su kubernetes", "kubernetes-pratico"),
+    ("errore cors nel browser: come imposto gli header e la cache http?", "http-e-web-platform"),
+    ("migliora lcp e core web vitals del mio sito", "web-performance"),
+    ("voglio una pwa con service worker e funzionamento offline", "pwa-e-service-worker"),
+    ("devo fare un'estensione chrome con manifest v3 e content script", "estensioni-browser"),
+    ("come uso i breakpoint condizionali nel debugger di vs code?", "ide-e-produttivita-sviluppatore"),
 ])
 def test_routing_picks_the_right_skill_first_or_second(text, expected):
     assert expected in top(text), (text, top(text))
 
 
-@pytest.mark.parametrize("text", ["ciao come stai", "che ore sono?", "che tempo fa domani a Roma", "grazie mille", "ricordami di chiamare Luca alle 18", "quanto fa 12 per 7", "cosa ho in agenda domani?", "metti un promemoria tra un'ora", "quanto costa un caffè a Milano", "dimmi le ultime notizie", "apri il sito di repubblica", "come si chiama la capitale della Francia?", "raccontami una barzelletta", "che giorno è oggi?"])
+@pytest.mark.parametrize("text", ["ciao come stai", "che ore sono?", "che tempo fa domani a Roma", "grazie mille", "ricordami di chiamare Luca alle 18", "quanto fa 12 per 7", "cosa ho in agenda domani?", "metti un promemoria tra un'ora", "quanto costa un caffè a Milano", "dimmi le ultime notizie", "apri il sito di repubblica", "come si chiama la capitale della Francia?", "raccontami una barzelletta", "che giorno è oggi?", "scrivimi una poesia sull'autunno", "suggerisci un nome per il mio gatto"])
 def test_small_talk_and_simple_requests_activate_nothing(text):
     assert top(text) == []
 
