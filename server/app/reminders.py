@@ -2,6 +2,7 @@
 Creare, rimandare o eliminare un promemoria nell'app lo fa anche sul Calendario; spostare o cancellare l'evento sul Calendario
 aggiorna o toglie il promemoria dell'app (sincronizzazione ogni 5 minuti); un evento «Promemoria: …» scritto a mano sul Calendario
 diventa un promemoria dell'app. Senza Google collegato funziona tutto solo nell'app."""
+import json
 import logging
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -134,13 +135,24 @@ class ReminderService:
         self._changed()
         return {"id": rid, "event_id": event_id, "calendar": bool(event_id), "error": error}
 
+    async def _orphans(self) -> list[str]:
+        try:
+            return [e for e in json.loads(await self.store.get_setting("calendar_orphans") or "[]") if isinstance(e, str)]
+        except ValueError:
+            return []
+
+    async def _set_orphans(self, ids: list[str]) -> None:
+        await self.store.set_setting("calendar_orphans", json.dumps(list(dict.fromkeys(ids))[-200:]))
+
     async def delete(self, reminder_id: int) -> bool:
-        row = next((r for r in await self.store.list_reminders() if r["id"] == reminder_id), None)
-        if row and row.get("event_id") and self.linked:
+        row = await self.store.get_reminder(reminder_id)  # anche se già scattato: il suo evento va tolto comunque
+        eid = (row or {}).get("event_id") or ""
+        if eid and self.linked:
             try:
-                await self._delete_event(row["event_id"])
-            except Exception as e:
+                await self._delete_event(eid)
+            except Exception as e:  # Google non risponde: l'evento si toglie alla prossima sincronizzazione, senza restare orfano per sempre
                 self._record(False, explain(e))
+                await self._set_orphans(await self._orphans() + [eid])
         await self.store.delete_reminder(reminder_id)
         self._changed()
         return row is not None
@@ -194,9 +206,45 @@ class ReminderService:
             self._record(False, explain(e))
             raise
         self._record(not res.get("error"), res.get("error", ""), {k: v for k, v in res.items() if k != "error"})
-        if any(res[k] for k in ("updated", "removed", "imported", "created")):
+        if any(res.get(k) for k in ("updated", "removed", "imported", "created")):
             self._changed()
         return res
+
+    async def _cleanup(self, res: dict, now: datetime, events: dict[str, dict]) -> None:
+        """Toglie dal Calendario gli eventi rimasti senza promemoria: cancellazioni andate male e promemoria già scattati."""
+        left = []
+        for eid in await self._orphans():
+            try:
+                await self._delete_event(eid)
+                res["cleaned"] = res.get("cleaned", 0) + 1
+            except Exception as e:
+                left.append(eid)
+                res["error"] = explain(e)
+        if left != await self._orphans():
+            await self._set_orphans(left)
+        if not self.s.reminder_calendar_cleanup:
+            return
+        done = await self.store.done_reminders_with_event()
+        active = await self.store.list_reminders()
+        known = {r.get("event_id") for r in active} | {r["event_id"] for r in done}
+        for eid, ev in (events.items() if len(active) < 100 else ()):  # con l'elenco al limite non si può sapere quali eventi siano orfani  # eventi di JARVIS senza più promemoria (cancellazioni andate male in passato); i più recenti di 10 minuti sono forse in creazione
+            created = ev.get("created")
+            if eid in known or ev.get("status") == "cancelled" or not created:
+                continue
+            if (now - datetime.fromisoformat(created.replace("Z", "+00:00"))).total_seconds() < 600:
+                continue
+            try:
+                await self._delete_event(eid)
+                res["cleaned"] = res.get("cleaned", 0) + 1
+            except Exception as e:
+                res["error"] = explain(e)
+        for r in done:
+            try:
+                await self._delete_event(r["event_id"])
+                await self.store.update_reminder(r["id"], event_id="")
+                res["cleaned"] = res.get("cleaned", 0) + 1
+            except Exception as e:
+                res["error"] = explain(e)
 
     async def _sync(self) -> dict:
         res: dict = {"created": 0, "updated": 0, "removed": 0, "imported": 0}
@@ -239,6 +287,7 @@ class ReminderService:
             if fields:
                 await self.store.update_reminder(r["id"], **fields)
                 res["updated"] += 1
+        await self._cleanup(res, now, events)
         known = {r.get("event_id") for r in await self.store.list_reminders()}
         for e in await self._untagged_candidates(now):  # «Promemoria: …» scritto a mano sul Calendario
             start = (e.get("start") or {}).get("dateTime")
