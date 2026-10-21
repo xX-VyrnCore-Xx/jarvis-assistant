@@ -156,3 +156,9 @@ Memoria a lungo termine per note, ricordi, pagine web, file, email e Drive, con 
 ## API per le app
 Tutte con `Authorization: Bearer <JARVIS_API_TOKEN>`: `GET /api/status`, `GET /api/tokens` (token disponibili da FreeLLMAPI),
 `GET /api/history`, `GET|POST|DELETE /api/reminders`, `GET /api/pending`, `POST /api/pending/{id}/approve|reject`.
+
+## Privacy, cifratura e fine-tuning LoRA
+- **Cifrato a riposo** (AES-256-GCM): messaggi, ricordi, promemoria, notifiche, liste, secondo cervello (testi, titoli, tag, vettori, nomi) e ora anche **impostazioni, token dei dispositivi ed etichette** (migrazione `0003`; i dati vecchi si cifrano da soli). Le ricerche usano indici ciechi (HMAC): il database non vede mai le parole.
+- **Intestazioni di sicurezza** più severe (CSP restrittiva, anti-iframe, HSTS con sottodomini, Permissions-Policy) e schema/documentazione delle API non più pubblici.
+- **LoRA**: `POST /api/finetune/export` prepara le conversazioni (mascheratura *strict* di IBAN, carte, chiavi, password, email, telefoni) e le salva **cifrate** nel dataset privato Hugging Face; il notebook `finetune/jarvis_lora.ipynb` (Colab gratuito) le decifra solo in memoria con la tua `ENCRYPTION_KEY`, addestra l'adattatore e lo salva in un repo modello privato. Vedi `finetune/README.md`: per usarlo dal vivo serve una GPU, non Render Free.
+- Limite onesto: l'indice per parole (HMAC troncato) permette a chi ha accesso al database di vedere *quali* parole ricorrono, non il testo; e i testi escono verso i provider dei modelli (mascherati) per poter rispondere.

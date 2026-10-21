@@ -38,9 +38,9 @@ def repo_from_url(url: str) -> str | None:
     return m.group(1) if m else None
 
 
-def derive_key(settings: Settings) -> bytes:
+def derive_key(settings: Settings, purpose: bytes = b"jarvis-supabase-backup") -> bytes:
     secret = (settings.encryption_key or settings.jarvis_api_token).encode()
-    return hmac.new(secret, b"jarvis-supabase-backup", hashlib.sha256).digest()
+    return hmac.new(secret, purpose, hashlib.sha256).digest()
 
 
 def encrypt(key: bytes, data: bytes) -> bytes:

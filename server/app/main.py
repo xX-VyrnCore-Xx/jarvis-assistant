@@ -202,7 +202,7 @@ class _RedactQuery(logging.Filter):
 
 
 logging.getLogger("uvicorn.access").addFilter(_RedactQuery())
-app = FastAPI(title="JARVIS", lifespan=lifespan)
+app = FastAPI(title="JARVIS", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)  # niente schema pubblico delle API
 app.include_router(gateway_router)
 app.include_router(api_router)
 

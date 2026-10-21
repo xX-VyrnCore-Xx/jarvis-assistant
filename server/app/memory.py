@@ -320,15 +320,18 @@ class SupabaseStore:
 
     async def upsert_device(self, platform, token, label):
         h = {**self.headers, "Prefer": "resolution=merge-duplicates,return=minimal"}
-        row = {"platform": platform, "token": token, "label": label, "last_seen": datetime.now(timezone.utc).isoformat()}
-        r = await self._client.post(f"{self.base}/devices", params={"on_conflict": "token"}, json=row, headers=h)
+        # il token FCM e l'etichetta sono cifrati; il confronto avviene sull'HMAC (token_hash)
+        row = {"platform": platform, "token": self.vault.seal(token), "token_hash": self.vault.blind(token), "label": self.vault.seal(label),
+               "last_seen": datetime.now(timezone.utc).isoformat()}
+        r = await self._client.post(f"{self.base}/devices", params={"on_conflict": "token_hash"}, json=row, headers=h)
         r.raise_for_status()
 
     async def list_devices(self):
-        return await self._get("devices", {"select": "platform,token,label"})
+        rows = await self._get("devices", {"select": "platform,token,label"})
+        return [{**r, "token": self.vault.open(r["token"]), "label": self.vault.open(r["label"])} for r in rows]
 
     async def delete_device(self, token):
-        r = await self._client.delete(f"{self.base}/devices", params={"token": f"eq.{token}"}, headers=self.headers)
+        r = await self._client.delete(f"{self.base}/devices", params={"token_hash": f"eq.{self.vault.blind(token)}"}, headers=self.headers)
         r.raise_for_status()
 
     async def add_task(self, text, list_name):
@@ -367,6 +370,23 @@ class SupabaseStore:
                 r = await self._client.patch(f"{self.base}/{table}", params={"id": f"eq.{row['id']}"}, json=patch, headers=self.headers)
                 r.raise_for_status()
                 done += 1
+        done += await self._encrypt_legacy_settings_and_devices(batch)
+        return done
+
+    async def _encrypt_legacy_settings_and_devices(self, batch: int) -> int:
+        done = 0
+        for row in await self._get("app_settings", {"select": "key,value", "value": "not.like.enc1:*", "limit": batch}):
+            if row.get("value"):
+                r = await self._client.patch(f"{self.base}/app_settings", params={"key": f"eq.{row['key']}"}, json={"value": self.vault.seal(row["value"])}, headers=self.headers)
+                r.raise_for_status()
+                done += 1
+        for row in await self._get("devices", {"select": "id,token,label", "token": "not.like.enc1:*", "limit": batch}):
+            patch = {"token": self.vault.seal(row["token"]), "token_hash": self.vault.blind(row["token"]), "label": self.vault.seal(row.get("label") or "")}
+            r = await self._client.patch(f"{self.base}/devices", params={"id": f"eq.{row['id']}"}, json=patch, headers=self.headers)
+            if r.status_code == 409:  # lo stesso dispositivo si è già registrato in forma cifrata: la riga vecchia è un doppione
+                r = await self._client.delete(f"{self.base}/devices", params={"id": f"eq.{row['id']}"}, headers=self.headers)
+            r.raise_for_status()
+            done += 1
         return done
 
     async def add_usage(self, day, kind, model, delta):
@@ -388,12 +408,12 @@ class SupabaseStore:
 
     async def get_setting(self, key):
         rows = await self._get("app_settings", {"select": "value", "key": f"eq.{key}"})
-        return rows[0]["value"] if rows else ""
+        return self.vault.open(rows[0]["value"]) if rows else ""
 
     async def set_setting(self, key, value):
         h = {**self.headers, "Prefer": "resolution=merge-duplicates,return=minimal"}
         r = await self._client.post(f"{self.base}/app_settings", params={"on_conflict": "key"},
-                                    json={"key": key, "value": value, "updated_at": datetime.now(timezone.utc).isoformat()}, headers=h)
+                                    json={"key": key, "value": self.vault.seal(value), "updated_at": datetime.now(timezone.utc).isoformat()}, headers=h)
         r.raise_for_status()
 
     async def prune(self):

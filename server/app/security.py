@@ -88,10 +88,14 @@ class SecurityHeaders:
                 h += [
                     (b"x-content-type-options", b"nosniff"),
                     (b"referrer-policy", b"no-referrer"),
-                    (b"strict-transport-security", b"max-age=31536000"),
+                    (b"strict-transport-security", b"max-age=63072000; includeSubDomains"),
+                    (b"x-frame-options", b"DENY"),
+                    (b"permissions-policy", b"camera=(), microphone=(), geolocation=(), payment=(), usb=()"),
+                    (b"cross-origin-opener-policy", b"same-origin"),
+                    (b"cross-origin-resource-policy", b"same-site"),
                 ]
                 if api:
-                    h.append((b"cache-control", b"no-store"))
+                    h += [(b"cache-control", b"no-store"), (b"content-security-policy", b"default-src 'none'; frame-ancestors 'none'")]
             await send(message)
 
         await self.app(scope, receive, send_wrapper)
