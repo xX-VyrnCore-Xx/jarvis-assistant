@@ -27,6 +27,8 @@ class Store(Protocol):
     async def due_reminders(self, now: datetime) -> list[dict]: ...
     async def mark_reminder_done(self, reminder_id: int) -> None: ...
     async def delete_reminder(self, reminder_id: int) -> None: ...
+    async def get_reminder(self, reminder_id: int) -> dict | None: ...
+    async def done_reminders_with_event(self) -> list[dict]: ...
     async def list_memories(self, limit: int) -> list[dict]: ...
     async def delete_memory(self, memory_id: int) -> None: ...
     async def clear_messages(self, session_id: str) -> None: ...
@@ -114,6 +116,12 @@ class MemoryStore:
         for r in self.reminders:
             if r["id"] == reminder_id:
                 r["done"] = True
+
+    async def get_reminder(self, reminder_id):
+        return next((dict(r) for r in self.reminders if r["id"] == reminder_id), None)
+
+    async def done_reminders_with_event(self):
+        return [dict(r) for r in self.reminders if r["done"] and r.get("event_id")][:50]
 
 
     async def delete_reminder(self, reminder_id):
@@ -293,6 +301,14 @@ class SupabaseStore:
     async def delete_reminder(self, reminder_id):
         r = await self._client.delete(f"{self.base}/reminders", params={"id": f"eq.{reminder_id}"}, headers=self.headers)
         r.raise_for_status()
+
+    async def get_reminder(self, reminder_id):
+        rows = self._reminders(await self._get("reminders", {"select": "id,text,due_at,event_id,done", "id": f"eq.{int(reminder_id)}", "limit": 1}))
+        return rows[0] if rows else None
+
+    async def done_reminders_with_event(self):
+        rows = await self._get("reminders", {"select": "id,due_at,event_id", "done": "eq.true", "event_id": "not.is.null", "order": "due_at.desc", "limit": 50})
+        return [r for r in rows if r.get("event_id")]
 
     def _notif(self, n: dict) -> dict:
         import json as _json

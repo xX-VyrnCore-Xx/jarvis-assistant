@@ -74,6 +74,7 @@ class Settings(BaseSettings):
     skills_max_active: int = 2
     skills_context_chars: int = 3000
     reminder_calendar_popup: bool = True  # l'evento del Calendario avvisa anche da solo (notifica di Google Calendar) oltre ai canali di JARVIS
+    reminder_calendar_cleanup: bool = True  # tolto dal Calendario anche l'evento dei promemoria già scattati
     learn_enabled: bool = True  # impara da solo fatti, preferenze e impegni dalle conversazioni (poi li salva nel secondo cervello)
     learn_max_per_day: int = 30
     proactive_enabled: bool = True  # JARVIS ti avvisa da solo: eventi in arrivo, email nuove, riepilogo serale e settimanale

@@ -169,3 +169,40 @@ async def test_tools_tell_the_user_it_is_on_the_calendar():
 
 def test_titles_are_cleaned_in_both_directions():
     assert _clean("⏰ chiamare Luca") == "chiamare Luca" and _clean("Promemoria: dentista") == "dentista" and _clean("Promemoria - spesa") == "spesa" and _clean("Promemoria") == "Promemoria"
+
+
+@pytest.mark.asyncio
+async def test_failed_calendar_delete_is_retried_and_fired_reminders_leave_the_calendar():
+    svc, store, cal = make()
+    a = await svc.create("A", soon(30))
+    real = cal.request
+
+    async def down(method, url, **kw):
+        raise httpx.ConnectError("giù")
+
+    cal.request = down
+    assert await svc.delete(a["id"]) is True and await store.list_reminders() == []  # via dall'app...
+    cal.request = real
+    assert cal.events["ev1"]["status"] == "confirmed"  # ...ma l'evento è rimasto
+    assert (await svc.sync())["cleaned"] == 1 and cal.events["ev1"]["status"] == "cancelled"
+    assert await svc._orphans() == []
+
+    b = await svc.create("B", soon(30))
+    await store.mark_reminder_done(b["id"])  # è scattato
+    assert (await svc.sync())["cleaned"] == 1 and cal.events["ev2"]["status"] == "cancelled"
+    assert "cleaned" not in await svc.sync()  # fatto una volta sola
+
+    c = await svc.create("C", soon(30))
+    await store.mark_reminder_done(c["id"])
+    assert await svc.delete(c["id"]) is True and cal.events["ev3"]["status"] == "cancelled"  # anche se già scattato
+
+
+@pytest.mark.asyncio
+async def test_leftover_jarvis_events_without_a_reminder_are_removed_but_fresh_ones_are_spared():
+    svc, store, cal = make()
+    cal.events["old"] = {"id": "old", "status": "confirmed", "summary": "⏰ vecchio", "created": "2026-01-01T10:00:00Z", "extendedProperties": {"private": {"jarvis": "reminder"}}, "start": {"dateTime": soon(60).isoformat()}}
+    cal.events["new"] = {"id": "new", "status": "confirmed", "summary": "⏰ nuovo", "created": datetime.now(TZ).isoformat(), "extendedProperties": {"private": {"jarvis": "reminder"}}, "start": {"dateTime": soon(60).isoformat()}}
+    keep = await svc.create("tengo", soon(60))
+    cal.events[keep["event_id"]]["created"] = "2026-01-01T10:00:00Z"
+    assert (await svc.sync())["cleaned"] == 1
+    assert cal.events["old"]["status"] == "cancelled" and cal.events["new"]["status"] == "confirmed" and cal.events[keep["event_id"]]["status"] == "confirmed"
