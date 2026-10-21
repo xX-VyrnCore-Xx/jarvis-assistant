@@ -44,7 +44,7 @@ class UsageTracker:
         """Il modello che ha risposto più in fretta di recente (ultimi 30 minuti, senza errori negli ultimi 3): serve a ripiegare se il router si blocca."""
         now = time.monotonic()
         ok = [(h["ms"], m) for m, h in self.health.items()
-              if m not in exclude and h["ok_at"] and now - h["ok_at"] < 1800 and now - h["fail_at"] > 180 and (h["tools"] or not tools)]
+              if m not in exclude and h["ok_at"] and now - h["ok_at"] < 1800 and (not h["fail_at"] or now - h["fail_at"] > 180) and (h["tools"] or not tools)]
         return min(ok)[1] if ok else None
 
     def today(self) -> dict:
