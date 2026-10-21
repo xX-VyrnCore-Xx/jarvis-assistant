@@ -29,7 +29,7 @@ fn toggle(app: &AppHandle) {
 
 /// Uscita definitiva: chiude voce e installazione (con i loro processi figli), toglie l'icona dalla barra, distrugge la finestra e termina il processo.
 /// Se l'uscita normale restasse appesa (WebView, thread), dopo 3 secondi il processo viene terminato comunque.
-fn quit(app: &AppHandle) {
+fn exit_all(app: &AppHandle) {
     voice::stop_all(&app.state::<voice::Voice>());
     let _ = app.remove_tray_by_id("main");
     if let Some(w) = app.get_webview_window("main") {
@@ -44,7 +44,7 @@ fn quit(app: &AppHandle) {
 
 #[tauri::command]
 fn quit_app(app: AppHandle) {
-    quit(&app);
+    exit_all(&app);
 }
 
 #[tauri::command]
@@ -133,7 +133,7 @@ pub fn run() {
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, ev| match ev.id.as_ref() {
                     "open" => show(app),
-                    "quit" => quit(app),
+                    "quit" => exit_all(app),
                     _ => {}
                 })
                 .on_tray_icon_event(|tray, ev| {
