@@ -16,6 +16,7 @@ pub struct Voice {
     child: Mutex<Option<Child>>,
     run: Mutex<Option<(u16, String)>>,
     installing: Mutex<bool>,
+    installer: Mutex<Option<u32>>, // PowerShell dell'installazione in corso: va chiuso (con i suoi figli) se si esce
 }
 
 #[derive(Serialize)]
@@ -53,12 +54,33 @@ fn free_port() -> Result<u16, String> {
     l.local_addr().map(|a| a.port()).map_err(|e| e.to_string())
 }
 
+/// Chiude un processo con tutti i suoi figli (su Windows `taskkill /T`): chiudere solo il processo principale lascia in giro quelli generati da lui.
+fn kill_tree(pid: u32) {
+    #[cfg(windows)]
+    {
+        let mut cmd = Command::new("taskkill");
+        cmd.args(["/PID", &pid.to_string(), "/T", "/F"]).stdout(Stdio::null()).stderr(Stdio::null());
+        let _ = hidden(&mut cmd).status();
+    }
+    #[cfg(not(windows))]
+    let _ = pid;
+}
+
 pub fn stop(state: &Voice) {
     if let Some(mut child) = state.child.lock().unwrap().take() {
+        kill_tree(child.id());
         let _ = child.kill();
         let _ = child.wait();
     }
     *state.run.lock().unwrap() = None;
+}
+
+/// Uscita definitiva: ferma la voce e anche l'eventuale installazione in corso.
+pub fn stop_all(state: &Voice) {
+    stop(state);
+    if let Some(pid) = state.installer.lock().unwrap().take() {
+        kill_tree(pid);
+    }
 }
 
 #[tauri::command]
@@ -103,6 +125,7 @@ pub fn voice_install(app: AppHandle, state: State<'_, Voice>) -> Result<(), Stri
             .stderr(Stdio::piped());
         let ok = match hidden(&mut cmd).spawn() {
             Ok(mut child) => {
+                *app.state::<Voice>().installer.lock().unwrap() = Some(child.id());
                 let err = child.stderr.take();
                 let app2 = app.clone();
                 let t = std::thread::spawn(move || {
@@ -125,6 +148,7 @@ pub fn voice_install(app: AppHandle, state: State<'_, Voice>) -> Result<(), Stri
                 false
             }
         };
+        *app.state::<Voice>().installer.lock().unwrap() = None;
         *app.state::<Voice>().installing.lock().unwrap() = false;
         let _ = app.emit("voice-done", ok);
     });

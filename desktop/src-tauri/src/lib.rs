@@ -27,6 +27,26 @@ fn toggle(app: &AppHandle) {
     }
 }
 
+/// Uscita definitiva: chiude voce e installazione (con i loro processi figli), toglie l'icona dalla barra, distrugge la finestra e termina il processo.
+/// Se l'uscita normale restasse appesa (WebView, thread), dopo 3 secondi il processo viene terminato comunque.
+fn quit(app: &AppHandle) {
+    voice::stop_all(&app.state::<voice::Voice>());
+    let _ = app.remove_tray_by_id("main");
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.destroy();
+    }
+    std::thread::spawn(|| {
+        std::thread::sleep(std::time::Duration::from_secs(3));
+        std::process::exit(0);
+    });
+    app.exit(0);
+}
+
+#[tauri::command]
+fn quit_app(app: AppHandle) {
+    quit(&app);
+}
+
 #[tauri::command]
 fn run_action(app: AppHandle, action: String, args: serde_json::Value) -> Result<String, String> {
     actions::run(&app, &action, &args)
@@ -83,6 +103,9 @@ fn autostart_set(app: AppHandle, enabled: bool) -> Result<(), String> {
 
 pub fn run() {
     tauri::Builder::default()
+        // una sola copia di JARVIS: aprire di nuovo il programma (o l'avvio con Windows) riporta davanti quella già attiva,
+        // invece di lasciare due processi di cui «Esci» ne chiuderebbe uno solo
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show(app)))
         .manage(voice::Voice::default())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
@@ -101,20 +124,16 @@ pub fn run() {
             app.global_shortcut().register(Shortcut::new(Some(Modifiers::ALT), Code::Space))?;
 
             let open = MenuItem::with_id(app, "open", "Apri JARVIS", true, None::<&str>)?;
-            let quit = MenuItem::with_id(app, "quit", "Esci", true, None::<&str>)?;
+            let quit = MenuItem::with_id(app, "quit", "Esci definitivamente", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&open, &quit])?;
-            TrayIconBuilder::new()
+            TrayIconBuilder::with_id("main")
                 .icon(app.default_window_icon().unwrap().clone())
                 .tooltip("JARVIS")
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, ev| match ev.id.as_ref() {
                     "open" => show(app),
-                    "quit" => {
-                        // chiusura completa: ferma la voce locale e termina il processo
-                        voice::stop(&app.state::<voice::Voice>());
-                        app.exit(0)
-                    }
+                    "quit" => quit(app),
                     _ => {}
                 })
                 .on_tray_icon_event(|tray, ev| {
@@ -137,14 +156,14 @@ pub fn run() {
                 let _ = window.hide();
             }
         })
-        .invoke_handler(tauri::generate_handler![run_action, notify, show_window, secret_get, secret_set, secret_delete, autostart_get, autostart_set,
+        .invoke_handler(tauri::generate_handler![run_action, notify, show_window, quit_app, secret_get, secret_set, secret_delete, autostart_get, autostart_set,
             voice::voice_status, voice::voice_install, voice::voice_start, voice::voice_stop, voice::voice_uninstall])
         .build(tauri::generate_context!())
         .expect("errore nell'avvio di JARVIS")
         .run(|app, event| {
             // qualunque uscita (anche da Windows) chiude la voce: nessun processo Python rimane in giro
             if let tauri::RunEvent::Exit = event {
-                voice::stop(&app.state::<voice::Voice>());
+                voice::stop_all(&app.state::<voice::Voice>());
             }
         });
 }
