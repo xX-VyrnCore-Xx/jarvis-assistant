@@ -19,8 +19,9 @@ class UsageTracker:
         self._flushed: dict[tuple[str, str, str], dict] = {}
         self.recent_ms: list[float] = []
         self.last_error = ""
+        self.health: dict[str, dict] = {}  # modello -> {"ok_at", "fail_at", "ms" (media mobile), "tools" (ha già risposto con i tool)}
 
-    def record(self, kind: str, model: str = "", prompt: int = 0, completion: int = 0, ms: float = 0.0, ok: bool = True) -> None:
+    def record(self, kind: str, model: str = "", prompt: int = 0, completion: int = 0, ms: float = 0.0, ok: bool = True, tools: bool = False) -> None:
         key = (datetime.now(timezone.utc).strftime(DAY), kind, (model or "")[:80])
         r = self.rows.setdefault(key, {"requests": 0, "errors": 0, "prompt_tokens": 0, "completion_tokens": 0, "latency_ms": 0})
         r["requests"] += 1
@@ -31,6 +32,20 @@ class UsageTracker:
         (log.info if ok else log.warning)("modello %s %s: %s in %.1f s (%d+%d token)", kind, model or "auto", "ok" if ok else "ERRORE", ms / 1000, prompt, completion)
         if ok:
             self.recent_ms = (self.recent_ms + [ms])[-50:]
+        if kind == "chat" and model and model != "auto":
+            h = self.health.setdefault(model, {"ok_at": 0.0, "fail_at": 0.0, "ms": 0.0, "tools": False})
+            now = time.monotonic()
+            if ok:
+                h["ok_at"], h["ms"], h["tools"] = now, (ms if not h["ms"] else 0.7 * h["ms"] + 0.3 * ms), h["tools"] or tools
+            else:
+                h["fail_at"] = now
+
+    def best_model(self, tools: bool = False, exclude: tuple[str, ...] = ()) -> str | None:
+        """Il modello che ha risposto più in fretta di recente (ultimi 30 minuti, senza errori negli ultimi 3): serve a ripiegare se il router si blocca."""
+        now = time.monotonic()
+        ok = [(h["ms"], m) for m, h in self.health.items()
+              if m not in exclude and h["ok_at"] and now - h["ok_at"] < 1800 and now - h["fail_at"] > 180 and (h["tools"] or not tools)]
+        return min(ok)[1] if ok else None
 
     def today(self) -> dict:
         d = datetime.now(timezone.utc).strftime(DAY)

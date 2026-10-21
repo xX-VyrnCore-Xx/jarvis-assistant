@@ -113,6 +113,12 @@ JARVIS ha **136 competenze integrate** in otto ambiti: **Programmazione** (66: r
 - **Le tue**: «crea una competenza per scrivere il mio report del venerdì…» (`skill_save`): si salva cifrata nel secondo cervello e si attiva da sola. `skill_delete` la elimina; quelle integrate sono in `server/app/skills/library/*.md` (formato: intestazione `name/title/domain/description/triggers`, riga vuota, testo; blocchi separati da `@@@`).
 - Le competenze su fisco, salute e diritto danno orientamento generale e rimandano ai professionisti; i dati aggiornati si cercano sul web.
 
+## Promemoria e Calendario, velocità
+
+- **Promemoria ↔ Calendario Google**: ogni promemoria creato in app, su Telegram o a voce diventa anche un evento del Calendario (⏰, con avviso di Google). **Il Calendario comanda**: se sposti o elimini l'evento, il promemoria dell'app si aggiorna o sparisce (sincronizzazione ogni 5 minuti, o subito con `POST /api/reminders/sync`); un evento scritto a mano come «Promemoria: …» diventa un promemoria dell'app. Rimandare o eliminare un promemoria nell'app muove o cancella l'evento. Senza Google collegato funziona solo nell'app; se il Calendario è momentaneamente giù il promemoria resta e riceve l'evento alla sincronizzazione successiva. `REMINDER_CALENDAR_POPUP=false` toglie l'avviso doppio di Google.
+- **Risposte più veloci**: a ogni richiesta si inviano al modello solo gli strumenti pertinenti (prima tutti: 4-5.000 token a messaggio, quota gratuita e limiti dei provider superati); se serve altro il modello li attiva da solo (`need_tools`). Cronologia, secondo cervello, profilo e situazione si leggono insieme. Se il router non risponde entro 35 secondi (`LLM_ATTEMPT_TIMEOUT_S`) si ripiega sul modello che di recente risponde più in fretta, invece di aspettare i 60 secondi del provider.
+- **Anti-sleep**: `GET /health` riceve un ping ogni 5 minuti da UptimeRobot e uno ogni 10 da Supabase (`pg_cron`, `supabase/keepalive.sql`): il servizio non va mai in sospensione.
+
 ## Log, Telegram e conoscenza di base
 
 - **Log ogni minuto**: nei log di Render compare una riga `heartbeat` al minuto (uptime, memoria, richieste ai modelli, secondo cervello, app collegate, stato dei cicli di fondo); se un ciclo si ferma scatta un avviso. Ogni chiamata a un modello lascia una riga con durata e token. `PYTHONUNBUFFERED` è attivo: le righe arrivano subito.

@@ -14,8 +14,17 @@ def parse_due(when: str, tz: ZoneInfo) -> datetime:
     return due.replace(tzinfo=tz) if due.tzinfo is None else due.astimezone(tz)
 
 
-def register_basic_tools(reg: ToolRegistry, settings: Settings, store: Store, budget=None, brain=None) -> None:
-    """`budget`: coroutine che restituisce il testo sui token disponibili (se FreeLLMAPI è nel container)."""
+def register_basic_tools(reg: ToolRegistry, settings: Settings, store: Store, budget=None, brain=None, reminders=None) -> None:
+    """`budget`: coroutine che restituisce il testo sui token disponibili (se FreeLLMAPI è nel container).
+    `reminders`: ReminderService (promemoria collegati al Calendario Google)."""
+    if reminders is None:
+        from ..reminders import ReminderService
+
+        reminders = ReminderService(settings, store)
+
+    def where(r: dict) -> str:
+        return "e aggiunto al Calendario Google." if r["calendar"] else ("(solo nell'app: il Calendario non ha risposto, lo collego appena possibile)." if reminders.linked else "(solo nell'app: Google non è collegato).")
+
     async def get_datetime() -> str:
         now = datetime.now(ZoneInfo(settings.timezone))
         return f"{_GIORNI[now.weekday()]} {now:%d/%m/%Y %H:%M} ({settings.timezone}), ISO {now:%Y-%m-%dT%H:%M:%S}, settimana {now.isocalendar().week}"
@@ -32,8 +41,8 @@ def register_basic_tools(reg: ToolRegistry, settings: Settings, store: Store, bu
     async def remind_in(minutes: int, text: str) -> str:
         tz = ZoneInfo(settings.timezone)
         due = datetime.now(tz) + timedelta(minutes=max(1, minutes))
-        await store.add_reminder(text, due)
-        return f"Promemoria fissato per {due:%d/%m/%Y %H:%M}."
+        r = await reminders.create(text, due)
+        return f"Promemoria fissato per {due:%d/%m/%Y %H:%M} {where(r)}"
 
     async def remember(content: str) -> str:
         await store.add_memory(content)
@@ -69,26 +78,22 @@ def register_basic_tools(reg: ToolRegistry, settings: Settings, store: Store, bu
         due = parse_due(when, tz)
         if due <= datetime.now(tz):
             return "Errore: la data del promemoria è nel passato. Usa get_datetime e riprova."
-        await store.add_reminder(text, due)
-        return f"Promemoria fissato per {due:%d/%m/%Y %H:%M}."
+        r = await reminders.create(text, due)
+        return f"Promemoria fissato per {due:%d/%m/%Y %H:%M} {where(r)}"
 
     async def list_reminders() -> str:
         rows = await store.list_reminders()
-        return "\n".join(f"- [id {r['id']}] {r['due_at']}: {r['text']}" for r in rows) or "Nessun promemoria attivo."
+        return "\n".join(f"- [id {r['id']}] {r['due_at']}: {r['text']}" + (" 📅" if r.get("event_id") else "") for r in rows) or "Nessun promemoria attivo."
 
     async def delete_reminder(reminder_id: int) -> str:
-        await store.delete_reminder(reminder_id)
-        return "Promemoria eliminato."
+        await reminders.delete(reminder_id)
+        return "Promemoria eliminato (anche dal Calendario)." if reminders.linked else "Promemoria eliminato."
 
     async def reminder_snooze(reminder_id: int, minutes: int = 10) -> str:
         """Rimanda un promemoria di N minuti da adesso."""
-        tz = ZoneInfo(settings.timezone)
-        row = next((r for r in await store.list_reminders() if r["id"] == reminder_id), None)
-        if not row:
+        due = await reminders.snooze(reminder_id, minutes)
+        if due is None:
             return "Errore: promemoria non trovato (controlla l'id con list_reminders)."
-        due = datetime.now(tz) + timedelta(minutes=max(1, minutes))
-        await store.add_reminder(row["text"], due)
-        await store.delete_reminder(reminder_id)
         return f"Promemoria rimandato a {due:%d/%m/%Y %H:%M}."
 
     async def task_add(text: str, list_name: str = "attività") -> str:
@@ -142,7 +147,7 @@ def register_basic_tools(reg: ToolRegistry, settings: Settings, store: Store, bu
     )
     reg.register(
         "add_reminder",
-        "Crea un promemoria: l'utente riceverà un messaggio all'ora indicata. Calcola 'when' partendo da get_datetime.",
+        "Crea un promemoria: lo aggiunge anche al Calendario Google e avvisa l'utente all'ora indicata (sempre questo per «ricordami», «promemoria», «avvisami»). Calcola 'when' partendo da get_datetime.",
         {
             "type": "object",
             "properties": {

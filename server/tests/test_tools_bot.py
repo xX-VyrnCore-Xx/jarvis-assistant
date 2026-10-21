@@ -127,6 +127,9 @@ def make_bot():
     st = FakeApp.state
     st.settings = Settings(telegram_owner_id=42, owner_name="signore")
     st.tg, st.store = FakeTG(), MemoryStore()
+    from app.reminders import ReminderService
+
+    st.reminders = ReminderService(st.settings, st.store)
 
     class Agent:
         async def reply_stream(self, text, session, voice=False, model=None, skills=None):

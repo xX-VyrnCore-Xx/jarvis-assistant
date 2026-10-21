@@ -67,11 +67,11 @@ class LLMClient:
             raise LLMError("FREELLM_BASE_URL non configurato")
         return self.s.freellm_base_url.rstrip("/") + path
 
-    def _record(self, kind: str, model: str, usage: dict | None, messages, out_text: str, ms: float, ok: bool = True) -> None:
+    def _record(self, kind: str, model: str, usage: dict | None, messages, out_text: str, ms: float, ok: bool = True, tools: bool = False) -> None:
         usage = usage or {}
         p = usage.get("prompt_tokens") or (sum(est_tokens(str(m.get("content") or "")) for m in messages) if messages else 0)
         c = usage.get("completion_tokens") or est_tokens(out_text) if ok else 0
-        self.usage.record(kind, model, p, c, ms, ok)
+        self.usage.record(kind, model, p, c, ms, ok, tools)
 
     async def chat(self, messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None = None, model: str | None = None,
                    kind: str = "chat") -> dict[str, Any]:
@@ -79,17 +79,24 @@ class LLMClient:
         payload = self._payload(messages, tools, model, kind)
         url = self._url("/chat/completions")
         last: Exception | None = None
+        auto = (model or self.s.freellm_model) == "auto"
+        failed: list[str] = []
         async with self._gate:
-            for attempt in range(4):
-                delay = min(2**attempt, 8) + random.random() * 0.5  # backoff con jitter
+            for attempt in range(3):
+                delay = min(2**attempt, 4) + random.random() * 0.5  # backoff con jitter
+                if attempt and auto and (fb := self.usage.best_model(bool(tools), tuple(failed))):
+                    payload["model"] = fb  # il router si è bloccato: si ripiega sul modello che di recente risponde più in fretta
                 t0 = time.monotonic()
                 try:
                     headers = {"Authorization": f"Bearer {self._api_key()}"}
-                    r = await self._client.post(url, json=payload, headers=headers)
+                    # primo tentativo con un limite breve: un provider bloccato (60 s) non deve tenere ferma la risposta
+                    r = await self._client.post(url, json=payload, headers=headers,
+                                                timeout=httpx.Timeout(self.s.llm_attempt_timeout_s if attempt == 0 else self.s.llm_timeout_s, connect=10.0))
                     if r.status_code in RETRY_STATUS:
                         # il corpo della risposta può contenere frammenti del prompt: nei messaggi d'errore va solo lo stato
                         last = LLMError(f"HTTP {r.status_code}")
                         self.usage.record(kind, payload["model"], 0, 0, (time.monotonic() - t0) * 1000, ok=False)
+                        failed.append(payload["model"])
                         if wait := r.headers.get("retry-after"):
                             delay = min(float(wait), 20.0) if wait.replace(".", "", 1).isdigit() else delay
                     elif r.status_code in (400, 401, 403, 404, 422):
@@ -98,13 +105,16 @@ class LLMClient:
                         r.raise_for_status()
                         data = r.json()
                         msg = data["choices"][0]["message"]
-                        self._record(kind, data.get("model") or payload["model"], data.get("usage"), messages, msg.get("content") or "", (time.monotonic() - t0) * 1000)
+                        self._record(kind, data.get("model") or payload["model"], data.get("usage"), messages, msg.get("content") or "", (time.monotonic() - t0) * 1000, tools=bool(tools))
                         return msg
                 except (httpx.TransportError, LLMError) as e:
                     if isinstance(e, LLMError) and "rifiutato" in str(e):
                         raise
                     last = e
-                if attempt < 3:
+                    if isinstance(e, httpx.TransportError):
+                        self.usage.record(kind, payload["model"], 0, 0, (time.monotonic() - t0) * 1000, ok=False)
+                        failed.append(payload["model"])
+                if attempt < 2:
                     await asyncio.sleep(delay)
         self.usage.last_error = type(last).__name__
         raise LLMError(f"FreeLLMAPI non raggiungibile: {last}")
@@ -115,15 +125,22 @@ class LLMClient:
         payload = self._payload(messages, tools, model, "chat", stream=True)
         url = self._url("/chat/completions")
         last: Exception | None = None
+        auto = (model or self.s.freellm_model) == "auto"
+        failed: list[str] = []
         async with self._gate:
             for attempt in range(3):
+                if attempt and auto and (fb := self.usage.best_model(bool(tools), tuple(failed))):
+                    payload["model"] = fb  # ripiego sul modello che di recente risponde più in fretta
                 t0 = time.monotonic()
                 started = False
                 try:
-                    async with self._client.stream("POST", url, json=payload, headers={"Authorization": f"Bearer {self._api_key()}"}) as r:
+                    # il limite vale per ogni attesa di dati: se il primo token non arriva in tempo si riprova con un altro modello
+                    async with self._client.stream("POST", url, json=payload, headers={"Authorization": f"Bearer {self._api_key()}"},
+                                                   timeout=httpx.Timeout(self.s.llm_attempt_timeout_s if attempt == 0 else self.s.llm_timeout_s, connect=10.0)) as r:
                         if r.status_code in RETRY_STATUS:
                             last = LLMError(f"HTTP {r.status_code}")
-                            self.usage.record("chat", payload["model"], 0, 0, 0, ok=False)
+                            self.usage.record("chat", payload["model"], 0, 0, (time.monotonic() - t0) * 1000, ok=False)
+                            failed.append(payload["model"])
                         elif r.status_code >= 400:
                             raise LLMError(f"FreeLLMAPI ha rifiutato la richiesta (HTTP {r.status_code})")
                         else:
@@ -156,13 +173,16 @@ class LLMClient:
                             msg: dict[str, Any] = {"role": "assistant", "content": text or None}
                             if calls:
                                 msg["tool_calls"] = [calls[i] | {"id": calls[i]["id"] or f"call_{i}"} for i in sorted(calls)]
-                            self._record("chat", model_id, usage, messages, text, (time.monotonic() - t0) * 1000)
+                            self._record("chat", model_id, usage, messages, text, (time.monotonic() - t0) * 1000, tools=bool(tools))
                             yield ("done", msg)
                             return
                 except (httpx.TransportError, LLMError) as e:
                     if started or (isinstance(e, LLMError) and "rifiutato" in str(e)):
                         raise
                     last = e
+                    if isinstance(e, httpx.TransportError):
+                        self.usage.record("chat", payload["model"], 0, 0, (time.monotonic() - t0) * 1000, ok=False)
+                        failed.append(payload["model"])
                 if attempt < 2:
                     await asyncio.sleep(min(2**attempt, 8) + random.random() * 0.5)
         raise LLMError(f"FreeLLMAPI non raggiungibile: {last}")

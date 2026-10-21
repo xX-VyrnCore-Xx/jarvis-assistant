@@ -150,7 +150,7 @@ async def brain_loop(settings: Settings, store: Store, brain, agent, notifier) -
         await asyncio.sleep(300)
 
 
-async def maintenance_loop(settings: Settings, store: Store, usage, updates, notifier) -> None:
+async def maintenance_loop(settings: Settings, store: Store, usage, updates, notifier, reminders=None) -> None:
     """Ogni 5 minuti: salva i consumi, controlla la memoria del processo; ogni `update_check_minutes` cerca nuove Release e avvisa le app."""
     from .health import container_mb, rss_mb
 
@@ -161,6 +161,11 @@ async def maintenance_loop(settings: Settings, store: Store, usage, updates, not
         beat("manutenzione", 300)
         try:
             await usage.flush(store)
+            if reminders is not None:  # il Calendario comanda: spostamenti ed eliminazioni arrivano nell'app, e i promemoria senza evento ne ricevono uno
+                try:
+                    await reminders.sync()
+                except Exception as e:
+                    log.info("sincronizzazione promemoria ↔ Calendario rimandata: %s", type(e).__name__)
             mem = container_mb() or rss_mb() * 1.6  # il container comprende anche FreeLLMAPI
             if mem > 440 and not mem_alert:
                 mem_alert = True

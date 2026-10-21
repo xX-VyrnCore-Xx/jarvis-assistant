@@ -38,6 +38,7 @@ from .brain.knowledge import Knowledge
 from .skills.registry import SkillRegistry
 from .skills.tools import register_skill_tools
 from .proactive import Proactive
+from .reminders import ReminderService
 from .scheduler import background_loop, brain_loop, heartbeat_loop, maintenance_loop, proactive_loop
 from .updates import UpdateService
 from .usage import UsageTracker
@@ -89,7 +90,8 @@ async def lifespan(app: FastAPI):
     llm = LLMClient(settings, usage=usage)
     brain = app.state.brain = Brain(settings, bstore, Embedder(settings, usage=usage), vault, llm)
     brain.knowledge = Knowledge(settings, brain, store)
-    register_basic_tools(tools, settings, store, budget=budget.text if budget.enabled else None, brain=brain)
+    reminders = app.state.reminders = ReminderService(settings, store)  # promemoria ↔ Calendario (google si collega dopo)
+    register_basic_tools(tools, settings, store, budget=budget.text if budget.enabled else None, brain=brain, reminders=reminders)
     register_brain_tools(tools, brain)
     app.state.gateway_client = make_client()
     pc = app.state.pc = PCBridge()
@@ -99,6 +101,7 @@ async def lifespan(app: FastAPI):
     app.state.chat_limiter = RateLimiter(settings.chat_per_minute)
     google = app.state.google = GoogleClient(settings, store=store)
     await google.load()
+    reminders.google = google
     if google.has_client:
         register_google_tools(tools, settings, google, pending, brain)
     app.state.agent = Agent(settings, llm, store, tools, brain)
@@ -147,7 +150,7 @@ async def lifespan(app: FastAPI):
     task = asyncio.create_task(background_loop(settings, store, notifier, budget, app.state.backup))
     updates = app.state.updates = UpdateService(settings, store, notifier)
     brain_task = asyncio.create_task(brain_loop(settings, store, brain, app.state.agent, notifier))
-    maint_task = asyncio.create_task(maintenance_loop(settings, store, usage, updates, notifier))
+    maint_task = asyncio.create_task(maintenance_loop(settings, store, usage, updates, notifier, reminders))
     proactive = app.state.proactive = Proactive(settings, store, notifier, google, brain, budget)
     proactive_task = asyncio.create_task(proactive_loop(settings, proactive))
     heartbeat_task = asyncio.create_task(heartbeat_loop(app))

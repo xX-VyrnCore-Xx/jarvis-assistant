@@ -137,14 +137,20 @@ async def add_reminder(body: ReminderIn, request: Request) -> dict:
         raise HTTPException(422, "Data non valida (usa il formato ISO 8601)") from e
     if due <= datetime.now(tz):
         raise HTTPException(422, "La data è nel passato")
-    await request.app.state.store.add_reminder(body.text, due)
-    return {"ok": True}
+    r = await request.app.state.reminders.create(body.text, due)
+    return {"ok": True, "id": r["id"], "calendar": r["calendar"]}
 
 
 @router.delete("/reminders/{reminder_id}")
 async def delete_reminder(reminder_id: int, request: Request) -> dict:
-    await request.app.state.store.delete_reminder(reminder_id)
+    await request.app.state.reminders.delete(reminder_id)
     return {"ok": True}
+
+
+@router.post("/reminders/sync")
+async def reminders_sync(request: Request) -> dict:
+    """Allinea ora i promemoria con il Calendario (di solito lo fa da solo ogni 5 minuti)."""
+    return await request.app.state.reminders.sync()
 
 
 @router.get("/pending")
@@ -192,7 +198,7 @@ async def notification_snooze(notification_id: int, body: SnoozeIn, request: Req
         raise HTTPException(404, "Notifica inesistente")
     if body.minutes:
         due = datetime.now(ZoneInfo(st.settings.timezone)) + timedelta(minutes=body.minutes)
-        await st.store.add_reminder(n["body"], due)
+        await st.reminders.create(n["body"], due)
     await st.notifier.mark_read([notification_id])
     return {"ok": True}
 
