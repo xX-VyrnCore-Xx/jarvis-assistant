@@ -70,3 +70,29 @@ async def test_one_conversation_across_devices_but_telegram_stays_apart():
     assert canonical_session("desktop") == "main" and canonical_session("tg:42") == "tg:42"
     await s.clear_messages("desktop")
     assert await s.recent_messages("main", 10) == [] and len(await s.recent_messages("tg:42", 10)) == 1
+
+
+@pytest.mark.asyncio
+async def test_push_payload_priorities_ttl_privacy_and_collapse():
+    from app.notify import FCM
+
+    sent = []
+
+    class C:
+        async def post(self, url, headers=None, json=None):
+            sent.append(json["message"]["android"])
+            return httpx.Response(200, json={}, request=httpx.Request("POST", url))
+
+    fcm = FCM(Settings(jarvis_api_token="t"), C())
+    fcm.account = {"project_id": "p"}
+
+    async def tok():
+        return "t"
+    fcm._access_token = tok
+    await fcm.send("tok", "Promemoria", "x", "reminder", "reminders", 5)
+    await fcm.send("tok", "Nuova versione", "x", "update", "more", 6)
+    await fcm.send("tok", "Idea", "x", "proactive", "chat", 7)
+    rem, upd, pro = sent
+    assert rem["priority"] == "HIGH" and rem["ttl"] == "3600s" and rem["notification"]["visibility"] == "PRIVATE" and rem["notification"]["notification_priority"] == "PRIORITY_HIGH"
+    assert upd["priority"] == "NORMAL" and upd["collapse_key"] == "update" and upd["notification"]["tag"] == "update" and upd["notification"]["visibility"] == "PUBLIC"
+    assert pro["priority"] == "NORMAL" and pro["ttl"] == "21600s" and "collapse_key" not in pro

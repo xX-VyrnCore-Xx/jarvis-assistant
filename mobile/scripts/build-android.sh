@@ -19,6 +19,32 @@ npm run build:web
 MANIFEST=android/app/src/main/AndroidManifest.xml
 sed -i 's/android:allowBackup="true"/android:allowBackup="false"/' "$MANIFEST"
 grep -q 'usesCleartextTraffic' "$MANIFEST" || sed -i 's/<application/<application android:usesCleartextTraffic="false"/' "$MANIFEST"
+# rete: solo HTTPS, solo autorità di certificazione del sistema (niente certificati aggiunti dall'utente), e nessun backup/trasferimento dei dati (token compreso)
+XML_DIR=android/app/src/main/res/xml
+mkdir -p "$XML_DIR"
+cat > "$XML_DIR/network_security_config.xml" <<'XML'
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>
+XML
+cat > "$XML_DIR/data_extraction_rules.xml" <<'XML'
+<?xml version="1.0" encoding="utf-8"?>
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="root" /><exclude domain="file" /><exclude domain="database" /><exclude domain="sharedpref" /><exclude domain="external" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="root" /><exclude domain="file" /><exclude domain="database" /><exclude domain="sharedpref" /><exclude domain="external" />
+    </device-transfer>
+</data-extraction-rules>
+XML
+grep -q 'networkSecurityConfig' "$MANIFEST" || sed -i 's/<application/<application android:networkSecurityConfig="@xml\/network_security_config" android:dataExtractionRules="@xml\/data_extraction_rules"/' "$MANIFEST"
+grep -q 'networkSecurityConfig' "$MANIFEST" || { echo "manifest: configurazione di rete non applicata"; exit 1; }
 grep -q 'allowBackup="false"' "$MANIFEST" || { echo "manifest: allowBackup non disattivato"; exit 1; }
 
 if [ -n "${ANDROID_GOOGLE_SERVICES_JSON_B64:-}" ]; then

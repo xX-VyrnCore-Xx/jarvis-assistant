@@ -17,6 +17,7 @@ SCOPE = "https://www.googleapis.com/auth/firebase.messaging"
 # canali Android (creati dall'app): importanza e suono dipendono dal tipo
 CHANNELS = {"reminder": "reminders", "alert": "alerts", "pending": "alerts", "update": "updates", "brain": "general", "proactive": "general", "info": "general"}
 ROUTES = {"reminder": "reminders", "alert": "tokens", "pending": "chat", "update": "more", "brain": "brain", "proactive": "chat", "info": "chat"}
+TTL = {"reminder": 3600, "pending": 600, "alert": 21600, "update": 259200, "brain": 43200, "proactive": 21600, "info": 21600}  # secondi di validità della consegna push
 CRITICAL = {"reminder", "alert", "pending"}  # arrivano anche nelle ore silenziose
 DEFAULT_PREFS = {"kinds": {k: {"inapp": True, "push": True, "telegram": k in ("reminder", "alert", "update", "proactive")} for k in ("reminder", "alert", "pending", "update", "brain", "proactive", "info")},
                  "quiet": {"enabled": True, "from": "23:00", "to": "07:30"}}
@@ -73,9 +74,19 @@ class FCM:
     async def send(self, device_token: str, title: str, body: str, kind: str, route: str = "", nid: int = 0, silent: bool = False) -> bool:
         """True se consegnata; False se il token non è più valido (da rimuovere)."""
         channel = CHANNELS.get(kind, "general")
-        android: dict = {"priority": "NORMAL" if silent else "HIGH", "notification": {"channel_id": channel, "tag": f"{kind}-{nid}" if nid else kind}}
+        urgent = kind in CRITICAL
+        android: dict = {
+            "priority": "HIGH" if urgent and not silent else "NORMAL",  # l'alta priorità sveglia il telefono: solo per ciò che non può aspettare
+            "ttl": f"{TTL.get(kind, 43200)}s",  # un promemoria scaduto da ore non serve più: non va consegnato in ritardo
+            "notification": {"channel_id": channel, "tag": f"{kind}-{nid}" if nid else kind, "color": "#FFB347",
+                             "notification_priority": "PRIORITY_HIGH" if urgent else "PRIORITY_DEFAULT",
+                             "visibility": "PUBLIC" if kind in ("update", "info") else "PRIVATE",  # con lo schermo bloccato il contenuto resta nascosto
+                             "default_sound": True, "default_vibrate_timings": urgent},
+        }
+        if kind in ("update", "info"):
+            android["collapse_key"] = kind  # un solo avviso dello stesso tipo alla volta
         if kind == "update":
-            android["notification"]["tag"] = "update"  # un solo avviso di aggiornamento alla volta
+            android["notification"]["tag"] = "update"
         r = await self._client.post(
             f"https://fcm.googleapis.com/v1/projects/{self.account['project_id']}/messages:send",
             headers={"Authorization": f"Bearer {await self._access_token()}"},
