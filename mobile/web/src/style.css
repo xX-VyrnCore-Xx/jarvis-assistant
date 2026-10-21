@@ -285,3 +285,58 @@ button { transition: transform .16s var(--spring), opacity .16s; } button:active
   .m-lens { top: calc(8px + var(--top)); height: 56px; transform: translateY(calc(var(--i, 0) * 60px)); }
 }
 @media (min-width: 720px) { .m-tab { flex: none; } }
+
+/* =====================================================================================
+   v0.7 — stile macOS: Dock fluttuante sul telefono, barra laterale con vetro e «semafori» su schermi larghi,
+   schede raggruppate con angoli piccoli e linee sottili, barra superiore a vetro
+   ===================================================================================== */
+:root { --r-card: 14px; --r-ctl: 10px; --accent-sel: rgba(255, 179, 71, .2); --dock-bg: rgba(40, 34, 58, .62); --dock-line: rgba(255, 255, 255, .14); --dock-sh: 0 18px 40px rgba(0, 0, 0, .45), 0 2px 6px rgba(0, 0, 0, .3); }
+:root[data-theme="light"] { --accent-sel: rgba(226, 85, 47, .14); --dock-bg: rgba(255, 255, 255, .66); --dock-line: rgba(60, 40, 30, .14); --dock-sh: 0 16px 36px rgba(60, 30, 20, .18), 0 2px 6px rgba(60, 30, 20, .08); }
+
+/* barra superiore: «toolbar» a vetro con linea sottile */
+.m-top { background: color-mix(in srgb, var(--bg) 62%, transparent); backdrop-filter: saturate(180%) blur(22px); -webkit-backdrop-filter: saturate(180%) blur(22px); border-bottom: var(--hair) solid var(--line); padding-bottom: 8px; }
+.m-title h1 { font-weight: 700; letter-spacing: .01em; font-size: 17px; } .m-title p { font-size: 12px; }
+.m-pill, .m-bell { background: color-mix(in srgb, var(--surf) 80%, transparent); box-shadow: inset 0 1px 0 var(--hl); border-radius: var(--r-ctl); }
+.m-bell { border-radius: 50%; }
+
+/* schede e gruppi: angoli piccoli, ombra morbida, elenchi «inset» con separatori sottili */
+.m-card { border-radius: var(--r-card); padding: 14px 16px; box-shadow: 0 1px 2px rgba(0, 0, 0, .18), 0 8px 24px rgba(0, 0, 0, .16), inset 0 1px 0 var(--hl); }
+:root[data-theme="light"] .m-card { box-shadow: 0 1px 2px rgba(60, 30, 20, .08), 0 8px 24px rgba(60, 30, 20, .07), inset 0 1px 0 var(--hl); }
+.m-sub { font-size: 11px; letter-spacing: .08em; font-weight: 600; margin: 24px 6px 7px; }
+.m-quick button { border-radius: var(--r-card); } .m-chips button { border-radius: 999px; font-weight: 500; }
+.m-composer { border-radius: 22px; background: color-mix(in srgb, var(--surf) 82%, transparent); backdrop-filter: blur(16px) saturate(160%); -webkit-backdrop-filter: blur(16px) saturate(160%); }
+.m-msg.user .m-bubble, .m-msg.bot .m-bubble { border-radius: 19px; } .m-msg.user .m-bubble { border-bottom-right-radius: 5px; } .m-msg.bot .m-bubble { border-bottom-left-radius: 5px; }
+.m-ghost, .m-seg { border-radius: var(--r-ctl); }
+.m-sheet { border-radius: 16px 16px 0 0; background: color-mix(in srgb, var(--surf) 90%, transparent); backdrop-filter: blur(30px) saturate(180%); -webkit-backdrop-filter: blur(30px) saturate(180%); border: var(--hair) solid var(--line); }
+
+/* ---- Dock (telefono in verticale): capsula di vetro che galleggia, l'icona attiva si solleva, puntino sotto come per le app aperte */
+.m-tabs { margin: 2px max(10px, var(--sr)) calc(8px + var(--bot)) max(10px, var(--sl)); padding: 6px; border-radius: 26px; border: var(--hair) solid var(--dock-line);
+  background: var(--dock-bg); box-shadow: var(--dock-sh), inset 0 1px 0 var(--hl); backdrop-filter: saturate(200%) blur(28px); -webkit-backdrop-filter: saturate(200%) blur(28px); }
+.m-lens { top: 6px; left: 6px; width: calc((100% - 12px) / 5); height: 48px; padding: 0 3px; }
+.m-lens i { border-radius: 19px; background: var(--accent-sel); box-shadow: inset 0 1px 0 var(--hl); }
+.m-tab { padding: 6px 0 4px; } .m-tab-ic { transition: transform .38s var(--bounce); } .m-tab.on .m-tab-ic { transform: translateY(-2px) scale(1.14); }
+.m-tab.on::after { content: ""; position: absolute; bottom: -1px; left: calc(50% - 2px); width: 4px; height: 4px; border-radius: 50%; background: var(--amber); box-shadow: 0 0 8px var(--glow); animation: dotIn .4s var(--bounce); }
+@keyframes dotIn { from { transform: scale(0); } }
+.m-tab small { font-weight: 600; }
+
+/* ---- barra laterale (tablet, pieghevoli, finestre): vetro, «semafori» in alto, righe con icona + testo, selezione a pillola */
+@media (min-width: 720px) {
+  .m-tabs { order: -1; margin: 0; border-radius: 0; border: 0; border-right: var(--hair) solid var(--line); box-shadow: none; width: calc(212px + var(--sl)); gap: 3px; background: color-mix(in srgb, var(--surf) 55%, transparent);
+    padding: calc(58px + var(--top)) 10px calc(14px + var(--bot)) calc(10px + var(--sl)); }
+  .m-tabs::before { content: ""; position: absolute; top: calc(18px + var(--top)); left: calc(18px + var(--sl)); width: 12px; height: 12px; border-radius: 50%; background: #ff5f57; box-shadow: 20px 0 0 #febc2e, 40px 0 0 #28c840, inset 0 0 0 .5px rgba(0, 0, 0, .25); }
+  .m-tab { flex-direction: row; justify-content: flex-start; gap: 11px; height: 40px; padding: 0 12px; font-size: 14px; font-weight: 600; border-radius: 9px; }
+  .m-tab small { font-size: 14px; } .m-tab .m-tab-ic { height: auto; } .m-tab .m-tab-ic svg { width: 20px; height: 20px; }
+  .m-tab.on .m-tab-ic { transform: none; } .m-tab.on::after { display: none; }
+  .m-lens { left: calc(10px + var(--sl)); right: 10px; width: auto; top: calc(58px + var(--top)); height: 40px; padding: 0; transform: translateY(calc(var(--i, 0) * 43px)); }
+  .m-lens i { border-radius: 9px; background: var(--accent-sel); box-shadow: inset 0 0 0 .5px var(--line); }
+  .m-tab .dot { position: absolute; right: 10px; top: 11px; }
+  .m-sheet { border-radius: 14px; box-shadow: 0 30px 80px rgba(0, 0, 0, .45), 0 0 0 .5px var(--line); }
+}
+@media (min-width: 720px) and (max-height: 560px) {
+  .m-tabs { padding-top: calc(46px + var(--top)); gap: 2px; } .m-tabs::before { top: calc(14px + var(--top)); }
+  .m-tab { height: 36px; } .m-lens { top: calc(46px + var(--top)); height: 36px; transform: translateY(calc(var(--i, 0) * 38px)); }
+}
+/* telefono in orizzontale: Dock sottile */
+@media (orientation: landscape) and (max-height: 520px) and (max-width: 719px) {
+  .m-tabs { margin-bottom: calc(4px + var(--bot)); padding: 3px 6px; border-radius: 18px; } .m-lens { height: 34px; top: 3px; } .m-lens i { border-radius: 14px; }
+}
