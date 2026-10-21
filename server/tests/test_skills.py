@@ -20,7 +20,7 @@ def top(text, k=2):
 
 
 def test_library_is_complete_and_well_formed():
-    assert len(REG) >= 130
+    assert len(REG) >= 170
     for d in ("comunicazione", "finanza", "marketing", "business", "vita", "tecnologia"):
         assert len(REG.by_domain(d)) >= 6, d
     assert len(REG.by_domain("programmazione")) >= 60 and len(REG.by_domain("grafica")) >= 15

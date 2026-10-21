@@ -13,7 +13,7 @@ from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Re
 from pydantic import BaseModel, Field
 
 from .agent import Agent
-from .api import router as api_router
+from .api import VERSION, router as api_router
 from .auth import require_token, throttle
 from .backup import HFBackup
 from .brain.embed import Embedder
@@ -39,7 +39,8 @@ from .skills.registry import SkillRegistry
 from .skills.tools import register_skill_tools
 from .proactive import Proactive
 from .reminders import ReminderService
-from .scheduler import background_loop, brain_loop, heartbeat_loop, maintenance_loop, proactive_loop
+from .live import LiveFeeds, register_live_tools
+from .scheduler import background_loop, brain_loop, heartbeat_loop, live_loop, maintenance_loop, proactive_loop
 from .updates import UpdateService
 from .usage import UsageTracker
 from .telegram import Telegram
@@ -149,6 +150,10 @@ async def lifespan(app: FastAPI):
     guard = None
     task = asyncio.create_task(background_loop(settings, store, notifier, budget, app.state.backup))
     updates = app.state.updates = UpdateService(settings, store, notifier)
+    live = app.state.live = LiveFeeds(settings, store)
+    await live.load_custom()
+    register_live_tools(tools, live, updates, brain, getattr(brain, "knowledge", None), VERSION)
+    live_task = asyncio.create_task(live_loop(settings, store, live, brain, getattr(brain, "knowledge", None))) if settings.live_news else None
     brain_task = asyncio.create_task(brain_loop(settings, store, brain, app.state.agent, notifier))
     maint_task = asyncio.create_task(maintenance_loop(settings, store, usage, updates, notifier, reminders))
     proactive = app.state.proactive = Proactive(settings, store, notifier, google, brain, budget)
@@ -174,6 +179,8 @@ async def lifespan(app: FastAPI):
     yield
     task.cancel()
     brain_task.cancel()
+    if live_task:
+        live_task.cancel()
     maint_task.cancel()
     proactive_task.cancel()
     heartbeat_task.cancel()

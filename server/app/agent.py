@@ -28,7 +28,7 @@ Hai competenze specialistiche (programmazione, comunicazione, finanza, marketing
 
 Come usare i tool:
 - Più tool indipendenti vanno chiamati insieme nello stesso turno (es. meteo di due città, agenda e email).
-- `calculate` per ogni calcolo; `date_info` per giorni della settimana e calcoli con le date; `convert_currency` per i cambi; `wikipedia` per fatti enciclopedici; `web_news` per le notizie; `get_weather` per il meteo; `web_search` poi `read_webpage` per approfondire una fonte.
+- `calculate` per ogni calcolo; `date_info` per giorni della settimana e calcoli con le date; `convert_currency` per i cambi; `wikipedia` per fatti enciclopedici; `news_headlines` per cosa succede ADESSO (notizie in tempo reale da feed: italia, mondo, tecnologia, ai, scienza, economia, sport, terremoti; filtra con topic) e `web_news`/`web_search` per approfondire; mai dare per «attuale» ciò che viene dalla memoria: se la domanda riguarda il presente controlla dal vivo e cita fonte e ora; `get_weather` per il meteo; `web_search` poi `read_webpage` per approfondire una fonte.
 - `remember`/`recall`/`list_memories`/`forget` per i ricordi brevi; `brain_*` per il secondo cervello: `brain_add_note` per note, idee, riunioni, decisioni; `brain_search` per ritrovare qualcosa di passato (cita gli id [#n], usa since/until per periodi come "la settimana scorsa"); `brain_deep_search` per domande difficili o vaghe (prova più formulazioni); `brain_about` per «cosa so di Luca / del progetto X»; `brain_learn` per studiare un argomento da Wikipedia e tenerlo (cultura generale); `brain_profile` per il profilo; `brain_save_url` per conservare una pagina; `brain_related` per i collegamenti. Il contesto pertinente del secondo cervello è già nel prompt: usalo senza ripeterlo. Salva solo ciò che è duraturo.
 - `add_reminder`/`remind_in`/`reminder_snooze`/`list_reminders`/`delete_reminder` per i promemoria; `task_*` per liste (da fare, spesa); `crypto_price`, `world_time`, `unit_convert` per prezzi, orari nel mondo e conversioni; calcola "when" da data e ora qui sopra.
 - `send_notification` per mandare un avviso alle app dell'utente.
@@ -53,7 +53,7 @@ class Agent:
         self.selector = ToolSelector()
 
     TOOL_LABELS = {
-        "web_search": "Cerco sul web…", "web_news": "Leggo le notizie…", "read_webpage": "Leggo la pagina…", "get_weather": "Controllo il meteo…",
+        "web_search": "Cerco sul web…", "news_headlines": "Leggo le notizie in tempo reale…", "jarvis_status": "Controllo il mio stato…", "web_news": "Leggo le notizie…", "read_webpage": "Leggo la pagina…", "get_weather": "Controllo il meteo…",
         "calendar_list_events": "Leggo il calendario…", "calendar_create_event": "Creo l'evento…", "calendar_update_event": "Modifico l'evento…",
         "calendar_delete_event": "Preparo la conferma…", "gmail_search": "Cerco nelle email…", "gmail_read": "Leggo l'email…", "drive_search": "Cerco su Drive…",
         "brain_search": "Cerco nel secondo cervello…", "brain_add_note": "Salvo nel secondo cervello…", "recall": "Ricordo…", "remember": "Memorizzo…",

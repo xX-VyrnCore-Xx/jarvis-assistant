@@ -154,7 +154,7 @@ class Proactive:
             return False
         iso = now.isocalendar()
         week_ago = (now - timedelta(days=7)).astimezone(timezone.utc).isoformat()
-        docs = [d for d in await self.brain.store.list_docs(300) if d.created_at >= week_ago and d.source not in ("profile", "wiki", "skill")]
+        docs = [d for d in await self.brain.store.list_docs(300) if d.created_at >= week_ago and d.source not in ("profile", "wiki", "skill", "news")]
         if not docs:
             return False
         learned = sum(1 for d in docs if "appreso" in d.tags)
