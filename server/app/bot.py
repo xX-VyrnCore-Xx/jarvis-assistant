@@ -13,6 +13,10 @@ from .llm import LLMError
 log = logging.getLogger("jarvis.bot")
 
 COMMANDS = [
+    ("menu", "Tasti rapidi"),
+    ("oggi", "Il punto di oggi: agenda, attività, promemoria"),
+    ("agenda", "Impegni di oggi e domani"),
+    ("email", "Email non lette importanti"),
     ("aiuto", "Cosa so fare"),
     ("stato", "Stato dei sistemi"),
     ("token", "Token gratuiti rimasti"),
@@ -28,29 +32,33 @@ COMMANDS = [
     ("nota", "Salva una nota nel secondo cervello"),
     ("cerca", "Cerca nel secondo cervello"),
     ("cervello", "Statistiche del secondo cervello"),
+    ("impara", "Studio un argomento da Wikipedia"),
+    ("proattivo", "Avvisi automatici: stato e pausa"),
     ("profilo", "Cosa so di te (profilo)"),
     ("liste", "Liste e attività (spesa, da fare)"),
     ("nuova", "Azzera la conversazione"),
 ]
 
 HELP = """<b>JARVIS a sua disposizione, {owner}.</b>
-Scrivetemi in linguaggio naturale: agenda, email, meteo, ricerche, promemoria, calcoli, controllo del PC.
+Mi scriva (o mi mandi un vocale) in linguaggio naturale: agenda, email, meteo, ricerche, promemoria, calcoli, controllo del PC.
 
-/riepilogo — il buongiorno adesso
-/uso — token e consumo dei modelli
-/modello — scegli il modello AI
-/impostazioni — notifiche e ore silenziose
-/aggiornamenti — nuove versioni delle app
-/stato — stato dei sistemi
-/token — token gratuiti rimasti
-/promemoria — promemoria attivi
-/ricordi — cosa ricordo di lei
-/nota testo — salva nel secondo cervello
-/cerca testo — cerca nel secondo cervello
-/liste — liste e attività
-/nuova — azzera la conversazione
+<b>Ogni giorno</b>
+/oggi — il punto di oggi · /agenda — impegni · /email — non lette
+/promemoria · /liste — attività · /riepilogo — il buongiorno
 
-Esempi: «Che tempo fa a Roma domani?», «Ricordami alle 18 di chiamare Luca», «Cosa ho in agenda questa settimana?»."""
+<b>Secondo cervello</b>
+/nota testo · /cerca testo · /impara argomento · /ricordi · /profilo · /cervello
+
+<b>Sistema</b>
+/proattivo — avvisi automatici · /impostazioni — notifiche · /modello
+/uso · /token · /stato · /salute · /aggiornamenti · /nuova
+
+Esempi: «Che tempo fa a Roma domani?», «Ricordami alle 18 di chiamare Luca», «Cosa so di Luca?», «Studia la fotosintesi».
+I tasti qui sotto portano ai comandi più usati."""
+
+MENU = {"📅 Agenda": "agenda", "✉️ Email": "email", "✅ Attività": "liste", "🧠 Cervello": "cervello", "📊 Consumo": "uso", "⚙️ Impostazioni": "impostazioni"}
+MENU_KEYBOARD = {"keyboard": [[{"text": t} for t in list(MENU)[i:i + 3]] for i in (0, 3)], "resize_keyboard": True, "is_persistent": True,
+                 "input_field_placeholder": "Scriva a JARVIS…"}
 
 
 class TelegramBot:
@@ -105,6 +113,8 @@ class TelegramBot:
         if not text:
             kind = "vocale" if "voice" in msg or "audio" in msg else "foto" if "photo" in msg else "documento" if "document" in msg else "contenuto"
             return await self.tg.send(chat_id, f"Per ora leggo solo testo, signore: il {kind} non so ancora interpretarlo.")
+        if text in MENU:  # tasto della tastiera rapida
+            return await self._command(chat_id, MENU[text])
         if text.startswith("/"):
             cmd = text.split()[0][1:].split("@")[0].lower()
             return await self._command(chat_id, cmd, text.partition(" ")[2].strip())
@@ -127,7 +137,8 @@ class TelegramBot:
             await self._ask(chat_id, text)
 
     def _buttons(self) -> dict:
-        return {"inline_keyboard": [[{"text": "💾 Salva", "callback_data": "sv"}, {"text": "🔄 Rigenera", "callback_data": "rg"}]]}
+        return {"inline_keyboard": [[{"text": "🔎 Approfondisci", "callback_data": "dp"}, {"text": "✂️ Più breve", "callback_data": "sh"}],
+                                    [{"text": "💾 Salva", "callback_data": "sv"}, {"text": "🔄 Rigenera", "callback_data": "rg"}]]}
 
     def _remember_reply(self, chat_id: int, mid: int, question: str, answer: str) -> None:
         self._replies[(chat_id, mid)] = (question, answer)
@@ -184,8 +195,14 @@ class TelegramBot:
     # ------------------------------------------------------------------ comandi
     async def _command(self, chat_id: int, cmd: str, arg: str = "") -> None:
         st = self.app.state
-        if cmd in ("start", "aiuto", "help"):
-            return await self.tg.send(chat_id, HELP.format(owner=self.s.owner_name))
+        if cmd in ("start", "aiuto", "help", "menu"):
+            return await self.tg.send(chat_id, HELP.format(owner=self.s.owner_name), MENU_KEYBOARD)
+        if cmd in ("agenda", "oggi", "email"):
+            return await self._daily(chat_id, cmd)
+        if cmd == "impara":
+            return await self._learn(chat_id, arg)
+        if cmd == "proattivo":
+            return await self._proactive(chat_id)
         if cmd == "stato":
             s = self.s
             lines = [
@@ -270,8 +287,11 @@ class TelegramBot:
                 return await self.tg.send(chat_id, "Il secondo cervello è disattivato, signore.")
             if cmd == "cervello":
                 x = await brain.stats()
+                know = getattr(brain, "knowledge", None)
+                prog = await know.progress() if know else None
                 return await self.tg.send(chat_id, f"<b>Secondo cervello</b>\n• {x['docs']} documenti, {x['chunks']} frammenti ({x['vectors']} con vettore)\n• {x['entities']} entità\n"
-                                                    f"• Fonti: {', '.join(f'{k} {v}' for k, v in x['by_source'].items()) or 'vuoto'}\n• Modello: {x['model']}")
+                                                    f"• Fonti: {', '.join(f'{k} {v}' for k, v in x['by_source'].items()) or 'vuoto'}\n• Modello: {x['model']}"
+                                                    + (f"\n• Conoscenza di base: {prog[0]}/{prog[1]} voci di Wikipedia" if prog else ""))
             if not arg:
                 return await self.tg.send(chat_id, f"Scriva ad esempio: /{cmd} " + ("riunione con Luca: decidiamo il budget a gennaio" if cmd == "nota" else "budget con Luca"))
             if cmd == "nota":
@@ -293,7 +313,78 @@ class TelegramBot:
         if cmd == "nuova":
             await st.store.clear_messages(f"tg-{chat_id}")
             return await self.tg.send(chat_id, "Conversazione azzerata. I ricordi a lungo termine restano, signore.")
-        await self.tg.send(chat_id, "Comando sconosciuto. /aiuto elenca ciò che so fare.")
+        import difflib
+
+        near = difflib.get_close_matches(cmd, [c for c, _ in COMMANDS], n=1, cutoff=0.6)
+        await self.tg.send(chat_id, f"Comando sconosciuto, signore. Intendeva /{near[0]}?" if near else "Comando sconosciuto. /aiuto elenca ciò che so fare.")
+
+    async def _daily(self, chat_id: int, cmd: str) -> None:
+        """Agenda, email e punto del giorno: testo composto dai dati (nessuna chiamata al modello, quindi istantaneo e gratis)."""
+        from zoneinfo import ZoneInfo
+
+        from .agenda import agenda_text, unread_digest
+
+        st, tz = self.app.state, ZoneInfo(self.s.timezone)
+        await self.tg.typing(chat_id)
+        if cmd == "email":
+            if not st.google.enabled:
+                return await self.tg.send(chat_id, "Google non è collegato, signore: usi /google.")
+            try:
+                rows = await unread_digest(st.google)
+            except Exception:
+                return await self.tg.send(chat_id, "Non riesco a leggere la posta in questo momento, signore.")
+            return await self.tg.send(chat_id, ("<b>Email non lette</b>\n" + "\n".join(f"• {r}" for r in rows)) if rows else "Nessuna email nuova nella posta principale. 👌")
+        parts = []
+        if st.google.enabled:
+            try:
+                parts.append(await agenda_text(st.google, tz, days=2 if cmd == "agenda" else 1))
+            except Exception:
+                parts.append("(agenda non raggiungibile ora)")
+        elif cmd == "agenda":
+            return await self.tg.send(chat_id, "Google non è collegato, signore: usi /google.")
+        if cmd == "agenda":
+            return await self.tg.send(chat_id, "\n".join(parts))
+        tasks = await st.store.list_tasks(None, False)
+        if tasks:
+            parts.append("<b>Attività aperte</b>\n" + "\n".join(f"• {t['text']}" for t in tasks[:8]) + (f"\n…e altre {len(tasks) - 8}" if len(tasks) > 8 else ""))
+        today = datetime.now(tz).date()
+        rems = [r for r in await st.store.list_reminders() if datetime.fromisoformat(r["due_at"]).astimezone(tz).date() == today]
+        if rems:
+            parts.append("<b>Promemoria di oggi</b>\n" + "\n".join(f"• {datetime.fromisoformat(r['due_at']).astimezone(tz):%H:%M} — {r['text']}" for r in rems))
+        await self.tg.send(chat_id, f"<b>Il punto di oggi, {self.s.owner_name}</b>\n\n" + ("\n\n".join(parts) if parts else "Giornata libera e nessuna attività aperta. 🎯"))
+
+    async def _learn(self, chat_id: int, topic: str) -> None:
+        st = self.app.state
+        k = getattr(st.brain, "knowledge", None)
+        if not (st.brain.enabled and k):
+            return await self.tg.send(chat_id, "Il secondo cervello è spento, signore.")
+        if not topic:
+            done, total = await k.progress()
+            return await self.tg.send(chat_id, f"Scriva ad esempio: /impara fotosintesi clorofilliana\nLa cultura di base si sta caricando da sola: {done}/{total} voci.")
+        await self.tg.typing(chat_id)
+        try:
+            r = await k.learn(topic, full=True)
+        except Exception:
+            return await self.tg.send(chat_id, "Wikipedia non risponde in questo momento, signore.")
+        if r["status"] == "non trovato":
+            return await self.tg.send(chat_id, f"Non trovo una voce per «{topic}». Provi con un altro nome.")
+        await self.tg.send(chat_id, f"{'Già nel secondo cervello' if r['status'] == 'duplicato' else 'Imparato'}: <b>{html.escape(r['title'])}</b> (#{r['doc_id']}, {r['chars']} caratteri).\nOra posso risponderle anche senza cercare sul web.")
+
+    async def _proactive(self, chat_id: int, message_id: int = 0) -> None:
+        st = self.app.state
+        paused = await st.store.get_setting("proactive_paused") == "1"
+        pro = getattr(st, "proactive", None)
+        used = ""
+        if pro and pro._state:
+            used = f"\nOggi ne ho inviati {pro._state.get('n', 0)} su {self.s.proactive_max_per_day} (gli eventi imminenti non contano)."
+        on = self.s.proactive_enabled and not paused
+        text = ("<b>Avvisi automatici</b>\n" + ("🟢 Attivi" if on else "⏸ In pausa" if self.s.proactive_enabled else "⚫ Spenti dalla configurazione (PROACTIVE_ENABLED)")
+                + "\nEventi in arrivo, email nuove, il punto della sera, il riepilogo della domenica, token in esaurimento." + used)
+        keys = {"inline_keyboard": [[{"text": "▶️ Riattiva" if paused else "⏸ Metti in pausa", "callback_data": "pp"}]]} if self.s.proactive_enabled else None
+        if message_id:
+            await self.tg.edit(chat_id, message_id, text, keys)
+        else:
+            await self.tg.send(chat_id, text, keys)
 
     async def _usage(self, chat_id: int) -> None:
         st = self.app.state
@@ -340,8 +431,9 @@ class TelegramBot:
 
     async def _settings(self, chat_id: int, message_id: int = 0) -> None:
         prefs = await self.app.state.notifier.prefs()
-        names = {"reminder": "Promemoria", "alert": "Avvisi", "pending": "Conferme", "update": "Aggiornamenti", "brain": "Cervello", "info": "Informazioni"}
-        keys = [[{"text": f"{'✅' if v['telegram'] else '⬜'} {names[k]} su Telegram", "callback_data": f"np:{k}"}] for k, v in prefs["kinds"].items()]
+        names = {"reminder": "Promemoria", "alert": "Avvisi", "pending": "Conferme", "update": "Aggiornamenti", "brain": "Cervello",
+                 "proactive": "Suggerimenti", "info": "Informazioni"}
+        keys = [[{"text": f"{'✅' if v['telegram'] else '⬜'} {names.get(k, k)} su Telegram", "callback_data": f"np:{k}"}] for k, v in prefs["kinds"].items()]
         q = prefs["quiet"]
         keys.append([{"text": f"{'🌙 Ore silenziose: ' + q['from'] + '–' + q['to'] if q['enabled'] else '🔔 Ore silenziose: spente'}", "callback_data": "nq"}])
         text = "<b>Notifiche</b>\nScegli cosa arriva anche qui. Promemoria, avvisi e conferme passano sempre, anche nelle ore silenziose."
@@ -387,6 +479,18 @@ class TelegramBot:
             q, a = self._replies[key]
             r = await st.brain.ingest(f"Domanda: {q}\n\nRisposta: {a}", title=q[:80], source="note", importance=0.55)
             outcome = f"Salvato nel secondo cervello (#{r['doc_id']})."
+        elif action in ("dp", "sh") and (chat, msg.get("message_id")) in self._replies:
+            await self.tg.answer_callback(cb["id"], "Un momento…")
+            ask = ("Approfondisci la tua ultima risposta: più dettagli, esempi e, se serve, i passi da fare." if action == "dp"
+                   else "Riassumi la tua ultima risposta in due righe, senza perdere l'essenziale.")
+            async with self._lock(chat):
+                await self._ask(chat, ask)
+            return
+        elif action == "pp":
+            paused = await st.store.get_setting("proactive_paused") == "1"
+            await st.store.set_setting("proactive_paused", "0" if paused else "1")
+            await self.tg.answer_callback(cb["id"], "Avvisi riattivati" if paused else "Avvisi in pausa")
+            return await self._proactive(chat, msg.get("message_id", 0))
         elif action == "rg" and (key := (chat, msg.get("message_id"))) in self._replies:
             await self.tg.answer_callback(cb["id"], "Rigenero…")
             async with self._lock(chat):

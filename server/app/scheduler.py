@@ -6,6 +6,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from .budget import fmt_tokens
+from .health import beat, heartbeat_line, stale_loops
 from .config import Settings
 from .memory import Store
 from .notify import Notifier
@@ -45,6 +46,7 @@ async def background_loop(settings: Settings, store: Store, notifier: Notifier, 
     encrypted = not hasattr(store, "encrypt_existing")
     last_backup = None
     while True:
+        beat("promemoria", settings.reminder_poll_s)
         try:
             await deliver_due_reminders(store, notifier, datetime.now(tz))
         except Exception:
@@ -101,6 +103,10 @@ async def brain_cycle(settings: Settings, store: Store, brain, state: dict) -> N
         log.info("secondo cervello: %d vettori aggiunti", n)
     if settings.rag_enrich_per_cycle:
         await brain.enrich_pending()
+    if settings.knowledge_seed_per_cycle and getattr(brain, "knowledge", None):
+        n = await brain.knowledge.seed_batch(settings.knowledge_seed_per_cycle)
+        if n:
+            log.info("secondo cervello: %d voci di conoscenza di base", n)
 
 
 async def consolidate_yesterday(settings: Settings, store: Store, brain, tz: ZoneInfo) -> str:
@@ -127,6 +133,7 @@ async def brain_loop(settings: Settings, store: Store, brain, agent, notifier) -
     state: dict = {}
     await asyncio.sleep(45)
     while True:
+        beat("cervello", 300)
         try:
             if brain.enabled:
                 await brain_cycle(settings, store, brain, state)
@@ -151,6 +158,7 @@ async def maintenance_loop(settings: Settings, store: Store, usage, updates, not
     last_update = 0.0
     mem_alert = False
     while True:
+        beat("manutenzione", 300)
         try:
             await usage.flush(store)
             mem = container_mb() or rss_mb() * 1.6  # il container comprende anche FreeLLMAPI
@@ -173,8 +181,26 @@ async def proactive_loop(settings: Settings, proactive) -> None:
     """Ogni 5 minuti lascia lavorare il motore proattivo (primo giro dopo 2 minuti, per non appesantire l'avvio)."""
     await asyncio.sleep(120)
     while True:
+        beat("proattivo", 300)
         try:
             await proactive.tick()
         except Exception:
             log.exception("errore nel ciclo proattivo")
         await asyncio.sleep(300)
+
+
+async def heartbeat_loop(app) -> None:
+    """Una riga di stato al minuto nei log di Render (memoria, modelli, cervello, cicli di fondo) e un avviso se un ciclo si ferma."""
+    log = logging.getLogger("jarvis.heartbeat")
+    warned: set[str] = set()
+    while True:
+        await asyncio.sleep(60)
+        try:
+            log.info("%s", heartbeat_line(app))
+            now_bad = {n for n, _ in stale_loops()}
+            for n, mins in stale_loops():
+                if n not in warned:
+                    log.warning("il ciclo di fondo «%s» non risponde da %d minuti", n, mins)
+            warned = now_bad
+        except Exception:
+            log.exception("battito del server non riuscito")

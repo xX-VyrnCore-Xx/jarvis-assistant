@@ -146,7 +146,7 @@ async def test_bot_owner_only_dedup_commands_and_buttons():
     await bot.handle_update(msg(42, "ciao", 1))
     await bot.handle_update(msg(42, "ciao", 1))  # duplicato di Telegram
     assert [o[0] for o in st.tg.out if o[0] != "…"] == ["eco:ciao"]  # il duplicato non produce una seconda risposta
-    assert st.tg.out[-1][1]["inline_keyboard"][0][0]["callback_data"] == "sv"  # pulsanti Salva / Rigenera sotto la risposta
+    assert st.tg.out[-1][1]["inline_keyboard"][1][0]["callback_data"] == "sv"  # sotto la risposta: Approfondisci / Più breve, poi Salva / Rigenera
 
     from datetime import datetime, timedelta, timezone
     await st.store.add_reminder("bere", datetime.now(timezone.utc) + timedelta(hours=1))

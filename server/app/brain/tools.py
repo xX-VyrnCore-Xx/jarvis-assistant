@@ -1,4 +1,6 @@
 """Tool del secondo cervello esposti al modello."""
+import re
+
 import httpx
 
 from ..tools import UNTRUSTED, ToolRegistry
@@ -46,6 +48,18 @@ def register_brain_tools(reg: ToolRegistry, brain: Brain, client: httpx.AsyncCli
         rel = f"\nCollegato a: {', '.join(n for _, n in d['related'])}" if d["related"] else ""
         untrusted = any(x.source in UNTRUSTED_SOURCES for x in d["docs"])
         return (UNTRUSTED if untrusted else "") + head + ":\n" + "\n".join(rows) + rel
+
+    async def brain_learn(topic: str, lang: str = "it", full: bool = False) -> str:
+        k = getattr(brain, "knowledge", None)
+        if not k:
+            return "Errore: conoscenza di base non disponibile."
+        if not re.fullmatch(r"[a-z]{2,3}", lang):
+            return "Errore: lingua non valida."
+        r = await k.learn(topic, lang, full)
+        if r["status"] == "non trovato":
+            return f"Nessuna voce di Wikipedia per «{topic}»."
+        verb = "Già nel secondo cervello" if r["status"] == "duplicato" else "Imparato e salvato nel secondo cervello"
+        return f"{verb}: {r['title']} (#{r['doc_id']}, {r['chars']} caratteri, {r['url']})."
 
     async def brain_profile(refresh: bool = False) -> str:
         if refresh:
@@ -100,6 +114,8 @@ def register_brain_tools(reg: ToolRegistry, brain: Brain, client: httpx.AsyncCli
                  obj({"question": s, "since": s, "until": s}, ["question"]), brain_deep_search, available=on, cache_ttl=30)
     reg.register("brain_about", "Tutto ciò che il secondo cervello sa di una persona, progetto, luogo o argomento (nome), in ordine di tempo, con i collegamenti. Per «cosa so di Luca?».",
                  obj({"name": s}, ["name"]), brain_about, available=on, cache_ttl=30)
+    reg.register("brain_learn", "Impara un argomento da Wikipedia e lo salva nel secondo cervello (cultura generale: persone, luoghi, concetti, eventi). full=true carica la voce intera. Usalo quando l'utente vuole 'studiare' o tenere una voce.",
+                 obj({"topic": s, "lang": s, "full": {"type": "boolean"}}, ["topic"]), brain_learn, available=on)
     reg.register("brain_profile", "Il profilo dell'utente compilato dal secondo cervello (chi è, persone, progetti, preferenze). refresh=true lo ricompila ora.",
                  obj({"refresh": {"type": "boolean"}}), brain_profile, available=on)
     reg.register("brain_read", "Legge per intero un documento del secondo cervello dato il suo id.", obj({"doc_id": {"type": "integer"}}, ["doc_id"]), brain_read, available=on)

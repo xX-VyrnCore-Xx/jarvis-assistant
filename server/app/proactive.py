@@ -8,7 +8,8 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from .config import Settings
-from .tools.google_tools import CAL, GMAIL
+from .agenda import fetch_events
+from .tools.google_tools import GMAIL
 
 log = logging.getLogger("jarvis.proactive")
 STATE_KEY = "proactive_state"
@@ -64,7 +65,7 @@ class Proactive:
     # ------------------------------------------------------------------ cicli
     async def tick(self, now: datetime | None = None) -> list[str]:
         """Un giro di controlli. Restituisce i nomi dei lavori che hanno inviato qualcosa (utile ai test)."""
-        if not self.s.proactive_enabled:
+        if not self.s.proactive_enabled or await self.store.get_setting("proactive_paused") == "1":
             return []
         now = (now or datetime.now(self.tz)).astimezone(self.tz)
         st = await self._load(now.date().isoformat())
@@ -88,9 +89,7 @@ class Proactive:
 
     # ------------------------------------------------------------------ eventi imminenti
     async def _events(self, start: datetime, end: datetime) -> list[dict]:
-        r = await self.google.request("GET", f"{CAL}/events", params={"timeMin": start.isoformat(), "timeMax": end.isoformat(),
-                                                                       "singleEvents": "true", "orderBy": "startTime", "maxResults": 20})
-        return r.json().get("items", [])
+        return await fetch_events(self.google, start, end, 20)
 
     async def heads_up(self, st: dict, now: datetime) -> bool:
         """Evento in partenza tra 10 e 45 minuti: avviso immediato anche su Telegram (non conta nel tetto giornaliero)."""
@@ -155,7 +154,7 @@ class Proactive:
             return False
         iso = now.isocalendar()
         week_ago = (now - timedelta(days=7)).astimezone(timezone.utc).isoformat()
-        docs = [d for d in await self.brain.store.list_docs(300) if d.created_at >= week_ago and d.source not in ("profile",)]
+        docs = [d for d in await self.brain.store.list_docs(300) if d.created_at >= week_ago and d.source not in ("profile", "wiki")]
         if not docs:
             return False
         learned = sum(1 for d in docs if "appreso" in d.tags)

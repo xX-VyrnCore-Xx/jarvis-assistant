@@ -15,7 +15,8 @@ RUN python3 -m venv /opt/venv && /opt/venv/bin/pip install --no-cache-dir -r req
 COPY server/app ./app
 COPY --chmod=755 deploy/start.sh /usr/local/bin/start.sh
 
-ENV FREEAPI_DB_PATH=/app/server/data/freellmapi.db \
+ENV PYTHONUNBUFFERED=1 \
+    FREEAPI_DB_PATH=/app/server/data/freellmapi.db \
     FREELLM_DB_PATH=/app/server/data/freellmapi.db \
     FREELLM_BASE_URL=http://127.0.0.1:3001/v1 \
     FREELLM_INTERNAL_URL=http://127.0.0.1:3001 \

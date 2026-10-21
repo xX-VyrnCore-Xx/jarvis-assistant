@@ -1,5 +1,6 @@
 """Consumo dei modelli: richieste, token e latenza per giorno, tipo e modello. In RAM e salvato su Supabase ogni pochi minuti."""
 import time
+import logging
 from datetime import datetime, timezone
 
 DAY = "%Y-%m-%d"
@@ -7,6 +8,9 @@ DAY = "%Y-%m-%d"
 
 def est_tokens(text: str) -> int:
     return max(1, len(text) // 4)
+
+
+log = logging.getLogger("jarvis.llm")
 
 
 class UsageTracker:
@@ -24,6 +28,7 @@ class UsageTracker:
         r["prompt_tokens"] += int(prompt)
         r["completion_tokens"] += int(completion)
         r["latency_ms"] += int(ms)
+        (log.info if ok else log.warning)("modello %s %s: %s in %.1f s (%d+%d token)", kind, model or "auto", "ok" if ok else "ERRORE", ms / 1000, prompt, completion)
         if ok:
             self.recent_ms = (self.recent_ms + [ms])[-50:]
 
