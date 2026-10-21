@@ -111,7 +111,7 @@ name: sviluppo-mobile
 title: Sviluppo di app mobile
 domain: programmazione
 description: App per Android e iOS: scelta della tecnologia (nativo, Flutter, React Native, Capacitor), ciclo di vita, permessi, offline, notifiche push e pubblicazione.
-triggers: app mobile, android, ios, flutter, react native, capacitor, swift, swiftui, jetpack compose, apk, aab, play store, app store, notifiche push, firebase, permessi android, sviluppare un'app
+triggers: app mobile, android, ios, react native, capacitor, apk, aab, play store, app store, notifiche push, firebase, permessi android, sviluppare un'app
 
 **Scelta**: nativo (Kotlin/Compose, Swift/SwiftUI) per massime prestazioni e API di sistema; **Flutter** o **React Native** per un'unica base di codice con UI quasi nativa; **Capacitor/PWA** per portare un'app web con accesso ai sensori. Scegli in base a team, prestazioni, funzioni di sistema, tempi.
 **Pratica**: rispetta il **ciclo di vita** (l'app viene sospesa e terminata: salva lo stato), thread principale libero, **offline-first** (cache locale, sincronizzazione, risoluzione dei conflitti), richiedi i permessi nel contesto e spiega il motivo, notifiche push (FCM/APNs) con canali e gestione del token, deep link, accessibilità e dark mode, batteria e dati.

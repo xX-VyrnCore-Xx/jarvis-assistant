@@ -33,7 +33,7 @@ name: smartphone-e-app
 title: Smartphone, app e impostazioni
 domain: tecnologia
 description: Aiuta con Android e iPhone: scelta, impostazioni, batteria, spazio, privacy, trasferimento dati, problemi comuni e app utili.
-triggers: smartphone, telefono, android, iphone, ios, batteria che dura poco, spazio pieno, app, impostazioni del telefono, trasferire i dati, nuovo telefono, telefono lento, aggiornamento android, scegliere uno smartphone, notifiche
+triggers: smartphone, telefono, android, iphone, ios, batteria che dura poco, spazio pieno, impostazioni del telefono, trasferire i dati, nuovo telefono, telefono lento, aggiornamento android, scegliere uno smartphone, notifiche
 
 **Batteria**: luminosità adattiva, aggiornamenti, ottimizzazione per app in background (Impostazioni → Batteria), disattiva localizzazione/Bluetooth/Wi-Fi inutilizzati, individua le app che consumano, niente «task killer»; batteria al 20-80% quando possibile; sostituzione se la salute è < 80%.
 **Spazio**: foto/video su cloud + «libera spazio», cache e file scaricati, app non usate, download offline di streaming.
