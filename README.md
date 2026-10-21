@@ -104,6 +104,15 @@ Promemoria, avvisi (token in esaurimento, backup fallito) e richieste di conferm
 - **Ricerca più furba**: `brain_deep_search` riformula la domanda in più modi, `brain_about` raccoglie tutto su una persona o un progetto, e le ricerche accettano un periodo (`since`/`until`).
 - **Proattivo** (`PROACTIVE_ENABLED`, `PROACTIVE_MAX_PER_DAY`, `EVENING_HOUR`): avviso 10-45 minuti prima di ogni evento (anche su Telegram), email nuove nella posta principale, punto della sera con l'agenda di domani, riepilogo della domenica e allarme se i token finiscono prima del reset. Zero token spesi: i testi si compongono dai dati; rispetta le ore silenziose e non ripete mai lo stesso avviso.
 
+## Competenze (skills)
+
+JARVIS ha **49 competenze integrate** in sei ambiti: Programmazione (revisione del codice, debug, architettura, Python, JS/TS, SQL, API, test, Git/DevOps, sicurezza, prestazioni), Comunicazione (email, scrittura, presentazioni, negoziazione, feedback, riunioni, traduzione, storytelling), Finanza (personale, investimenti, fisco italiano, finanza d'impresa, bilancio, mutui, cripto), Marketing (strategia, copywriting, SEO, social, email marketing, analytics/KPI, brand, pricing, pubblicità), Business (progetti, startup, vendite, carriera, team, analisi dei dati, ricerca delle fonti) e Vita (produttività, studio, decisioni, viaggi, benessere, cucina, diritti e burocrazia).
+
+- **Si attivano da sole**: la richiesta viene confrontata con le competenze (frasi di attivazione e parole chiave, zero chiamate in più) e il metodo di quelle pertinenti, al massimo due, entra nel prompt (~2400 caratteri). Le chiacchiere e le richieste semplici non ne attivano nessuna. Spegni tutto con `SKILLS_ENABLED=false`.
+- **A richiesta**: `/skills` e `/skill nome richiesta` su Telegram, «Competenze» in Altro nell'app Android (la competenza scelta vale per la prossima domanda), i tool `list_skills` e `use_skill`, e il campo `skill` di `/chat` e `/chat/stream`.
+- **Le tue**: «crea una competenza per scrivere il mio report del venerdì…» (`skill_save`): si salva cifrata nel secondo cervello e si attiva da sola. `skill_delete` la elimina; quelle integrate sono in `server/app/skills/library/*.md` (formato: intestazione `name/title/domain/description/triggers`, riga vuota, testo; blocchi separati da `@@@`).
+- Le competenze su fisco, salute e diritto danno orientamento generale e rimandano ai professionisti; i dati aggiornati si cercano sul web.
+
 ## Log, Telegram e conoscenza di base
 
 - **Log ogni minuto**: nei log di Render compare una riga `heartbeat` al minuto (uptime, memoria, richieste ai modelli, secondo cervello, app collegate, stato dei cicli di fondo); se un ciclo si ferma scatta un avviso. Ogni chiamata a un modello lascia una riga con durata e token. `PYTHONUNBUFFERED` è attivo: le righe arrivano subito.

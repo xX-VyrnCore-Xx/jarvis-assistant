@@ -74,13 +74,13 @@ export class Jarvis {
   health() { return this.#req("/health", { auth: false, timeout: 70_000 }); }
   chat(message, session) { return this.#req("/chat", { method: "POST", body: { message, session_id: session }, timeout: 120_000 }).then((r) => r.reply); }
   /** Risposta in streaming: onStatus(testo) durante i tool, onDelta(testo) mentre scrive. Restituisce la risposta intera. Se il server è vecchio ripiega su /chat. */
-  async chatStream(message, session, { model = "", onStatus = () => {}, onDelta = () => {}, signal } = {}) {
+  async chatStream(message, session, { model = "", skill = "", onStatus = () => {}, onDelta = () => {}, signal } = {}) {
     let res;
     try {
       res = await fetch(`${this.cfg.url()}/chat/stream`, {
         method: "POST",
         headers: { Authorization: `Bearer ${this.cfg.token()}`, "Content-Type": "application/json", Accept: "text/event-stream" },
-        body: JSON.stringify({ message, session_id: session, model: model || undefined }),
+        body: JSON.stringify({ message, session_id: session, model: model || undefined, skill: skill || undefined }),
         signal,
       });
     } catch (e) {
@@ -120,6 +120,8 @@ export class Jarvis {
   }
   status() { return this.#get("/api/status"); }
   models() { return this.#get("/api/models"); }
+  skills() { return this.#get("/api/skills"); }
+  skill(name) { return this.#get(`/api/skills/${encodeURIComponent(name)}`); }
   usage(days = 14) { return this.#get(`/api/usage?days=${days}`); }
   serverHealth() { return this.#get("/api/health"); }
   appUpdate(platform, version) { return this.#req(`/api/app/update?platform=${platform}&version=${encodeURIComponent(version)}`, { timeout: 20_000 }); }

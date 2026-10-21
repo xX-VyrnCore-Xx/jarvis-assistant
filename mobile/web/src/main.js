@@ -27,7 +27,7 @@ const cfg = { url: (store.get("jarvis.url") || DEFAULT_URL).replace(/\/+$/, ""),
 const api = new Jarvis({ url: () => cfg.url, token: () => cfg.token });
 const speaker = new Speaker({ tts: (t) => api.tts(t) });
 const voiceOn = () => store.get("jarvis.speak") !== "0";
-const S = { update: null, prefs: null, models: null, usage: null, appVer: "", brain: { q: "", results: null, docs: null, stats: null, busy: false }, tab: "chat", status: null, checked: false, tokens: null, tokensErr: "", tokensAt: null, reminders: [], remindersLoaded: false, notes: [], pending: [], online: false, busy: false, mic: false, canMic: false, sheets: [] };
+const S = { skill: null, update: null, prefs: null, models: null, usage: null, appVer: "", brain: { q: "", results: null, docs: null, stats: null, busy: false }, tab: "chat", status: null, checked: false, tokens: null, tokensErr: "", tokensAt: null, reminders: [], remindersLoaded: false, notes: [], pending: [], online: false, busy: false, mic: false, canMic: false, sheets: [] };
 
 const $app = document.getElementById("m-app");
 let top, content, tabs, log, input, sendBtn, micBtn, downBtn, chatView, hello, chips;
@@ -182,9 +182,16 @@ function buildChat() {
   input.addEventListener("input", () => { input.style.height = "auto"; input.style.height = `${Math.min(input.scrollHeight, 130)}px`; sendBtn.disabled = !input.value.trim(); });
   log.addEventListener("scroll", () => downBtn.classList.toggle("show", !nearBottom()), { passive: true });
   chips = el("div", { class: "m-chips" }, CHIPS.map(([l, t]) => el("button", { onclick: () => send(t) }, l)));
-  chatView = el("div", { class: "m-chat" }, log, downBtn, chips, el("div", { class: "m-composer" }, micBtn, input, sendBtn));
+  chatView = el("div", { class: "m-chat" }, log, downBtn, chips, el("div", { id: "m-skillchip" }), el("div", { class: "m-composer" }, micBtn, input, sendBtn));
   showHello();
   return chatView;
+}
+
+function renderSkillChip() {
+  const box = document.getElementById("m-skillchip");
+  if (!box) return;
+  box.replaceChildren(...(S.skill ? [el("div", { class: "m-skill-on" }, icon("sparkle", 16), el("span", {}, `Competenza: ${S.skill.title}`),
+    el("button", { "aria-label": "Rimuovi la competenza", onclick: () => { S.skill = null; renderSkillChip(); } }, "✕"))] : []));
 }
 
 async function toggleMic() {
@@ -209,11 +216,13 @@ async function send(text) {
   const label = el("span", { class: "m-status" });
   const typing = el("div", { class: "m-msg bot" }, el("div", { class: "m-bubble typing" }, el("i"), el("i"), el("i"), label));
   log.append(typing); log.scrollTop = log.scrollHeight;
+  const skill = S.skill?.name || "";
+  S.skill = null; renderSkillChip();
   let live = null, acc = "", raf = 0;
   const paint = () => { raf = 0; const stick = nearBottom(); live.firstChild.replaceChildren(markdown(acc)); if (stick) log.scrollTop = log.scrollHeight; };
   try {
     const reply = await api.chatStream(msg, SESSION, {
-      model: store.get("jarvis.model"),
+      model: store.get("jarvis.model"), skill,
       onStatus: (t) => { label.textContent = t; },
       onDelta: (t) => {
         if (!live) { typing.remove(); live = el("div", { class: "m-msg bot" }, el("div", { class: "m-bubble" })); log.append(live); }
@@ -514,6 +523,21 @@ function openUpdate() {
       el("button", { class: "m-primary", onclick: () => { haptic("medium"); s.close(); openExternal(u.url); } }, "Scarica e installa")));
 }
 
+// ---------------------------------------------------------------- competenze
+async function openSkills() {
+  let data;
+  try { data = await api.skills(); } catch (e) { return toast(errText(e), true); }
+  const list = el("div", { class: "notes-list", style: "max-height:56vh" });
+  const s = openSheet("Competenze di JARVIS", el("p", { class: "m-note" }, "Si attivano da sole quando la richiesta le riguarda. Toccane una per usarla nella prossima domanda."), list);
+  for (const [domain, label] of Object.entries(data.domains)) {
+    const rows = data.skills.filter((x) => x.domain === domain);
+    if (!rows.length) continue;
+    list.append(el("h3", { class: "m-sub" }, `${label} (${rows.length})`),
+      ...rows.map((x) => el("button", { class: "m-card doc", onclick: () => { S.skill = x; s.close(); setTab("chat"); renderSkillChip(); input?.focus(); haptic(); toast(`Competenza attiva: ${x.title}`); } },
+        el("div", { class: "doc-top" }, el("b", {}, x.title), x.builtin ? null : el("span", { class: "doc-src" }, "tua")), el("p", {}, x.description))));
+  }
+}
+
 // ---------------------------------------------------------------- impostazioni delle notifiche e del modello
 const KIND_LABEL = { reminder: "Promemoria", alert: "Avvisi (token, sicurezza)", pending: "Conferme richieste", update: "Aggiornamenti app", brain: "Secondo cervello", proactive: "Suggerimenti di JARVIS (eventi, email, riepiloghi)", info: "Informazioni" };
 
@@ -579,7 +603,8 @@ function buildMore() {
       S.update?.available ? el("div", { class: "m-row" }, el("span", {}, `Disponibile ${S.update.latest}`), el("button", { class: "m-primary", onclick: openUpdate }, "Aggiorna"))
         : el("div", { class: "m-row" }, el("span", {}, S.update ? "Sei aggiornato" : "Controlla le novità"), el("button", { class: "m-ghost", onclick: () => checkUpdate(true) }, icon("refresh", 16), "Controlla"))),
     el("h3", { class: "m-sub" }, "Intelligenza"),
-    el("div", { class: "m-card" }, el("div", { class: "m-row" }, el("span", {}, "Modello"), el("button", { class: "m-ghost", onclick: openModelPicker }, store.get("jarvis.model") || "Automatico"))),
+    el("div", { class: "m-card" }, el("div", { class: "m-row" }, el("span", {}, "Modello"), el("button", { class: "m-ghost", onclick: openModelPicker }, store.get("jarvis.model") || "Automatico")),
+      el("div", { class: "m-row" }, el("span", {}, "Competenze (codice, finanza, marketing…)"), el("button", { class: "m-ghost", onclick: openSkills }, icon("sparkle", 16), "Sfoglia"))),
     el("h3", { class: "m-sub" }, "Voce e notifiche"),
     el("div", { class: "m-card" },
       el("label", { class: "m-row" }, el("span", {}, st?.voice ? "Leggi le risposte (voce di JARVIS)" : "Leggi le risposte (serve il PC acceso)"), speakSwitch),
