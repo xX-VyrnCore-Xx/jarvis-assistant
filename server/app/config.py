@@ -17,6 +17,8 @@ class Settings(BaseSettings):
     freellm_internal_url: str = ""  # se impostata, /v1/* viene inoltrato qui (FreeLLMAPI nello stesso container)
     freellm_db_path: str = ""  # se FREELLM_API_KEY è vuota, la chiave unificata si legge da questo DB SQLite
     llm_timeout_s: float = 90.0
+    llm_attempt_timeout_s: float = 35.0
+    web_search_engines: bool = True  # ricerca web dai motori di FreeLLMAPI (Parallel); DuckDuckGo come ripiego  # primo tentativo: se il provider non risponde in tempo si ripiega su un altro modello (invece di aspettare 60 s)
     llm_temperature: float = 0.6
     llm_temperature_tools: float = 0.2  # con i tool serve precisione, non creatività
     llm_max_tokens: int = 1500  # tetto per risposta: protegge la quota gratuita
@@ -62,6 +64,7 @@ class Settings(BaseSettings):
     skills_enabled: bool = True  # competenze specialistiche (programmazione, finanza, marketing...) attivate dalla richiesta
     skills_max_active: int = 2
     skills_context_chars: int = 3000
+    reminder_calendar_popup: bool = True  # l'evento del Calendario avvisa anche da solo (notifica di Google Calendar) oltre ai canali di JARVIS
     learn_enabled: bool = True  # impara da solo fatti, preferenze e impegni dalle conversazioni (poi li salva nel secondo cervello)
     learn_max_per_day: int = 30
     proactive_enabled: bool = True  # JARVIS ti avvisa da solo: eventi in arrivo, email nuove, riepilogo serale e settimanale

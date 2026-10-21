@@ -14,6 +14,7 @@ COPY server/requirements.txt .
 RUN python3 -m venv /opt/venv && /opt/venv/bin/pip install --no-cache-dir -r requirements.txt
 COPY server/app ./app
 COPY --chmod=755 deploy/start.sh /usr/local/bin/start.sh
+COPY deploy/merge_providers.py /usr/local/bin/merge_providers.py
 
 ENV PYTHONUNBUFFERED=1 \
     FREEAPI_DB_PATH=/app/server/data/freellmapi.db \

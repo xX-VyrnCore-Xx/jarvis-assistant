@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -8,6 +9,7 @@ from .llm import LLMClient
 from .memory import Store
 from .privacy import Redactor, StreamUnmasker
 from .tools import ToolRegistry
+from .tools.select import ToolSelector
 
 log = logging.getLogger("jarvis.agent")
 
@@ -48,6 +50,7 @@ class Agent:
 
         self.learner = Learner(settings, llm, brain, store)
         self.skills = None  # SkillRegistry, assegnato all'avvio
+        self.selector = ToolSelector()
 
     TOOL_LABELS = {
         "web_search": "Cerco sul web…", "web_news": "Leggo le notizie…", "read_webpage": "Leggo la pagina…", "get_weather": "Controllo il meteo…",
@@ -104,14 +107,20 @@ class Agent:
         chosen = [sk for n in (forced or []) if (sk := self.skills.get(n))] or self.skills.match(user_text, k=self.s.skills_max_active)
         return self.skills.context(chosen, self.s.skills_context_chars)
 
-    async def _prepare(self, user_text: str, session_id: str, voice: bool, forced: list[str] | None = None) -> tuple[list[dict], Redactor]:
+    async def _prepare(self, user_text: str, session_id: str, voice: bool, forced: list[str] | None = None) -> tuple[list[dict], Redactor, set[str]]:
         # privacy: ciò che va ai provider passa da un filtro che sostituisce dati sensibili con segnaposto (reversibili alla fine)
         red = Redactor(self.s.privacy_mode)
-        rows = self._trim_history(await self.store.recent_messages(session_id, self.s.history_messages))
+        # cronologia, secondo cervello (con la ricerca per significato), profilo e situazione si leggono insieme, non uno dopo l'altro
+        rows_raw, brain_raw, profile_raw, situation_raw = await asyncio.gather(
+            self.store.recent_messages(session_id, self.s.history_messages),
+            self.brain.context(user_text) if self.brain else asyncio.sleep(0, ""), self._profile(), self._situation())
+        rows = self._trim_history(rows_raw)
+        prior = [m["content"] for m in reversed(rows) if m["role"] == "user"][:2]
+        active = self.selector.groups_for(user_text, prior)  # gruppi di strumenti pertinenti a questa richiesta
         history = [{**m, "content": red.mask(m["content"])} for m in rows]
-        brain_ctx = red.mask(await self.brain.context(user_text)) if self.brain else ""  # secondo cervello: contesto pertinente, mascherato
-        profile = red.mask(await self._profile())
-        situation = red.mask(await self._situation())
+        brain_ctx = red.mask(brain_raw)  # secondo cervello: contesto pertinente, mascherato
+        profile = red.mask(profile_raw)
+        situation = red.mask(situation_raw)
         memories = [] if brain_ctx else [red.mask(m) for m in await self.store.search_memories(user_text, self.s.memory_hits)]
 
         now = datetime.now(ZoneInfo(self.s.timezone))
@@ -134,11 +143,28 @@ class Agent:
         if red.mode != "off":
             system += ("\n\nPer privacy alcuni dati sensibili compaiono come segnaposto tra parentesi quadre (es. [IBAN_1], [CARTA_1], [EMAIL_1]): "
                        "usali tali e quali nelle risposte e negli argomenti dei tool, il sistema li sostituisce con i valori veri.")
-        return [{"role": "system", "content": system}, *history, {"role": "user", "content": red.mask(user_text)}], red
+        return [{"role": "system", "content": system}, *history, {"role": "user", "content": red.mask(user_text)}], red, active
 
-    async def _run_tools(self, calls: list[dict], red: Redactor, messages: list[dict]) -> None:
+    def _specs(self, active: set[str]) -> list[dict]:
+        return self.selector.specs(self.tools.specs, active)
+
+    async def _call(self, call: dict, red: Redactor, active: set[str]) -> str:
+        name, args = call["function"]["name"], red.unmask_json(call["function"].get("arguments", ""))
+        if name == "need_tools":  # il modello chiede altri strumenti: da ora (stesso turno) sono disponibili
+            try:
+                group = (json.loads(args) if args else {}).get("group", "")
+            except ValueError:
+                group = ""
+            names = self.selector.tools_of(self.tools.specs, group)
+            if not names:
+                return "Errore: gruppo sconosciuto o senza strumenti."
+            active.add(group)
+            return "Strumenti attivati: " + ", ".join(names) + ". Usali ora."
+        return await self.tools.call(name, args)
+
+    async def _run_tools(self, calls: list[dict], red: Redactor, messages: list[dict], active: set[str]) -> None:
         # i tool richiesti nello stesso turno sono indipendenti: si eseguono insieme
-        results = await asyncio.gather(*(self.tools.call(c["function"]["name"], red.unmask_json(c["function"].get("arguments", ""))) for c in calls))
+        results = await asyncio.gather(*(self._call(c, red, active) for c in calls))
         for c, result in zip(calls, results):
             log.info("tool %s -> %d caratteri", c["function"]["name"], len(result))
             messages.append({"role": "tool", "tool_call_id": c["id"], "content": red.mask(result)})
@@ -154,16 +180,16 @@ class Agent:
         return answer
 
     async def reply(self, user_text: str, session_id: str, voice: bool = False, model: str | None = None, skills: list[str] | None = None) -> str:
-        messages, red = await self._prepare(user_text, session_id, voice, skills)
+        messages, red, active = await self._prepare(user_text, session_id, voice, skills)
         answer = ""
         for _ in range(self.s.max_tool_rounds):
-            msg = await self.llm.chat(messages, self.tools.specs, model=model)
+            msg = await self.llm.chat(messages, self._specs(active), model=model)
             calls = msg.get("tool_calls") or []
             if not calls:
                 answer = msg.get("content") or ""
                 break
             messages.append({"role": "assistant", "content": msg.get("content"), "tool_calls": calls})
-            await self._run_tools(calls, red, messages)
+            await self._run_tools(calls, red, messages, active)
         else:
             # troppe operazioni: si chiede comunque una risposta con quanto raccolto, senza altri tool
             messages.append({"role": "user", "content": "Rispondi ora con le informazioni raccolte, senza usare altri tool."})
@@ -172,14 +198,14 @@ class Agent:
 
     async def reply_stream(self, user_text: str, session_id: str, voice: bool = False, model: str | None = None, skills: list[str] | None = None):
         """Come `reply`, ma a eventi: ("status", testo) mentre usa i tool, ("delta", testo) man mano che scrive, ("done", risposta intera)."""
-        messages, red = await self._prepare(user_text, session_id, voice, skills)
+        messages, red, active = await self._prepare(user_text, session_id, voice, skills)
         answer = ""
         for _ in range(self.s.max_tool_rounds + 1):
             last_round = _ == self.s.max_tool_rounds
             if last_round:
                 messages.append({"role": "user", "content": "Rispondi ora con le informazioni raccolte, senza usare altri tool."})
             unmask, msg = StreamUnmasker(red), {}
-            async for kind, data in self.llm.chat_stream(messages, [] if last_round else self.tools.specs, model=model):
+            async for kind, data in self.llm.chat_stream(messages, [] if last_round else self._specs(active), model=model):
                 if kind == "delta":
                     if out := unmask.feed(data):
                         yield ("delta", out)
@@ -194,5 +220,5 @@ class Agent:
             messages.append({"role": "assistant", "content": msg.get("content"), "tool_calls": calls})
             for c in calls:
                 yield ("status", self.TOOL_LABELS.get(c["function"]["name"], f"Uso {c['function']['name']}…"))
-            await self._run_tools(calls, red, messages)
+            await self._run_tools(calls, red, messages, active)
         yield ("done", await self._finish(session_id, user_text, answer or "…", red))

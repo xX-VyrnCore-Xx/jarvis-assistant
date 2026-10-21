@@ -119,3 +119,7 @@ create table if not exists usage_daily (
 );
 alter table usage_daily enable row level security;
 revoke all on public.usage_daily from anon, authenticated;
+
+-- Promemoria collegati al Calendario Google: l'evento è la fonte, il promemoria dell'app lo segue.
+alter table reminders add column if not exists event_id text not null default '';
+create index if not exists reminders_event_idx on reminders (event_id) where event_id <> '';

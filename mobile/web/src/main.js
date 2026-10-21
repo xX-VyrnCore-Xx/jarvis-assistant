@@ -64,12 +64,17 @@ function orb() {
   const add = (parent, tag, attrs) => { const n = document.createElementNS(NS, tag); for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v); parent.append(n); return n; };
   const defs = add(svg, "defs", {});
   const g = add(defs, "linearGradient", { id: "og", x1: "0", y1: "0", x2: "1", y2: "1" });
-  add(g, "stop", { offset: "0", "stop-color": "#ffc15e" }); add(g, "stop", { offset: "1", "stop-color": "#ff6f4d" });
-  for (const [cls, r, w] of [["r1", 44, 5], ["r2", 32, 4], ["r3", 21, 3.4]]) {
+  add(g, "stop", { offset: "0", "stop-color": "#ffc15e" }); add(g, "stop", { offset: "1", "stop-color": "#ff6a4a" });
+  const cg = add(defs, "radialGradient", { id: "cg" });
+  add(cg, "stop", { offset: "0", "stop-color": "#fff3d6" }); add(cg, "stop", { offset: ".45", "stop-color": "#ffc15e" }); add(cg, "stop", { offset: "1", "stop-color": "#ff6a4a" });
+  // tre anelli a segmenti (come l'icona dell'app) e un nucleo luminoso
+  for (const [cls, r, w, dash, rot] of [["r1", 44, 5.2, "176 100", -70], ["r2", 32, 3.6, "", 0], ["r3", 21, 4, "70 62", 130]]) {
     const grp = add(svg, "g", { class: cls });
-    add(grp, "circle", { cx: 50, cy: 50, r, fill: "none", stroke: "url(#og)", "stroke-width": w, class: cls === "r3" ? "dash" : "" });
+    add(grp, "circle", { cx: 50, cy: 50, r, fill: "none", stroke: "url(#og)", "stroke-width": w, "stroke-linecap": "round", ...(dash ? { "stroke-dasharray": dash } : {}), transform: `rotate(${rot} 50 50)` });
   }
-  add(svg, "circle", { cx: 50, cy: 50, r: 7, fill: "url(#og)" });
+  const core = add(svg, "g", { class: "core" });
+  add(core, "circle", { cx: 50, cy: 50, r: 8.5, fill: "url(#cg)" });
+  add(core, "circle", { cx: 47, cy: 47, r: 2.2, fill: "#fff", opacity: ".6" });
   return svg;
 }
 function setOrb(state) {
@@ -82,7 +87,7 @@ function shell() {
   top = el("header", { class: "m-top" });
   content = el("main", { id: "m-view" });
   tabs = el("nav", { class: "m-tabs", "aria-label": "Sezioni" });
-  $app.replaceChildren(top, content, tabs);
+  $app.replaceChildren(el("div", { class: "m-col" }, top, content), tabs);
   renderTop(); renderTabs();
 }
 
@@ -112,12 +117,28 @@ function renderTop() {
 
 function renderTabs() {
   const badge = { reminders: S.reminders.filter((r) => new Date(r.due_at) - Date.now() < 86_400_000).length };
-  tabs.replaceChildren(...TABS.map(([id, label, ic]) =>
-    el("button", { class: `m-tab${S.tab === id ? " on" : ""}`, dataset: { tab: id }, onclick: () => { haptic(); setTab(id); }, "aria-label": label },
-      el("span", { class: "m-tab-ic" }, icon(ic, 23), badge[id] ? el("span", { class: "dot" }, String(badge[id])) : null), el("small", {}, label))));
+  if (!tabs.querySelector(".m-lens")) {  // costruita una volta sola: la «lente» sotto la scheda attiva scivola con la molla
+    tabs.replaceChildren(el("span", { class: "m-lens", "aria-hidden": "true" }, el("i")),
+      ...TABS.map(([id, label, ic]) => el("button", { class: "m-tab", dataset: { tab: id }, "aria-label": label, onclick: () => { haptic(); setTab(id); } },
+        el("span", { class: "m-tab-ic" }, icon(ic, 24)), el("small", {}, label))));
+  }
+  tabs.style.setProperty("--i", String(Math.max(0, TABS.findIndex(([id]) => id === S.tab))));
+  tabs.querySelectorAll(".m-tab").forEach((b) => {
+    const on = b.dataset.tab === S.tab;
+    b.classList.toggle("on", on);
+    if (on) b.setAttribute("aria-current", "page"); else b.removeAttribute("aria-current");
+    const n = badge[b.dataset.tab] || 0;
+    let dot = b.querySelector(".dot");
+    if (n) { if (!dot) { dot = el("span", { class: "dot" }); b.append(dot); } dot.textContent = String(n); } else dot?.remove();
+  });
 }
 
 function setTab(id) {
+  const from = TABS.findIndex(([t]) => t === S.tab), to = TABS.findIndex(([t]) => t === id);
+  if (content && from !== to) {  // la sezione entra scorrendo dalla parte da cui si è toccato
+    content.dataset.dir = to > from ? "r" : "l";
+    clearTimeout(setTab.t); setTab.t = setTimeout(() => delete content.dataset.dir, 520);
+  }
   S.tab = id;
   renderTabs(); renderTab();
   if (id === "brain") loadBrain();
@@ -344,7 +365,10 @@ function semi(p, big, small) {
   const svg = document.createElementNS(NS, "svg");
   svg.setAttribute("viewBox", "0 0 200 112");
   const arc = (cls, len) => { const path = document.createElementNS(NS, "path"); path.setAttribute("d", "M20 100 A80 80 0 0 1 180 100"); path.setAttribute("class", cls); if (len != null) path.setAttribute("stroke-dasharray", `${len} ${L}`); return path; };
-  svg.append(arc("s-track"), arc(`s-bar${p < 15 ? " low" : p < 35 ? " mid" : ""}`, (L * p) / 100));
+  const bar = arc(`s-bar${p < 15 ? " low" : p < 35 ? " mid" : ""}`, 0);
+  bar.style.strokeDasharray = `0 ${L}`;
+  svg.append(arc("s-track"), bar);
+  requestAnimationFrame(() => requestAnimationFrame(() => { bar.style.strokeDasharray = `${(L * p) / 100} ${L}`; }));  // l'arco si riempie con la molla
   return el("div", { class: "semi" }, svg, el("div", { class: "semi-t" }, el("strong", {}, big), el("span", {}, small)));
 }
 
@@ -392,8 +416,7 @@ function buildTokens() {
         el("div", {}, el("small", {}, "Usati"), el("b", {}, fmtTokens(t.used_tokens))),
         el("div", {}, el("small", {}, "Richieste"), el("b", {}, t.used_requests))),
       el("p", { class: "m-note" }, `${t.resets_at ? `Si azzera ${fmtDate(t.resets_at)}` : "Si azzera a inizio mese"}${S.tokensAt ? ` · aggiornato alle ${clock(S.tokensAt)}` : ""}`)),
-    forecastCard(t),
-    usageCard(),
+    ...[forecastCard(t), usageCard()].filter(Boolean),  // (append(null) scriverebbe «null» nella pagina)
     el("h3", { class: "m-sub" }, "Per provider"),
     ...t.providers.map((x) => {
       const known = x.remaining != null;
@@ -405,7 +428,18 @@ function buildTokens() {
     }),
     el("p", { class: "m-note" }, t.note));
   pullToRefresh(page, () => { loadTokens(true); toast("Aggiorno…"); });
+  if (S.countKey !== t.remaining_tokens && !matchMedia("(prefers-reduced-motion: reduce)").matches) {  // il numero principale sale da zero
+    S.countKey = t.remaining_tokens;
+    const num = page.querySelector(".semi-t strong");
+    if (num) { num.textContent = fmtTokens(0); setTimeout(() => countUp(num, t.remaining_tokens), 140); }
+  }
   return page;
+}
+
+function countUp(node, to) {
+  const t0 = performance.now(), D = 950;
+  const step = (now) => { const k = Math.min(1, (now - t0) / D); node.textContent = fmtTokens(Math.round(to * (1 - (1 - k) ** 3))); if (k < 1) requestAnimationFrame(step); };
+  requestAnimationFrame(step);
 }
 
 // ---------------------------------------------------------------- promemoria
@@ -425,6 +459,15 @@ function openSheet(title, ...body) {
   S.sheets.push(entry);
   document.body.append(sheet);
   requestAnimationFrame(() => sheet.classList.add("up"));
+  // il foglio si chiude trascinando verso il basso la maniglia o il titolo (come su iOS)
+  const box = sheet.firstElementChild;
+  for (const grip of [box.querySelector(".grab"), box.querySelector("h3")]) {
+    if (!grip) continue;
+    let y0 = null, dy = 0;
+    grip.addEventListener("touchstart", (e) => { y0 = e.touches[0].clientY; dy = 0; box.classList.add("drag"); }, { passive: true });
+    grip.addEventListener("touchmove", (e) => { if (y0 == null) return; dy = Math.max(0, e.touches[0].clientY - y0); box.style.transform = `translateY(${dy}px)`; sheet.style.opacity = String(1 - Math.min(0.6, dy / 420)); }, { passive: true });
+    grip.addEventListener("touchend", () => { if (y0 == null) return; box.classList.remove("drag"); box.style.transform = ""; sheet.style.opacity = ""; y0 = null; if (dy > 110) { haptic(); close(); } });
+  }
   return { close, sheet };
 }
 
@@ -467,7 +510,7 @@ async function removeReminder(r) {
 
 function reminderCard(r) {
   const due = relDue(r.due_at);
-  const card = el("div", { class: "m-card rem" }, el("div", {}, el("b", {}, r.text), el("small", { class: due.soon ? "soon" : "" }, due.label)),
+  const card = el("div", { class: "m-card rem" }, el("div", {}, el("b", {}, r.text), el("small", { class: due.soon ? "soon" : "" }, due.label), r.event_id ? el("small", { class: "cal" }, "📅 Calendario") : null),
     el("button", { class: "m-icon", "aria-label": "Elimina", onclick: () => removeReminder(r) }, icon("trash", 19)));
   let x0 = null, dx = 0;
   card.addEventListener("touchstart", (e) => { x0 = e.touches[0].clientX; dx = 0; card.classList.add("drag"); }, { passive: true });

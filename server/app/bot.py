@@ -233,9 +233,9 @@ class TelegramBot:
             if not rows:
                 return await self.tg.send(chat_id, "Nessun promemoria attivo, signore.")
             tz = ZoneInfo(self.s.timezone)
-            body = "\n".join(f"• {datetime.fromisoformat(r['due_at']).astimezone(tz):%d/%m %H:%M} — {r['text']}" for r in rows)
+            body = "\n".join(f"• {datetime.fromisoformat(r['due_at']).astimezone(tz):%d/%m %H:%M} — {r['text']}" + (" 📅" if r.get("event_id") else "") for r in rows)
             keys = [[{"text": f"🗑 {r['text'][:28]}", "callback_data": f"rd:{r['id']}"}] for r in rows[:10]]
-            return await self.tg.send(chat_id, "<b>Promemoria attivi</b>\n" + body, {"inline_keyboard": keys})
+            return await self.tg.send(chat_id, "<b>Promemoria attivi</b> (📅 = anche sul Calendario)\n" + body, {"inline_keyboard": keys})
         if cmd == "ricordi":
             rows = await st.store.list_memories(15)
             if not rows:
@@ -489,7 +489,7 @@ class TelegramBot:
                     from datetime import timedelta
                     from zoneinfo import ZoneInfo
 
-                    await st.store.add_reminder(n["body"], datetime.now(ZoneInfo(self.s.timezone)) + timedelta(minutes=int(mins)))
+                    await st.reminders.snooze_delivered(n["body"], int(mins))
                 await st.notifier.mark_read([n["id"]])
                 outcome = f"Rimandato di {mins} min." if int(mins or 0) else "Fatto."
                 if msg.get("message_id"):
@@ -538,7 +538,7 @@ class TelegramBot:
             await st.store.set_setting("tg_model", "" if self._models[int(ident)] == "auto" else self._models[int(ident)])
             outcome = f"Modello: {self._models[int(ident)]}"
         elif action == "rd" and ident.isdigit():
-            await st.store.delete_reminder(int(ident))
+            await st.reminders.delete(int(ident))
             outcome = "Promemoria eliminato."
         elif action == "td" and ident.isdigit():
             await st.store.set_task_done(int(ident), True)

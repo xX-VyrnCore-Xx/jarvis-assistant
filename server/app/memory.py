@@ -12,7 +12,8 @@ class Store(Protocol):
     async def recent_messages(self, session_id: str, limit: int) -> list[dict]: ...
     async def add_memory(self, content: str) -> None: ...
     async def search_memories(self, query: str, limit: int) -> list[str]: ...
-    async def add_reminder(self, text: str, due_at: datetime) -> None: ...
+    async def add_reminder(self, text: str, due_at: datetime, event_id: str = "") -> int: ...
+    async def update_reminder(self, reminder_id: int, due_at: datetime | None = None, text: str | None = None, event_id: str | None = None) -> None: ...
     async def list_reminders(self) -> list[dict]: ...
     async def due_reminders(self, now: datetime) -> list[dict]: ...
     async def mark_reminder_done(self, reminder_id: int) -> None: ...
@@ -79,8 +80,20 @@ class MemoryStore:
         return hits[-limit:]
 
 
-    async def add_reminder(self, text, due_at):
-        self.reminders.append({"id": len(self.reminders) + 1, "text": text, "due_at": due_at.isoformat(), "done": False})
+    async def add_reminder(self, text, due_at, event_id=""):
+        rid = max((r["id"] for r in self.reminders), default=0) + 1
+        self.reminders.append({"id": rid, "text": text, "due_at": due_at.isoformat(), "done": False, "event_id": event_id})
+        return rid
+
+    async def update_reminder(self, reminder_id, due_at=None, text=None, event_id=None):
+        for r in self.reminders:
+            if r["id"] == reminder_id:
+                if due_at is not None:
+                    r["due_at"] = due_at.isoformat()
+                if text is not None:
+                    r["text"] = text
+                if event_id is not None:
+                    r["event_id"] = event_id
 
     async def list_reminders(self):
         return sorted((r for r in self.reminders if not r["done"]), key=lambda r: r["due_at"])
@@ -227,20 +240,35 @@ class SupabaseStore:
         r = await self._client.delete(f"{self.base}/messages", params={"session_id": f"eq.{session_id}"}, headers=self.headers)
         r.raise_for_status()
 
-    async def add_reminder(self, text, due_at):
-        await self._insert("reminders", {"text": self.vault.seal(text), "due_at": due_at.isoformat()})
+    async def add_reminder(self, text, due_at, event_id=""):
+        h = {**self.headers, "Prefer": "return=representation"}
+        r = await self._client.post(f"{self.base}/reminders", json={"text": self.vault.seal(text), "due_at": due_at.isoformat(), "event_id": event_id}, headers=h)
+        r.raise_for_status()
+        return r.json()[0]["id"]
+
+    async def update_reminder(self, reminder_id, due_at=None, text=None, event_id=None):
+        body = {}
+        if due_at is not None:
+            body["due_at"] = due_at.isoformat()
+        if text is not None:
+            body["text"] = self.vault.seal(text)
+        if event_id is not None:
+            body["event_id"] = event_id
+        if body:
+            r = await self._client.patch(f"{self.base}/reminders", params={"id": f"eq.{int(reminder_id)}"}, json=body, headers=self.headers)
+            r.raise_for_status()
 
     def _reminders(self, rows):
         return [{**r, "text": self.vault.open(r["text"])} for r in rows]
 
     async def list_reminders(self):
         return self._reminders(await self._get(
-            "reminders", {"select": "id,text,due_at", "done": "eq.false", "order": "due_at.asc", "limit": 50}))
+            "reminders", {"select": "id,text,due_at,event_id", "done": "eq.false", "order": "due_at.asc", "limit": 100}))
 
     async def due_reminders(self, now):
         return self._reminders(await self._get(
             "reminders",
-            {"select": "id,text,due_at", "done": "eq.false", "due_at": f"lte.{now.isoformat()}", "order": "due_at.asc"}))
+            {"select": "id,text,due_at,event_id", "done": "eq.false", "due_at": f"lte.{now.isoformat()}", "order": "due_at.asc"}))
 
     async def mark_reminder_done(self, reminder_id):
         r = await self._client.patch(
