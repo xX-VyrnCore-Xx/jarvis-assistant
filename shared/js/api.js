@@ -19,6 +19,15 @@ const HUMAN = {
   504: "Il server non ha risposto in tempo.",
 };
 
+/** Id casuale di questo dispositivo: il server lo restituisce negli avvisi di sincronizzazione, così non ricarica ciò che ha appena fatto lui. */
+export const deviceId = (() => {
+  try {
+    let id = localStorage.getItem("jarvis.device");
+    if (!id) { id = Math.random().toString(36).slice(2, 12); localStorage.setItem("jarvis.device", id); }
+    return id;
+  } catch { return Math.random().toString(36).slice(2, 12); }
+})();
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const TRANSIENT = new Set([0, 502, 503, 504]);
 
@@ -46,7 +55,7 @@ export class Jarvis {
   }
 
   async #req(path, { method = "GET", body, timeout = 30_000, auth = true, raw = false } = {}) {
-    const headers = {};
+    const headers = { "X-Device-Id": deviceId };
     if (auth) headers.Authorization = `Bearer ${this.cfg.token()}`;
     if (body !== undefined) headers["Content-Type"] = "application/json";
     let res;
@@ -79,7 +88,7 @@ export class Jarvis {
     try {
       res = await fetch(`${this.cfg.url()}/chat/stream`, {
         method: "POST",
-        headers: { Authorization: `Bearer ${this.cfg.token()}`, "Content-Type": "application/json", Accept: "text/event-stream" },
+        headers: { Authorization: `Bearer ${this.cfg.token()}`, "Content-Type": "application/json", Accept: "text/event-stream", "X-Device-Id": deviceId },
         body: JSON.stringify({ message, session_id: session, model: model || undefined, skill: skill || undefined }),
         signal,
       });
@@ -132,6 +141,8 @@ export class Jarvis {
   tokens(refresh = false) { return this.#get(`/api/tokens${refresh ? "?refresh=true" : ""}`); }
   history(session, limit = 40) { return this.#get(`/api/history?session_id=${encodeURIComponent(session)}&limit=${limit}`); }
   reminders() { return this.#get("/api/reminders"); }
+  /** Allinea i promemoria con il Calendario Google ora; risponde sempre con l'esito (e la causa, se è andata male). */
+  syncReminders() { return this.#req("/api/reminders/sync", { method: "POST", timeout: 60_000 }); }
   addReminder(text, when) { return this.#req("/api/reminders", { method: "POST", body: { text, when } }); }
   deleteReminder(id) { return this.#req(`/api/reminders/${id}`, { method: "DELETE" }); }
   pending() { return this.#get("/api/pending"); }

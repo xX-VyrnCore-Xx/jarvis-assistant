@@ -182,9 +182,9 @@ async def maintenance_loop(settings: Settings, store: Store, usage, updates, not
             await usage.flush(store)
             if reminders is not None:  # il Calendario comanda: spostamenti ed eliminazioni arrivano nell'app, e i promemoria senza evento ne ricevono uno
                 try:
-                    await reminders.sync()
-                except Exception as e:
-                    log.info("sincronizzazione promemoria ↔ Calendario rimandata: %s", type(e).__name__)
+                    await reminders.sync()  # l'esito e l'eventuale causa dell'errore restano in reminders.status (e nei log, una volta per causa)
+                except Exception:
+                    pass
             mem = container_mb() or rss_mb() * 1.6  # il container comprende anche FreeLLMAPI
             if mem > 440 and not mem_alert:
                 mem_alert = True

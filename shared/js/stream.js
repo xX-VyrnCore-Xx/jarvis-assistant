@@ -5,10 +5,10 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /**
  * @param {{url: () => string, token: () => string}} cfg
- * @param {{onNotification: (n: object) => void, onState?: (s: "on"|"off"|"auth") => void}} h
+ * @param {{onNotification: (n: object) => void, onSync?: (m: {scope: string, origin: string}) => void, onState?: (s: "on"|"off"|"auth") => void}} h
  * @returns {() => void} funzione che chiude il flusso
  */
-export function openStream(cfg, { onNotification, onRead = () => {}, onState = () => {} }) {
+export function openStream(cfg, { onNotification, onRead = () => {}, onSync = () => {}, onState = () => {} }) {
   let stopped = false;
   let ctrl;
   let retry = 0;
@@ -25,6 +25,7 @@ export function openStream(cfg, { onNotification, onRead = () => {}, onState = (
       const msg = JSON.parse(data);
       if (event === "notification") onNotification(msg);
       else if (event === "read") onRead(msg.ids);
+      else if (event === "sync") onSync(msg);
     } catch { /* messaggio malformato: ignorato */ }
   };
 

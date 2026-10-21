@@ -27,7 +27,7 @@ def register_basic_tools(reg: ToolRegistry, settings: Settings, store: Store, bu
         reminders = ReminderService(settings, store)
 
     def where(r: dict) -> str:
-        return "e aggiunto al Calendario Google." if r["calendar"] else ("(solo nell'app: il Calendario non ha risposto, lo collego appena possibile)." if reminders.linked else "(solo nell'app: Google non è collegato).")
+        return "e aggiunto al Calendario Google." if r["calendar"] else (f"(solo nell'app: {r.get('error') or 'il Calendario non ha risposto'}; lo collego appena possibile)." if reminders.linked else "(solo nell'app: Google non è collegato).")
 
     async def get_datetime() -> str:
         now = datetime.now(ZoneInfo(settings.timezone))

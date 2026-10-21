@@ -340,3 +340,46 @@ button { transition: transform .16s var(--spring), opacity .16s; } button:active
 @media (orientation: landscape) and (max-height: 520px) and (max-width: 719px) {
   .m-tabs { margin-bottom: calc(4px + var(--bot)); padding: 3px 6px; border-radius: 18px; } .m-lens { height: 34px; top: 3px; } .m-lens i { border-radius: 14px; }
 }
+
+/* ---- avvisi di stato (es. Calendario non sincronizzato) */
+.m-warn { display: flex; align-items: center; gap: 12px; margin: 0 0 12px; padding: 12px 14px; border-radius: var(--r-card); background: rgba(255, 193, 94, .13); border: var(--hair) solid rgba(255, 193, 94, .4); color: var(--warn); animation: rise .4s var(--spring) both; }
+.m-warn > div { flex: 1; min-width: 0; } .m-warn b { display: block; font-size: 14px; } .m-warn small { display: block; color: var(--muted); font-size: 12.5px; line-height: 1.35; margin-top: 2px; }
+.cal-ok { margin: 0 4px 10px; }
+
+/* =====================================================================================
+   v0.8 — rifiniture: barra con rilievo allo scorrimento, bordi sfumati, pressione «viva», invio con rimbalzo, transizione tema
+   ===================================================================================== */
+html, body, #m-app { transition: background-color .35s ease, color .35s ease; }
+.m-top { transition: box-shadow .25s ease, background .25s ease, border-color .25s ease; border-bottom-color: transparent; }
+.m-top.scrolled { box-shadow: 0 8px 24px rgba(0, 0, 0, .22); border-bottom-color: var(--line); background: color-mix(in srgb, var(--bg) 78%, transparent); }
+:root[data-theme="light"] .m-top.scrolled { box-shadow: 0 8px 24px rgba(60, 30, 20, .1); }
+
+/* i bordi della conversazione e delle liste si dissolvono invece di tagliarsi di netto */
+.m-log, .m-page { -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 14px, #000 calc(100% - 18px), transparent 100%); mask-image: linear-gradient(to bottom, transparent 0, #000 14px, #000 calc(100% - 18px), transparent 100%); }
+
+/* pressione: riflesso che segue il dito sulle schede toccabili */
+.m-card, .m-quick button, .rem, .m-chips button { position: relative; overflow: hidden; -webkit-tap-highlight-color: transparent; }
+.m-card::after, .m-quick button::after { content: ""; position: absolute; inset: 0; pointer-events: none; opacity: 0; background: radial-gradient(120px 90px at var(--px, 50%) var(--py, 50%), rgba(255, 255, 255, .13), transparent 70%); transition: opacity .25s; }
+.m-card:active::after, .m-quick button:active::after { opacity: 1; }
+
+/* invio: il pulsante «scatta» quando c'è del testo; il microfono pulsa piano */
+.m-send { transition: transform .35s var(--bounce), opacity .2s, box-shadow .2s; } .m-send:not(:disabled) { transform: scale(1.06); animation: sendPop .45s var(--bounce); }
+@keyframes sendPop { 0% { transform: scale(.7) rotate(-18deg); } 100% { transform: scale(1.06); } }
+
+/* conversazione: bolle consecutive più vicine e coda solo sull'ultima */
+.m-msg.same { margin-top: -4px; } .m-msg.same .m-bubble { border-top-left-radius: 8px; border-top-right-radius: 8px; }
+.m-msg.user.same .m-bubble { border-top-right-radius: 8px; } .m-msg.bot.same .m-bubble { border-top-left-radius: 8px; }
+
+/* numeri allineati ovunque (token, orari, contatori) e titoli più decisi */
+.m-pill, .m-day, .m-tab .dot, .hero, .tok-n, time, .m-meta { font-variant-numeric: tabular-nums; }
+.m-head h2 { letter-spacing: -.025em; font-weight: 800; }
+.m-day { letter-spacing: .06em; }
+
+/* elenchi dei promemoria: bordo colorato per urgenza */
+.rem { border-left: 3px solid transparent; transition: border-color .3s, transform .25s var(--bounce); } .rem:active { transform: scale(.985); }
+.rem.late { border-left-color: var(--bad); } .rem.soon { border-left-color: var(--amber); }
+
+/* scheletri e vuoti più vivi */
+.skel { border-radius: var(--r-card); } .m-empty .ico { border-radius: 22px; box-shadow: 0 10px 30px var(--glow), inset 0 1px 0 var(--hl); animation: floaty 5s ease-in-out infinite; }
+@keyframes floaty { 50% { transform: translateY(-5px); } }
+@media (prefers-reduced-motion: reduce) { .m-send:not(:disabled), .m-empty .ico { animation: none !important; } }

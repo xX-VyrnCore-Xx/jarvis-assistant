@@ -141,6 +141,7 @@ async def lifespan(app: FastAPI):
     app.state.backup = HFBackup(settings)
     app.state.voice = VoiceService(pc)
     notifier = app.state.notifier = Notifier(settings, store, tg)
+    reminders.on_change = lambda: notifier.sync("reminders")
     prev = pending.on_create
 
     def on_pending(p) -> None:
@@ -236,7 +237,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins(),
     allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "Accept"],
+    allow_headers=["Authorization", "Content-Type", "Accept", "X-Device-Id"],
     max_age=600,
 )
 app.add_middleware(SecurityHeaders)
@@ -278,7 +279,7 @@ async def health() -> dict:
 
 
 @app.post("/chat/stream", dependencies=[Depends(require_token)])
-async def chat_stream(body: ChatIn) -> StreamingResponse:
+async def chat_stream(body: ChatIn, x_device_id: str = Header(default="", max_length=64)) -> StreamingResponse:
     """Come /chat ma a eventi SSE: `status` (uso di un tool), `delta` (testo man mano), `done` (risposta intera), `error`."""
     limiter: RateLimiter = app.state.chat_limiter
     if wait := limiter.retry_after():
@@ -289,6 +290,8 @@ async def chat_stream(body: ChatIn) -> StreamingResponse:
         try:
             async for kind, data in app.state.agent.reply_stream(body.message, body.session_id, voice=body.voice, model=body.model, skills=[body.skill] if body.skill else None):
                 yield f"event: {kind}\ndata: {json.dumps({'text': data}, ensure_ascii=False)}\n\n"
+                if kind == "done":
+                    app.state.notifier.sync("chat", x_device_id)  # gli altri dispositivi mostrano subito lo scambio
         except LLMError as e:
             yield f"event: error\ndata: {json.dumps({'text': str(e)}, ensure_ascii=False)}\n\n"
         except Exception:
@@ -317,13 +320,15 @@ async def github_webhook(request: Request) -> dict:
 
 
 @app.post("/chat", response_model=ChatOut, dependencies=[Depends(require_token)])
-async def chat(body: ChatIn) -> ChatOut:
+async def chat(body: ChatIn, x_device_id: str = Header(default="", max_length=64)) -> ChatOut:
     limiter: RateLimiter = app.state.chat_limiter
     if wait := limiter.retry_after():
         raise HTTPException(429, "Troppe richieste: rallenta un momento", headers={"Retry-After": str(wait)})
     limiter.hit()
     try:
-        return ChatOut(reply=await app.state.agent.reply(body.message, body.session_id, voice=body.voice, model=body.model, skills=[body.skill] if body.skill else None))
+        reply = await app.state.agent.reply(body.message, body.session_id, voice=body.voice, model=body.model, skills=[body.skill] if body.skill else None)
+        app.state.notifier.sync("chat", x_device_id)
+        return ChatOut(reply=reply)
     except LLMError as e:
         raise HTTPException(502, str(e)) from e
 

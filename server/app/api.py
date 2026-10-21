@@ -106,6 +106,7 @@ async def status(request: Request) -> dict:
         "voice": st.voice.enabled,
         "brain": st.brain.enabled,
         "pending_actions": len(st.pending.list_pending()),
+        "calendar_sync": {**st.reminders.status, "linked": st.reminders.linked},
         "tokens": None,
     }
     if st.budget.enabled:
@@ -138,7 +139,7 @@ async def add_reminder(body: ReminderIn, request: Request) -> dict:
     if due <= datetime.now(tz):
         raise HTTPException(422, "La data è nel passato")
     r = await request.app.state.reminders.create(body.text, due)
-    return {"ok": True, "id": r["id"], "calendar": r["calendar"]}
+    return {"ok": True, "id": r["id"], "calendar": r["calendar"], "calendar_error": r.get("error", "")}
 
 
 @router.delete("/reminders/{reminder_id}")
@@ -149,8 +150,19 @@ async def delete_reminder(reminder_id: int, request: Request) -> dict:
 
 @router.post("/reminders/sync")
 async def reminders_sync(request: Request) -> dict:
-    """Allinea ora i promemoria con il Calendario (di solito lo fa da solo ogni 5 minuti)."""
-    return await request.app.state.reminders.sync()
+    """Allinea ora i promemoria con il Calendario (di solito lo fa da solo ogni 5 minuti). Non risponde mai con un errore del server: l'esito e la causa stanno in `status`."""
+    svc = request.app.state.reminders
+    try:
+        counts = await svc.sync()
+    except Exception:
+        counts = {}
+    return {"counts": counts, "status": svc.status, "linked": svc.linked}
+
+
+@router.get("/reminders/sync")
+async def reminders_sync_status(request: Request) -> dict:
+    svc = request.app.state.reminders
+    return {"status": svc.status, "linked": svc.linked}
 
 
 @router.get("/pending")
@@ -345,7 +357,9 @@ async def brain_doc(doc_id: int, request: Request) -> dict:
 
 @router.post("/brain/notes", status_code=201)
 async def brain_note(body: NoteIn, request: Request) -> dict:
-    return await _brain(request).ingest(body.text, title=body.title, source="note", tags=body.tags, importance=0.85 if body.important else 0.55)
+    out = await _brain(request).ingest(body.text, title=body.title, source="note", tags=body.tags, importance=0.85 if body.important else 0.55)
+    request.app.state.notifier.sync("brain")
+    return out
 
 
 @router.post("/brain/url", status_code=201)
@@ -356,7 +370,9 @@ async def brain_url(body: UrlIn, request: Request) -> dict:
     if isinstance(data, str):
         raise HTTPException(422, data)
     title, text, final = data
-    return await _brain(request).ingest(text, title=title or final, source="web", uri=final, tags=body.tags)
+    out = await _brain(request).ingest(text, title=title or final, source="web", uri=final, tags=body.tags)
+    request.app.state.notifier.sync("brain")
+    return out
 
 
 @router.post("/brain/docs/{doc_id}/pin")
@@ -365,6 +381,7 @@ async def brain_pin(doc_id: int, body: PinIn, request: Request) -> dict:
     if not await b.store.get_doc(doc_id):
         raise HTTPException(404, "Documento inesistente")
     await b.store.update_doc(doc_id, pinned=body.pinned)
+    request.app.state.notifier.sync("brain")
     return {"ok": True}
 
 
@@ -372,6 +389,7 @@ async def brain_pin(doc_id: int, body: PinIn, request: Request) -> dict:
 async def brain_forget(doc_id: int, request: Request) -> dict:
     if not await _brain(request).forget(doc_id):
         raise HTTPException(404, "Documento inesistente")
+    request.app.state.notifier.sync("brain")
     return {"ok": True}
 
 
