@@ -515,7 +515,7 @@ function openUpdate() {
 }
 
 // ---------------------------------------------------------------- impostazioni delle notifiche e del modello
-const KIND_LABEL = { reminder: "Promemoria", alert: "Avvisi (token, sicurezza)", pending: "Conferme richieste", update: "Aggiornamenti app", brain: "Secondo cervello", info: "Informazioni" };
+const KIND_LABEL = { reminder: "Promemoria", alert: "Avvisi (token, sicurezza)", pending: "Conferme richieste", update: "Aggiornamenti app", brain: "Secondo cervello", proactive: "Suggerimenti di JARVIS (eventi, email, riepiloghi)", info: "Informazioni" };
 
 async function openNotifySettings() {
   let p;
@@ -601,7 +601,7 @@ function buildMore() {
 }
 
 // ---------------------------------------------------------------- notifiche
-const KIND = { reminder: "clock", alert: "shield", pending: "shield", update: "down", brain: "sparkle", info: "bell" };
+const KIND = { reminder: "clock", alert: "shield", pending: "shield", update: "down", brain: "sparkle", proactive: "sparkle", info: "bell" };
 const ROUTE_TAB = { chat: "chat", brain: "brain", tokens: "tokens", reminders: "reminders", more: "more" };
 let notesSheet = null;
 

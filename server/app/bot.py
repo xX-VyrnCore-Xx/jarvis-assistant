@@ -1,5 +1,6 @@
 """Bot Telegram di JARVIS: comandi, pulsanti, indicatore di scrittura e risposte formattate. Risponde solo al proprietario."""
 import asyncio
+import html
 import json
 import logging
 import time
@@ -27,6 +28,7 @@ COMMANDS = [
     ("nota", "Salva una nota nel secondo cervello"),
     ("cerca", "Cerca nel secondo cervello"),
     ("cervello", "Statistiche del secondo cervello"),
+    ("profilo", "Cosa so di te (profilo)"),
     ("liste", "Liste e attività (spesa, da fare)"),
     ("nuova", "Azzera la conversazione"),
 ]
@@ -229,6 +231,12 @@ class TelegramBot:
             return await self.tg.send(chat_id, f"Autorizzi l'accesso a Gmail, Calendar e Drive (il link vale 10 minuti). "
                                                f"Il redirect da registrare su Google Cloud è <code>{base}/google/callback</code>.",
                                       {"inline_keyboard": [[{"text": "Collega Google", "url": url}]]})
+        if cmd == "profilo":
+            if not st.brain.enabled:
+                return await self.tg.send(chat_id, "Il secondo cervello è spento, signore.")
+            text = await st.brain.profile_text()
+            return await self.tg.send(chat_id, f"<b>Cosa so di lei</b>\n{html.escape(text)}" if text else
+                                      "Non ho ancora abbastanza ricordi per un profilo: più parliamo, più imparo. Per correggere qualcosa usi /ricordi.")
         if cmd == "uso":
             return await self._usage(chat_id)
         if cmd == "salute":

@@ -16,10 +16,16 @@ Parli sempre in italiano, con tono elegante, sobrio e con una punta di ironia so
 Sii conciso: vai al punto, niente preamboli. Non inventare mai dati: se non sai, usa i tool o dillo.
 Adesso è {now}.
 
+Come ragioni:
+- Capisci l'obiettivo dietro la richiesta, non solo le parole. Se è complessa, scomponila in passi e usa più tool prima di rispondere; verifica i dati importanti (date, importi, nomi) invece di supporli.
+- Se manca un'informazione indispensabile fai UNA domanda mirata; altrimenti scegli l'ipotesi più probabile, dichiarala in due parole e procedi.
+- Sii proattivo: se emerge una scadenza, un impegno o qualcosa da non dimenticare, proponi (o fai, se è innocuo) di salvarlo come promemoria, attività o nota. Se noti un rischio o un'occasione utile, dillo in una riga.
+- Il contesto qui sotto (profilo, situazione, secondo cervello) è ciò che sai dell'utente: usalo con naturalezza, senza recitarlo, e non contraddirlo senza motivo. Se è obsoleto o in conflitto con ciò che dice ora, fidati di ora e aggiorna.
+
 Come usare i tool:
 - Più tool indipendenti vanno chiamati insieme nello stesso turno (es. meteo di due città, agenda e email).
 - `calculate` per ogni calcolo; `date_info` per giorni della settimana e calcoli con le date; `convert_currency` per i cambi; `wikipedia` per fatti enciclopedici; `web_news` per le notizie; `get_weather` per il meteo; `web_search` poi `read_webpage` per approfondire una fonte.
-- `remember`/`recall`/`list_memories`/`forget` per i ricordi brevi; `brain_*` per il secondo cervello: `brain_add_note` per note, idee, riunioni, decisioni; `brain_search` quando serve ritrovare qualcosa di passato (cita gli id [#n]); `brain_save_url` per conservare una pagina; `brain_related` per i collegamenti. Il contesto pertinente del secondo cervello è già nel prompt: usalo senza ripeterlo. Salva solo ciò che è duraturo.
+- `remember`/`recall`/`list_memories`/`forget` per i ricordi brevi; `brain_*` per il secondo cervello: `brain_add_note` per note, idee, riunioni, decisioni; `brain_search` per ritrovare qualcosa di passato (cita gli id [#n], usa since/until per periodi come "la settimana scorsa"); `brain_deep_search` per domande difficili o vaghe (prova più formulazioni); `brain_about` per «cosa so di Luca / del progetto X»; `brain_profile` per il profilo; `brain_save_url` per conservare una pagina; `brain_related` per i collegamenti. Il contesto pertinente del secondo cervello è già nel prompt: usalo senza ripeterlo. Salva solo ciò che è duraturo.
 - `add_reminder`/`remind_in`/`reminder_snooze`/`list_reminders`/`delete_reminder` per i promemoria; `task_*` per liste (da fare, spesa); `crypto_price`, `world_time`, `unit_convert` per prezzi, orari nel mondo e conversioni; calcola "when" da data e ora qui sopra.
 - `send_notification` per mandare un avviso alle app dell'utente.
 - Con i tool `pc_*` agisci sul PC Windows dell'utente (app, siti, file, volume, luminosità, blocco/spegnimento).
@@ -36,6 +42,9 @@ _GIORNI = ["lunedì", "martedì", "mercoledì", "giovedì", "venerdì", "sabato"
 class Agent:
     def __init__(self, settings: Settings, llm: LLMClient, store: Store, tools: ToolRegistry, brain=None):
         self.s, self.llm, self.store, self.tools, self.brain = settings, llm, store, tools, brain
+        from .learn import Learner
+
+        self.learner = Learner(settings, llm, brain, store)
 
     TOOL_LABELS = {
         "web_search": "Cerco sul web…", "web_news": "Leggo le notizie…", "read_webpage": "Leggo la pagina…", "get_weather": "Controllo il meteo…",
@@ -55,12 +64,44 @@ class Agent:
             out.append(m)
         return list(reversed(out))
 
+    async def _profile(self) -> str:
+        if not (self.brain and self.brain.enabled):
+            return ""
+        try:
+            return (await self.brain.profile_text())[:1000]
+        except Exception:
+            return ""
+
+    async def _situation(self) -> str:
+        """Attività aperte e prossimi promemoria: JARVIS sa sempre cosa c'è in sospeso (dati locali, nessuna chiamata esterna)."""
+        lines = []
+        try:
+            tasks = await self.store.list_tasks(None, False)
+            if tasks:
+                lines.append("Attività aperte (%d): " % len(tasks) + "; ".join(t["text"][:70] for t in tasks[:5]) + ("…" if len(tasks) > 5 else ""))
+            rems = await self.store.list_reminders()
+            if rems:
+                tz = ZoneInfo(self.s.timezone)
+                nxt = []
+                for r in rems[:3]:
+                    try:
+                        nxt.append(f"{datetime.fromisoformat(r['due_at']).astimezone(tz):%d/%m %H:%M} {r['text'][:60]}")
+                    except ValueError:
+                        continue
+                if nxt:
+                    lines.append("Prossimi promemoria: " + "; ".join(nxt))
+        except Exception:
+            return ""
+        return "\n".join(lines)
+
     async def _prepare(self, user_text: str, session_id: str, voice: bool) -> tuple[list[dict], Redactor]:
         # privacy: ciò che va ai provider passa da un filtro che sostituisce dati sensibili con segnaposto (reversibili alla fine)
         red = Redactor(self.s.privacy_mode)
         rows = self._trim_history(await self.store.recent_messages(session_id, self.s.history_messages))
         history = [{**m, "content": red.mask(m["content"])} for m in rows]
         brain_ctx = red.mask(await self.brain.context(user_text)) if self.brain else ""  # secondo cervello: contesto pertinente, mascherato
+        profile = red.mask(await self._profile())
+        situation = red.mask(await self._situation())
         memories = [] if brain_ctx else [red.mask(m) for m in await self.store.search_memories(user_text, self.s.memory_hits)]
 
         now = datetime.now(ZoneInfo(self.s.timezone))
@@ -70,6 +111,10 @@ class Agent:
                 "\n\nLa risposta verrà LETTA AD ALTA VOCE: massimo 2-3 frasi brevi, "
                 "niente elenchi, markdown, emoji o URL."
             )
+        if profile:
+            system += "\n\nChi è l'utente (profilo compilato dai suoi ricordi):\n" + profile
+        if situation:
+            system += "\n\nSituazione adesso:\n" + situation
         if brain_ctx:
             system += "\n\n" + brain_ctx
         elif memories:
@@ -92,6 +137,8 @@ class Agent:
             log.info("privacy: %d dati sensibili mascherati verso il modello", red.count)
         await self.store.add_message(session_id, "user", user_text)
         await self.store.add_message(session_id, "assistant", answer)
+        if session_id != "briefing":
+            self.learner.schedule(user_text, answer)  # in secondo piano: fatti e impegni finiscono nel secondo cervello
         return answer
 
     async def reply(self, user_text: str, session_id: str, voice: bool = False, model: str | None = None) -> str:

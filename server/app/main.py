@@ -34,7 +34,8 @@ from .gateway import router as gateway_router
 from .memory import build_store
 from .pc import PCBridge
 from .notify import Notifier
-from .scheduler import background_loop, brain_loop, maintenance_loop
+from .proactive import Proactive
+from .scheduler import background_loop, brain_loop, maintenance_loop, proactive_loop
 from .updates import UpdateService
 from .usage import UsageTracker
 from .telegram import Telegram
@@ -133,6 +134,8 @@ async def lifespan(app: FastAPI):
     updates = app.state.updates = UpdateService(settings, store, notifier)
     brain_task = asyncio.create_task(brain_loop(settings, store, brain, app.state.agent, notifier))
     maint_task = asyncio.create_task(maintenance_loop(settings, store, usage, updates, notifier))
+    proactive = app.state.proactive = Proactive(settings, store, notifier, google, brain, budget)
+    proactive_task = asyncio.create_task(proactive_loop(settings, proactive))
     if tg.enabled:
         base = settings.public_url or settings.render_external_url
         if base and settings.telegram_webhook_secret:
@@ -154,6 +157,7 @@ async def lifespan(app: FastAPI):
     task.cancel()
     brain_task.cancel()
     maint_task.cancel()
+    proactive_task.cancel()
     await usage.flush(store)  # non perde i consumi dell'ultima ora allo spegnimento
     if guard:
         guard.cancel()

@@ -257,7 +257,7 @@ async function checkUpdate() {
 }
 
 // ------------------------------------------------------------------ notifiche
-const KIND = { reminder: "clock", alert: "shield", pending: "shield", update: "down", brain: "sparkle", info: "bell" };
+const KIND = { reminder: "clock", alert: "shield", pending: "shield", update: "down", brain: "sparkle", proactive: "sparkle", info: "bell" };
 
 async function loadNotes() {
   if (!cfg.token) return;

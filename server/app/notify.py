@@ -15,10 +15,10 @@ from .memory import Store
 log = logging.getLogger("jarvis.notify")
 SCOPE = "https://www.googleapis.com/auth/firebase.messaging"
 # canali Android (creati dall'app): importanza e suono dipendono dal tipo
-CHANNELS = {"reminder": "reminders", "alert": "alerts", "pending": "alerts", "update": "updates", "brain": "general", "info": "general"}
-ROUTES = {"reminder": "reminders", "alert": "tokens", "pending": "chat", "update": "more", "brain": "brain", "info": "chat"}
+CHANNELS = {"reminder": "reminders", "alert": "alerts", "pending": "alerts", "update": "updates", "brain": "general", "proactive": "general", "info": "general"}
+ROUTES = {"reminder": "reminders", "alert": "tokens", "pending": "chat", "update": "more", "brain": "brain", "proactive": "chat", "info": "chat"}
 CRITICAL = {"reminder", "alert", "pending"}  # arrivano anche nelle ore silenziose
-DEFAULT_PREFS = {"kinds": {k: {"inapp": True, "push": True, "telegram": k in ("reminder", "alert", "update")} for k in ("reminder", "alert", "pending", "update", "brain", "info")},
+DEFAULT_PREFS = {"kinds": {k: {"inapp": True, "push": True, "telegram": k in ("reminder", "alert", "update")} for k in ("reminder", "alert", "pending", "update", "brain", "proactive", "info")},
                  "quiet": {"enabled": True, "from": "23:00", "to": "07:30"}}
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 

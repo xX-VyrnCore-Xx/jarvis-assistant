@@ -27,9 +27,31 @@ def register_brain_tools(reg: ToolRegistry, brain: Brain, client: httpx.AsyncCli
             return f"Già presente nel secondo cervello (#{r['doc_id']})."
         return f"Salvato nel secondo cervello (#{r['doc_id']}, {r['chunks']} frammenti{'' if r.get('vectors') else ', solo ricerca per parole per ora'})."
 
-    async def brain_search(query: str, top_k: int = 5, source: str = "") -> str:
-        res = await brain.search(query, k=max(1, min(top_k, 10)), source=source or None)
+    async def brain_search(query: str, top_k: int = 5, source: str = "", since: str = "", until: str = "") -> str:
+        res = await brain.search(query, k=max(1, min(top_k, 10)), source=source or None, since=since[:10], until=until[:10])
         return format_results(res) if res else "Nessun risultato nel secondo cervello."
+
+    async def brain_deep_search(question: str, since: str = "", until: str = "") -> str:
+        queries, res = await brain.deep_search(question, k=8, since=since[:10], until=until[:10])
+        if not res:
+            return "Nessun risultato nel secondo cervello, neanche riformulando la domanda."
+        return f"Ricerche provate: {' | '.join(queries)}\n" + format_results(res)
+
+    async def brain_about(name: str) -> str:
+        d = await brain.dossier(name.strip())
+        if not d["docs"]:
+            return f"Non trovo nulla su «{name}» nel secondo cervello."
+        rows = [f"[#{x.id}] {x.created_at[:10]} · {SOURCE_LABEL.get(x.source, x.source)} · {x.title}" + (f" — {x.summary}" if x.summary else "") for x in d["docs"]]
+        head = f"Cosa so di «{name}» ({len(d['docs'])} documenti, dal più vecchio al più recente)"
+        rel = f"\nCollegato a: {', '.join(n for _, n in d['related'])}" if d["related"] else ""
+        untrusted = any(x.source in UNTRUSTED_SOURCES for x in d["docs"])
+        return (UNTRUSTED if untrusted else "") + head + ":\n" + "\n".join(rows) + rel
+
+    async def brain_profile(refresh: bool = False) -> str:
+        if refresh:
+            await brain.refresh_profile(force=True)
+        text = await brain.profile_text()
+        return text or "Non ho ancora abbastanza ricordi per un profilo: più parli con me, più imparo."
 
     async def brain_read(doc_id: int) -> str:
         d = await brain.read(doc_id)
@@ -72,8 +94,14 @@ def register_brain_tools(reg: ToolRegistry, brain: Brain, client: httpx.AsyncCli
 
     reg.register("brain_add_note", "Salva una nota nel secondo cervello (memoria a lungo termine con ricerca per significato). Per appunti, idee, riunioni, fatti da ricordare. 'important' per ciò che conta davvero.",
                  obj({"text": s, "title": s, "tags": {"type": "string", "description": "tag separati da virgola"}, "important": {"type": "boolean"}}, ["text"]), brain_add_note, available=on)
-    reg.register("brain_search", "Cerca nel secondo cervello (note, ricordi, pagine, file, diario) per significato e parole. Restituisce frammenti con id [#n]: citali. 'source' opzionale: note, memory, journal, web, file, drive, gmail.",
-                 obj({"query": s, "top_k": {"type": "integer"}, "source": s}, ["query"]), brain_search, available=on, cache_ttl=30)
+    reg.register("brain_search", "Cerca nel secondo cervello (note, ricordi, pagine, file, diario) per significato e parole. Restituisce frammenti con id [#n]: citali. 'source' opzionale: note, memory, journal, web, file, drive, gmail. 'since'/'until' (YYYY-MM-DD) limitano il periodo.",
+                 obj({"query": s, "top_k": {"type": "integer"}, "source": s, "since": s, "until": s}, ["query"]), brain_search, available=on, cache_ttl=30)
+    reg.register("brain_deep_search", "Ricerca approfondita per domande vaghe o difficili: riformula la domanda in più modi e fonde i risultati. Più lenta di brain_search: usala quando questa non basta. Cita gli id [#n].",
+                 obj({"question": s, "since": s, "until": s}, ["question"]), brain_deep_search, available=on, cache_ttl=30)
+    reg.register("brain_about", "Tutto ciò che il secondo cervello sa di una persona, progetto, luogo o argomento (nome), in ordine di tempo, con i collegamenti. Per «cosa so di Luca?».",
+                 obj({"name": s}, ["name"]), brain_about, available=on, cache_ttl=30)
+    reg.register("brain_profile", "Il profilo dell'utente compilato dal secondo cervello (chi è, persone, progetti, preferenze). refresh=true lo ricompila ora.",
+                 obj({"refresh": {"type": "boolean"}}), brain_profile, available=on)
     reg.register("brain_read", "Legge per intero un documento del secondo cervello dato il suo id.", obj({"doc_id": {"type": "integer"}}, ["doc_id"]), brain_read, available=on)
     reg.register("brain_related", "Documenti collegati a uno dato (simili per significato o con le stesse persone/argomenti).", obj({"doc_id": {"type": "integer"}}, ["doc_id"]), brain_related, available=on)
     reg.register("brain_forget", "Elimina un documento dal secondo cervello (id da brain_search). Solo su richiesta dell'utente.", obj({"doc_id": {"type": "integer"}}, ["doc_id"]), brain_forget, available=on)

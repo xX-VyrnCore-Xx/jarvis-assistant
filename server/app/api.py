@@ -360,3 +360,16 @@ async def brain_forget(doc_id: int, request: Request) -> dict:
 @router.get("/brain/stats")
 async def brain_stats(request: Request) -> dict:
     return await _brain(request).stats()
+
+
+@router.get("/brain/profile")
+async def brain_profile(request: Request) -> dict:
+    """Il profilo che JARVIS ha compilato su di te dai ricordi (trasparenza: puoi leggerlo e correggere i ricordi alla fonte)."""
+    return {"profile": await _brain(request).profile_text()}
+
+
+@router.post("/brain/profile/refresh")
+async def brain_profile_refresh(request: Request) -> dict:
+    b = _brain(request)
+    status = await b.refresh_profile(force=True)
+    return {"status": status, "profile": await b.profile_text()}
