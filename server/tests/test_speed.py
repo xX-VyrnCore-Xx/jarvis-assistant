@@ -96,7 +96,7 @@ async def test_llm_falls_back_to_the_fastest_recent_model_when_the_router_hangs(
     llm = LLMClient(s, httpx.AsyncClient(transport=httpx.MockTransport(handler)))
     llm.usage.record("chat", "nvidia/veloce", 100, 10, 1200, True)
     msg = await llm.chat([{"role": "user", "content": "ciao"}])
-    assert msg["content"] == "ok" and seen == ["auto", "nvidia/veloce"]
+    assert msg["content"] == "ok" and seen == ["auto:fast", "nvidia/veloce"]
     assert llm.usage.today()["errors"] == 1 and llm.usage.today()["requests"] == 3  # il tentativo fallito è registrato con la sua durata
 
     # con un modello scelto dall'utente non si cambia: si riprova con lo stesso

@@ -41,6 +41,9 @@ services:
       # SiliconFlow è l'unico dei nuovi provider che vuole una chiave; OVH, Kilo e la ricerca Parallel funzionano senza
       - key: SILICONFLOW_API_KEY
         sync: false
+      # sessioni di coding: token GitHub classico con scope «repo» (e «workflow» per la CI). Senza, la funzione è spenta
+      - key: GITHUB_TOKEN
+        sync: false
       # backup del DB di FreeLLMAPI ogni 30 min (meno commit sul dataset); Supabase viene salvato cifrato ogni notte
       - key: FREEAPI_BACKUP_INTERVAL_MS
         value: "1800000"

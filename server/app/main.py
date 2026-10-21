@@ -39,6 +39,8 @@ from .skills.registry import SkillRegistry
 from .skills.tools import register_skill_tools
 from .proactive import Proactive
 from .reminders import ReminderService
+from .coding import CodingService
+from .tools.coding_tools import register_coding_tools
 from .live import LiveFeeds, register_live_tools
 from .scheduler import background_loop, brain_loop, heartbeat_loop, live_loop, maintenance_loop, proactive_loop
 from .updates import UpdateService
@@ -109,6 +111,9 @@ async def lifespan(app: FastAPI):
     skills = app.state.skills = SkillRegistry()
     register_skill_tools(tools, skills, brain)
     app.state.agent.skills = skills
+    coding = app.state.coding = CodingService(settings, store)
+    register_coding_tools(tools, coding, pending)
+    app.state.agent.coding = coding
     try:
         custom = await skills.load_custom(brain)
     except Exception as e:  # il database può non essere pronto: le competenze personali tornano al prossimo avvio

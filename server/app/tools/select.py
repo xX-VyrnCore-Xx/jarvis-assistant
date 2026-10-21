@@ -15,6 +15,8 @@ GROUPS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     "drive": (("drive_*",), ("drive", "documento", "documenti", "foglio", "cartella", "google docs", "presentazione", "file su")),
     "web": (("web_news", "read_webpage", "wikipedia", "get_weather"),
             ("notizie", "news", "meteo", "piove", "pioggia", "temperatura", "previsioni", "wikipedia", "chi è", "cos'è", "cosa è", "che cos'è", "sito", "pagina", "http", "leggi", "ultime", "attualità", "fa caldo", "fa freddo")),
+    "coding": (("code_*",), ("coding", "codice", "programma", "programmare", "sandbox", "repo", "repository", "github", "commit", "pull request", "branch", "merge", "crea un progetto", "sviluppa", "scrivi il codice",
+                              "implementa", "sessione di coding", "applicazione", "sito web", "script", "bug", "refactor", "ci verde", "test automatici")),
     "notizie": (("news_headlines", "feed_list", "feed_add", "feed_remove", "jarvis_status"),
                 ("notizie", "news", "ultime notizie", "cosa succede", "cosa è successo", "successo oggi", "oggi nel mondo", "attualità", "titoli", "giornale", "giornali", "rss", "feed",
                  "terremoto", "terremoti", "sisma", "breaking", "ultim'ora", "aggiornato", "aggiornamento", "aggiornati", "versione", "release", "ti sei aggiornato", "stato di jarvis")),
@@ -34,7 +36,7 @@ _META = {
     "type": "function",
     "function": {
         "name": "need_tools",
-        "description": "Attiva altri strumenti quando quelli disponibili non bastano (es. 'calendario', 'email', 'pc', 'web', 'liste', 'cervello', 'utilita', 'drive', 'promemoria', 'competenze', 'memoria', 'notifiche', 'token', 'notizie'). Dopo averlo chiamato usa subito lo strumento che ti serviva.",
+        "description": "Attiva altri strumenti quando quelli disponibili non bastano (es. 'calendario', 'email', 'pc', 'web', 'liste', 'cervello', 'utilita', 'drive', 'promemoria', 'competenze', 'memoria', 'notifiche', 'token', 'notizie', 'coding'). Dopo averlo chiamato usa subito lo strumento che ti serviva.",
         "parameters": {"type": "object", "properties": {"group": {"type": "string", "enum": sorted(GROUPS)}}, "required": ["group"]},
     },
 }
