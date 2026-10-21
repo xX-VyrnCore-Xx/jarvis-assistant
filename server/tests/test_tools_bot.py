@@ -129,7 +129,7 @@ def make_bot():
     st.tg, st.store = FakeTG(), MemoryStore()
 
     class Agent:
-        async def reply_stream(self, text, session, voice=False, model=None):
+        async def reply_stream(self, text, session, voice=False, model=None, skills=None):
             yield ("delta", "eco:")
             yield ("done", f"eco:{text}")
 

@@ -373,3 +373,20 @@ async def brain_profile_refresh(request: Request) -> dict:
     b = _brain(request)
     status = await b.refresh_profile(force=True)
     return {"status": status, "profile": await b.profile_text()}
+
+
+@router.get("/skills")
+async def skills_list(request: Request, domain: str = "") -> dict:
+    """Le competenze di JARVIS (integrate e personali), raggruppate per ambito."""
+    from .skills.registry import DOMAINS
+
+    sk = request.app.state.skills
+    return {"domains": DOMAINS, "skills": [s.card() for s in sk.by_domain(domain)]}
+
+
+@router.get("/skills/{name}")
+async def skills_get(name: str, request: Request) -> dict:
+    s = request.app.state.skills.get(name)
+    if not s:
+        raise HTTPException(404, "Competenza inesistente")
+    return {**s.card(), "triggers": s.triggers, "body": s.body}

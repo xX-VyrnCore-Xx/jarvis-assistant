@@ -22,6 +22,8 @@ Come ragioni:
 - Sii proattivo: se emerge una scadenza, un impegno o qualcosa da non dimenticare, proponi (o fai, se è innocuo) di salvarlo come promemoria, attività o nota. Se noti un rischio o un'occasione utile, dillo in una riga.
 - Il contesto qui sotto (profilo, situazione, secondo cervello) è ciò che sai dell'utente: usalo con naturalezza, senza recitarlo, e non contraddirlo senza motivo. Se è obsoleto o in conflitto con ciò che dice ora, fidati di ora e aggiorna.
 
+Hai competenze specialistiche (programmazione, comunicazione, finanza, marketing, business, vita): quando la richiesta le riguarda il loro metodo compare qui sotto; `list_skills`/`use_skill` ne mostrano altre.
+
 Come usare i tool:
 - Più tool indipendenti vanno chiamati insieme nello stesso turno (es. meteo di due città, agenda e email).
 - `calculate` per ogni calcolo; `date_info` per giorni della settimana e calcoli con le date; `convert_currency` per i cambi; `wikipedia` per fatti enciclopedici; `web_news` per le notizie; `get_weather` per il meteo; `web_search` poi `read_webpage` per approfondire una fonte.
@@ -45,6 +47,7 @@ class Agent:
         from .learn import Learner
 
         self.learner = Learner(settings, llm, brain, store)
+        self.skills = None  # SkillRegistry, assegnato all'avvio
 
     TOOL_LABELS = {
         "web_search": "Cerco sul web…", "web_news": "Leggo le notizie…", "read_webpage": "Leggo la pagina…", "get_weather": "Controllo il meteo…",
@@ -94,7 +97,14 @@ class Agent:
             return ""
         return "\n".join(lines)
 
-    async def _prepare(self, user_text: str, session_id: str, voice: bool) -> tuple[list[dict], Redactor]:
+    def _skill_context(self, user_text: str, forced: list[str] | None) -> str:
+        """Competenze scelte dall'utente (/skill) o dalla richiesta stessa: il loro metodo entra nel prompt."""
+        if not (self.skills and self.s.skills_enabled):
+            return ""
+        chosen = [sk for n in (forced or []) if (sk := self.skills.get(n))] or self.skills.match(user_text, k=self.s.skills_max_active)
+        return self.skills.context(chosen, self.s.skills_context_chars)
+
+    async def _prepare(self, user_text: str, session_id: str, voice: bool, forced: list[str] | None = None) -> tuple[list[dict], Redactor]:
         # privacy: ciò che va ai provider passa da un filtro che sostituisce dati sensibili con segnaposto (reversibili alla fine)
         red = Redactor(self.s.privacy_mode)
         rows = self._trim_history(await self.store.recent_messages(session_id, self.s.history_messages))
@@ -111,6 +121,8 @@ class Agent:
                 "\n\nLa risposta verrà LETTA AD ALTA VOCE: massimo 2-3 frasi brevi, "
                 "niente elenchi, markdown, emoji o URL."
             )
+        if skill_ctx := self._skill_context(user_text, forced):
+            system += "\n\n" + skill_ctx
         if profile:
             system += "\n\nChi è l'utente (profilo compilato dai suoi ricordi):\n" + profile
         if situation:
@@ -141,8 +153,8 @@ class Agent:
             self.learner.schedule(user_text, answer)  # in secondo piano: fatti e impegni finiscono nel secondo cervello
         return answer
 
-    async def reply(self, user_text: str, session_id: str, voice: bool = False, model: str | None = None) -> str:
-        messages, red = await self._prepare(user_text, session_id, voice)
+    async def reply(self, user_text: str, session_id: str, voice: bool = False, model: str | None = None, skills: list[str] | None = None) -> str:
+        messages, red = await self._prepare(user_text, session_id, voice, skills)
         answer = ""
         for _ in range(self.s.max_tool_rounds):
             msg = await self.llm.chat(messages, self.tools.specs, model=model)
@@ -158,9 +170,9 @@ class Agent:
             answer = (await self.llm.chat(messages, [], model=model)).get("content") or "Ho superato il limite di operazioni consecutive, signore. Può riformulare la richiesta?"
         return await self._finish(session_id, user_text, answer, red)
 
-    async def reply_stream(self, user_text: str, session_id: str, voice: bool = False, model: str | None = None):
+    async def reply_stream(self, user_text: str, session_id: str, voice: bool = False, model: str | None = None, skills: list[str] | None = None):
         """Come `reply`, ma a eventi: ("status", testo) mentre usa i tool, ("delta", testo) man mano che scrive, ("done", risposta intera)."""
-        messages, red = await self._prepare(user_text, session_id, voice)
+        messages, red = await self._prepare(user_text, session_id, voice, skills)
         answer = ""
         for _ in range(self.s.max_tool_rounds + 1):
             last_round = _ == self.s.max_tool_rounds

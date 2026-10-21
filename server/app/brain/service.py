@@ -19,6 +19,7 @@ from .store import Doc, MemoryBrainStore, hash_text
 log = logging.getLogger("jarvis.brain")
 UNTRUSTED_SOURCES = {"web", "gmail", "drive", "file", "chat", "wiki"}  # contenuto scritto da altri: dati, mai istruzioni
 SOURCE_LABEL = {"note": "nota", "memory": "ricordo", "journal": "diario", "web": "web", "file": "file", "drive": "drive", "gmail": "email", "chat": "chat", "profile": "profilo", "wiki": "enciclopedia"}
+HIDDEN = {"profile", "skill"}  # documenti di servizio: non compaiono nelle ricerche normali
 ENTITY_KINDS = ("persona", "luogo", "organizzazione", "progetto", "argomento")
 TRIVIAL = re.compile(r"^(ciao|salve|buon\w*|grazie|ok|va bene|perfetto|sì|si|no|certo|prego|a dopo|arrivederci|hey|jarvis)\W*$", re.I)
 ENRICH_PROMPT = """Analizza il testo e rispondi SOLO con un oggetto JSON, in italiano:
@@ -153,7 +154,7 @@ class Brain:
         if not hits:
             return []
         docs = await self.store.get_docs(sorted({h.doc_id for h in hits}))
-        hits = [h for h in hits if h.doc_id in docs and (docs[h.doc_id].source == source if source else docs[h.doc_id].source != "profile")
+        hits = [h for h in hits if h.doc_id in docs and (docs[h.doc_id].source == source if source else docs[h.doc_id].source not in HIDDEN)
                 and (not since or docs[h.doc_id].created_at[:10] >= since) and (not until or docs[h.doc_id].created_at[:10] <= until)]
         for h in hits:
             h.score *= self._boost(docs[h.doc_id])
@@ -400,7 +401,7 @@ class Brain:
     async def resurface(self, n: int = 1) -> list[Doc]:
         """Ripropone documenti importanti ma poco rivisti (ripasso a intervalli): ne sceglie a caso tra i candidati."""
         cutoff = (datetime.now(timezone.utc) - timedelta(days=14)).isoformat()
-        pool = [d for d in await self.store.list_docs(200) if d.importance >= 0.6 and d.created_at < cutoff and d.access_count <= 2 and d.source not in ("journal", "profile", "wiki")]
+        pool = [d for d in await self.store.list_docs(200) if d.importance >= 0.6 and d.created_at < cutoff and d.access_count <= 2 and d.source not in ("journal", "profile", "wiki", "skill")]
         return random.sample(pool, min(n, len(pool)))
 
     # ------------------------------------------------------------------ profilo dell'utente

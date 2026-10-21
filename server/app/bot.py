@@ -33,6 +33,8 @@ COMMANDS = [
     ("cerca", "Cerca nel secondo cervello"),
     ("cervello", "Statistiche del secondo cervello"),
     ("impara", "Studio un argomento da Wikipedia"),
+    ("skills", "Le mie competenze (programmazione, finanza, marketing...)"),
+    ("skill", "Usa una competenza: /skill nome richiesta"),
     ("proattivo", "Avvisi automatici: stato e pausa"),
     ("profilo", "Cosa so di te (profilo)"),
     ("liste", "Liste e attività (spesa, da fare)"),
@@ -145,7 +147,7 @@ class TelegramBot:
         while len(self._replies) > 60:
             self._replies.popitem(last=False)
 
-    async def _ask(self, chat_id: int, text: str) -> None:
+    async def _ask(self, chat_id: int, text: str, skill: str | None = None) -> None:
         """Risposta in diretta: un messaggio che si riempie man mano (e mostra lo strumento in uso), poi formattato con i pulsanti."""
         async def typing() -> None:
             while True:
@@ -160,7 +162,7 @@ class TelegramBot:
         try:
             mid = await self.tg.send_id(chat_id, "…", silent=True)
             model = await self.app.state.store.get_setting("tg_model") or None
-            async for kind, data in self.app.state.agent.reply_stream(text, f"tg-{chat_id}", model=model):
+            async for kind, data in self.app.state.agent.reply_stream(text, f"tg-{chat_id}", model=model, skills=[skill] if skill else None):
                 if kind == "status":
                     status = data
                 elif kind == "delta":
@@ -201,6 +203,8 @@ class TelegramBot:
             return await self._daily(chat_id, cmd)
         if cmd == "impara":
             return await self._learn(chat_id, arg)
+        if cmd in ("skills", "skill"):
+            return await self._skills(chat_id, cmd, arg)
         if cmd == "proattivo":
             return await self._proactive(chat_id)
         if cmd == "stato":
@@ -353,6 +357,23 @@ class TelegramBot:
             parts.append("<b>Promemoria di oggi</b>\n" + "\n".join(f"• {datetime.fromisoformat(r['due_at']).astimezone(tz):%H:%M} — {r['text']}" for r in rems))
         await self.tg.send(chat_id, f"<b>Il punto di oggi, {self.s.owner_name}</b>\n\n" + ("\n\n".join(parts) if parts else "Giornata libera e nessuna attività aperta. 🎯"))
 
+    async def _skills(self, chat_id: int, cmd: str, arg: str) -> None:
+        """/skills: l'elenco per ambito (pulsanti); /skill nome richiesta: usa quella competenza per la richiesta."""
+        from .skills.registry import DOMAINS
+
+        sk = self.app.state.skills
+        if cmd == "skill" and arg:
+            name, _, request = arg.partition(" ")
+            found = sk.get(name)
+            if not found:
+                return await self.tg.send(chat_id, f"Non conosco la competenza «{html.escape(name)}». /skills le elenca.")
+            if not request.strip():
+                return await self.tg.send(chat_id, f"<b>{html.escape(found.title)}</b>\n{html.escape(found.description)}\n\nScriva: /skill {found.name} la sua richiesta")
+            async with self._lock(chat_id):
+                return await self._ask(chat_id, request.strip(), skill=found.name)
+        keys = [[{"text": f"{label} ({len(sk.by_domain(d))})", "callback_data": f"sk:{d}"}] for d, label in DOMAINS.items() if sk.by_domain(d)]
+        await self.tg.send(chat_id, f"<b>Le mie competenze</b> ({len(sk)})\nSi attivano da sole quando la richiesta le riguarda. Per forzarne una: /skill nome richiesta.", {"inline_keyboard": keys})
+
     async def _learn(self, chat_id: int, topic: str) -> None:
         st = self.app.state
         k = getattr(st.brain, "knowledge", None)
@@ -479,6 +500,13 @@ class TelegramBot:
             q, a = self._replies[key]
             r = await st.brain.ingest(f"Domanda: {q}\n\nRisposta: {a}", title=q[:80], source="note", importance=0.55)
             outcome = f"Salvato nel secondo cervello (#{r['doc_id']})."
+        elif action == "sk" and ident:
+            from .skills.registry import DOMAINS
+
+            rows = st.skills.by_domain(ident)
+            await self.tg.answer_callback(cb["id"], "")
+            return await self.tg.send(chat, f"<b>{DOMAINS.get(ident, ident)}</b>\n" + "\n".join(f"• <code>{s.name}</code> — {html.escape(s.title)}" for s in rows)
+                                      + "\n\nUsi: /skill nome la sua richiesta")
         elif action in ("dp", "sh") and (chat, msg.get("message_id")) in self._replies:
             await self.tg.answer_callback(cb["id"], "Un momento…")
             ask = ("Approfondisci la tua ultima risposta: più dettagli, esempi e, se serve, i passi da fare." if action == "dp"

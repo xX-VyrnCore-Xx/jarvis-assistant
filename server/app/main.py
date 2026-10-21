@@ -35,6 +35,8 @@ from .memory import build_store
 from .pc import PCBridge
 from .notify import Notifier
 from .brain.knowledge import Knowledge
+from .skills.registry import SkillRegistry
+from .skills.tools import register_skill_tools
 from .proactive import Proactive
 from .scheduler import background_loop, brain_loop, heartbeat_loop, maintenance_loop, proactive_loop
 from .updates import UpdateService
@@ -53,6 +55,7 @@ class ChatIn(BaseModel):
     session_id: str = Field(default="default", pattern=r"^[A-Za-z0-9_.:-]{1,64}$")
     voice: bool = False  # risposta destinata alla sintesi vocale
     model: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_.:/-]{1,80}$")  # modello scelto nell'app; vuoto = automatico
+    skill: str | None = Field(default=None, pattern=r"^[a-z0-9][a-z0-9-]{1,40}$")  # competenza da usare di sicuro (altrimenti si sceglie da sola)
 
 
 class ChatOut(BaseModel):
@@ -99,6 +102,15 @@ async def lifespan(app: FastAPI):
     if google.has_client:
         register_google_tools(tools, settings, google, pending, brain)
     app.state.agent = Agent(settings, llm, store, tools, brain)
+    skills = app.state.skills = SkillRegistry()
+    register_skill_tools(tools, skills, brain)
+    app.state.agent.skills = skills
+    try:
+        custom = await skills.load_custom(brain)
+    except Exception as e:  # il database può non essere pronto: le competenze personali tornano al prossimo avvio
+        custom = 0
+        log.info("competenze personali non caricate: %s", type(e).__name__)
+    log.info("competenze: %d integrate, %d personali", len(skills) - custom, custom)
     tg = app.state.tg = Telegram(settings)
     app.state.settings = settings
     app.state.bot = TelegramBot(app)
@@ -260,7 +272,7 @@ async def chat_stream(body: ChatIn) -> StreamingResponse:
 
     async def gen():
         try:
-            async for kind, data in app.state.agent.reply_stream(body.message, body.session_id, voice=body.voice, model=body.model):
+            async for kind, data in app.state.agent.reply_stream(body.message, body.session_id, voice=body.voice, model=body.model, skills=[body.skill] if body.skill else None):
                 yield f"event: {kind}\ndata: {json.dumps({'text': data}, ensure_ascii=False)}\n\n"
         except LLMError as e:
             yield f"event: error\ndata: {json.dumps({'text': str(e)}, ensure_ascii=False)}\n\n"
@@ -296,7 +308,7 @@ async def chat(body: ChatIn) -> ChatOut:
         raise HTTPException(429, "Troppe richieste: rallenta un momento", headers={"Retry-After": str(wait)})
     limiter.hit()
     try:
-        return ChatOut(reply=await app.state.agent.reply(body.message, body.session_id, voice=body.voice, model=body.model))
+        return ChatOut(reply=await app.state.agent.reply(body.message, body.session_id, voice=body.voice, model=body.model, skills=[body.skill] if body.skill else None))
     except LLMError as e:
         raise HTTPException(502, str(e)) from e
 
