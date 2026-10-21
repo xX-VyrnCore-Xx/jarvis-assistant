@@ -167,3 +167,14 @@ async def maintenance_loop(settings: Settings, store: Store, usage, updates, not
         except Exception:
             log.exception("errore nella manutenzione periodica")
         await asyncio.sleep(300)
+
+
+async def proactive_loop(settings: Settings, proactive) -> None:
+    """Ogni 5 minuti lascia lavorare il motore proattivo (primo giro dopo 2 minuti, per non appesantire l'avvio)."""
+    await asyncio.sleep(120)
+    while True:
+        try:
+            await proactive.tick()
+        except Exception:
+            log.exception("errore nel ciclo proattivo")
+        await asyncio.sleep(300)

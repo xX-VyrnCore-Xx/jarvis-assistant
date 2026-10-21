@@ -138,6 +138,18 @@ class MemoryBrainStore:
     async def link_entities(self, doc_id: int, entity_ids: list[int]) -> None:
         self.doc_entities[doc_id] = set(entity_ids)
 
+    async def find_entities(self, key_hashes: list[str]) -> list[tuple[int, str, str]]:
+        return [(i, k, n) for i, (k, h, n) in self.entities.items() if h in set(key_hashes)]
+
+    async def top_entities(self, limit: int = 10) -> list[tuple[int, str, str, int]]:
+        """Le entità più citate: (id, tipo, nome, documenti)."""
+        counts: dict[int, int] = {}
+        for ents in self.doc_entities.values():
+            for e in ents:
+                counts[e] = counts.get(e, 0) + 1
+        best = sorted(counts, key=lambda e: -counts[e])[:limit]
+        return [(e, self.entities[e][0], self.entities[e][2], counts[e]) for e in best]
+
     async def docs_for_entities(self, entity_ids: list[int]) -> dict[int, list[int]]:
         out: dict[int, list[int]] = {}
         for d, ents in self.doc_entities.items():
@@ -308,6 +320,24 @@ class SupabaseBrainStore(MemoryBrainStore):
         await self._write("DELETE", "brain_doc_entities", params={"doc_id": f"eq.{doc_id}"})
         if entity_ids:
             await self._write("POST", "brain_doc_entities", body=[{"doc_id": doc_id, "entity_id": e} for e in entity_ids])
+
+    async def find_entities(self, key_hashes: list[str]) -> list[tuple[int, str, str]]:
+        if not key_hashes:
+            return []
+        rows = await self._get("brain_entities", {"select": "id,kind,name", "key_hash": f"in.({','.join(key_hashes)})"})
+        return [(r["id"], r["kind"], self.vault.open(r["name"])) for r in rows]
+
+    async def top_entities(self, limit: int = 10) -> list[tuple[int, str, str, int]]:
+        links = await self._get("brain_doc_entities", {"select": "entity_id", "limit": 5000})
+        counts: dict[int, int] = {}
+        for r in links:
+            counts[r["entity_id"]] = counts.get(r["entity_id"], 0) + 1
+        best = sorted(counts, key=lambda e: -counts[e])[:limit]
+        if not best:
+            return []
+        rows = await self._get("brain_entities", {"select": "id,kind,name", "id": f"in.({','.join(str(i) for i in best)})"})
+        by_id = {r["id"]: r for r in rows}
+        return [(e, by_id[e]["kind"], self.vault.open(by_id[e]["name"]), counts[e]) for e in best if e in by_id]
 
     async def docs_for_entities(self, entity_ids: list[int]) -> dict[int, list[int]]:
         if not entity_ids:

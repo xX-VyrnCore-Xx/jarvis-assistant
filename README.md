@@ -97,6 +97,13 @@ Promemoria, avvisi (token in esaurimento, backup fallito) e richieste di conferm
 - **Notifiche**: da Altro → Canali e ore silenziose scegli per ogni tipo se arriva nell'app, come push o su Telegram. Sui promemoria ci sono +10 min / +1 ora / Fatto.
 - **Salute**: `/api/health` e il comando Telegram `/salute` mostrano memoria, cifratura, integrazioni e ultimo backup.
 
+## Intelligenza e proattività
+
+- **Impara da solo**: dopo ogni conversazione JARVIS estrae fatti, preferenze, persone e impegni duraturi e li salva nel secondo cervello (tag `appreso`); le attività le aggiunge alla lista. Ha un filtro a costo zero e un tetto giornaliero (`LEARN_MAX_PER_DAY`, spegnibile con `LEARN_ENABLED=false`). Non salva ciò che sa già.
+- **Profilo**: ogni settimana ricompila un profilo di te dai ricordi (`/profilo` su Telegram, `GET /api/brain/profile`) e lo usa in ogni risposta, insieme alla situazione del momento (attività aperte, prossimi promemoria).
+- **Ricerca più furba**: `brain_deep_search` riformula la domanda in più modi, `brain_about` raccoglie tutto su una persona o un progetto, e le ricerche accettano un periodo (`since`/`until`).
+- **Proattivo** (`PROACTIVE_ENABLED`, `PROACTIVE_MAX_PER_DAY`, `EVENING_HOUR`): avviso 10-45 minuti prima di ogni evento (anche su Telegram), email nuove nella posta principale, punto della sera con l'agenda di domani, riepilogo della domenica e allarme se i token finiscono prima del reset. Zero token spesi: i testi si compongono dai dati; rispetta le ore silenziose e non ripete mai lo stesso avviso.
+
 ## Secondo cervello (RAG)
 Memoria a lungo termine per note, ricordi, pagine web, file, email e Drive, con recupero **ibrido** e tutto **cifrato a riposo**:
 - **Acquisizione**: `brain_add_note`, `brain_save_url`, `drive_save_to_brain`, `gmail_save_to_brain`; su Telegram `/nota testo`, e file `.txt/.md/.pdf` inviati al bot; nelle app la scheda **Cervello**. Frammenti coerenti (~1200 caratteri, per titolo e paragrafo, con sovrapposizione), deduplicazione per contenuto e per URI (stesso URI = aggiornamento).

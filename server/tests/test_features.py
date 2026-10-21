@@ -209,6 +209,7 @@ async def test_notifier_fans_out_to_stream_and_fcm():
     await store.upsert_device("android", "stale", "b")
     await store.upsert_device("windows", "pc", "c")
     n = Notifier(s, store, fcm=fcm)
+    await n.set_prefs({"quiet": {"enabled": False}})  # il test non deve dipendere dall'ora in cui gira
     q = n.subscribe()
     row = await n.push("info", "Ciao", "mondo")
     assert (await q.get())["id"] == row["id"]
