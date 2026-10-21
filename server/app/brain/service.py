@@ -17,8 +17,8 @@ from .index import Hit, VectorIndex
 from .store import Doc, MemoryBrainStore, hash_text
 
 log = logging.getLogger("jarvis.brain")
-UNTRUSTED_SOURCES = {"web", "gmail", "drive", "file", "chat", "wiki"}  # contenuto scritto da altri: dati, mai istruzioni
-SOURCE_LABEL = {"note": "nota", "memory": "ricordo", "journal": "diario", "web": "web", "file": "file", "drive": "drive", "gmail": "email", "chat": "chat", "profile": "profilo", "wiki": "enciclopedia"}
+UNTRUSTED_SOURCES = {"web", "gmail", "drive", "file", "chat", "wiki", "news"}  # contenuto scritto da altri: dati, mai istruzioni
+SOURCE_LABEL = {"note": "nota", "memory": "ricordo", "journal": "diario", "web": "web", "file": "file", "drive": "drive", "gmail": "email", "chat": "chat", "profile": "profilo", "wiki": "enciclopedia", "news": "notizia"}
 HIDDEN = {"profile", "skill"}  # documenti di servizio: non compaiono nelle ricerche normali
 ENTITY_KINDS = ("persona", "luogo", "organizzazione", "progetto", "argomento")
 TRIVIAL = re.compile(r"^(ciao|salve|buon\w*|grazie|ok|va bene|perfetto|sì|si|no|certo|prego|a dopo|arrivederci|hey|jarvis)\W*$", re.I)
@@ -133,6 +133,12 @@ class Brain:
         b = 1.0 + 0.25 * d.importance + (0.3 if d.pinned else 0.0) + 0.05 * math.log1p(d.access_count)
         if d.source == "wiki":  # la cultura generale non deve scavalcare ciò che riguarda l'utente
             b *= 0.8
+        if d.source == "news":  # la cronaca vale poco dopo qualche giorno
+            try:
+                age = (datetime.now(timezone.utc) - datetime.fromisoformat(d.created_at.replace("Z", "+00:00"))).total_seconds() / 86400
+                b *= 0.7 * 0.5 ** (max(0.0, age) / 2)
+            except ValueError:
+                pass
         if d.source in ("journal", "chat"):  # i fatti di cronaca invecchiano; note e ricordi no
             try:
                 age = (datetime.now(timezone.utc) - datetime.fromisoformat(d.created_at.replace("Z", "+00:00"))).days
@@ -255,6 +261,8 @@ class Brain:
         wiki = 0
         lines, used, untrusted = [], 0, False
         for r in results:
+            if r["source"] == "news":  # la cronaca nel prompt farebbe credere che sia «ora»: per le notizie c'è news_headlines
+                continue
             if r["source"] == "wiki":  # nel prompt entra al massimo una voce enciclopedica, e solo se pertinente davvero
                 if r["cosine"] < 0.55 or wiki:
                     continue
@@ -401,7 +409,7 @@ class Brain:
     async def resurface(self, n: int = 1) -> list[Doc]:
         """Ripropone documenti importanti ma poco rivisti (ripasso a intervalli): ne sceglie a caso tra i candidati."""
         cutoff = (datetime.now(timezone.utc) - timedelta(days=14)).isoformat()
-        pool = [d for d in await self.store.list_docs(200) if d.importance >= 0.6 and d.created_at < cutoff and d.access_count <= 2 and d.source not in ("journal", "profile", "wiki", "skill")]
+        pool = [d for d in await self.store.list_docs(200) if d.importance >= 0.6 and d.created_at < cutoff and d.access_count <= 2 and d.source not in ("journal", "profile", "wiki", "skill", "news")]
         return random.sample(pool, min(n, len(pool)))
 
     # ------------------------------------------------------------------ profilo dell'utente

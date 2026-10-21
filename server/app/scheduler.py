@@ -123,7 +123,7 @@ async def morning_briefing(settings: Settings, brain, agent, notifier) -> None:
     review = await brain.resurface(1)
     extra = f" Includi in fondo un ripasso breve di questo documento del mio secondo cervello: «{review[0].title}» (#{review[0].id})." if review else ""
     text = await agent.reply("Prepara il mio buongiorno: agenda di oggi, promemoria e attività aperte, e se serve un consiglio pratico. "
-                             f"Massimo 8 righe, tono da JARVIS.{extra}", "briefing")
+                             f"Aggiungi in due righe le notizie più importanti di Italia e mondo di stamattina (usa news_headlines). Massimo 10 righe, tono da JARVIS.{extra}", "briefing")
     await notifier.push("info", "Buongiorno, signore", text[:600], telegram=True)
 
 
@@ -150,6 +150,25 @@ async def brain_loop(settings: Settings, store: Store, brain, agent, notifier) -
         await asyncio.sleep(300)
 
 
+async def live_loop(settings: Settings, store: Store, live, brain, knowledge=None) -> None:
+    """Ogni `live_ingest_minutes` legge i feed e salva le notizie nuove nel secondo cervello; una volta al giorno riaggiorna a rotazione la conoscenza di base."""
+    await asyncio.sleep(90)
+    every = max(5, settings.live_ingest_minutes) * 60
+    while True:
+        beat("notizie", every)
+        try:
+            n = await live.ingest(brain, settings.live_news_per_cycle)
+            if n:
+                log.info("notizie: %d nuove nel secondo cervello (%d feed non raggiungibili)", n, len(live.errors))
+            today = datetime.now(ZoneInfo(settings.timezone)).date().isoformat()
+            if knowledge is not None and settings.knowledge_refresh_per_day and brain.enabled and await store.get_setting("last_knowledge_refresh") != today:
+                await store.set_setting("last_knowledge_refresh", today)
+                log.info("conoscenza di base: %d voci aggiornate", await knowledge.refresh_stale(settings.knowledge_refresh_per_day))
+        except Exception:
+            log.exception("errore nel ciclo delle notizie")
+        await asyncio.sleep(every)
+
+
 async def maintenance_loop(settings: Settings, store: Store, usage, updates, notifier, reminders=None) -> None:
     """Ogni 5 minuti: salva i consumi, controlla la memoria del processo; ogni `update_check_minutes` cerca nuove Release e avvisa le app."""
     from .health import container_mb, rss_mb
@@ -163,9 +182,9 @@ async def maintenance_loop(settings: Settings, store: Store, usage, updates, not
             await usage.flush(store)
             if reminders is not None:  # il Calendario comanda: spostamenti ed eliminazioni arrivano nell'app, e i promemoria senza evento ne ricevono uno
                 try:
-                    await reminders.sync()
-                except Exception as e:
-                    log.info("sincronizzazione promemoria ↔ Calendario rimandata: %s", type(e).__name__)
+                    await reminders.sync()  # l'esito e l'eventuale causa dell'errore restano in reminders.status (e nei log, una volta per causa)
+                except Exception:
+                    pass
             mem = container_mb() or rss_mb() * 1.6  # il container comprende anche FreeLLMAPI
             if mem > 440 and not mem_alert:
                 mem_alert = True

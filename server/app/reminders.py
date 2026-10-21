@@ -30,10 +30,65 @@ def _is_reminder_title(summary: str) -> bool:
     return s.startswith("promemoria") or s.startswith(PREFIX.strip())
 
 
+def explain(e: Exception) -> str:
+    """Causa dell'errore del Calendario in italiano, con il motivo indicato da Google (mai il corpo della risposta intero, mai token)."""
+    if isinstance(e, httpx.HTTPStatusError):
+        code = e.response.status_code
+        reason = msg = ""
+        try:
+            err = e.response.json()
+            err = err.get("error", err)
+            if isinstance(err, dict):
+                reason = str((err.get("errors") or [{}])[0].get("reason") or err.get("status") or "")
+                msg = str(err.get("message") or "")[:120]
+            else:
+                reason = str(err)[:40]
+                msg = str(e.response.json().get("error_description", ""))[:120]
+        except (ValueError, AttributeError, IndexError):
+            pass
+        low = f"{reason} {msg}".lower()
+        if "invalid_grant" in low or code == 401:
+            return "Autorizzazione Google scaduta o revocata: ricollega Google da Telegram (/google) o dall'app."
+        if "accessnotconfigured" in low or "has not been used" in low or "disabled" in low:
+            return "L'API Google Calendar non è abilitata nel progetto Google Cloud: abilitala e riprova."
+        if code == 403 and ("insufficient" in low or "scope" in low):
+            return "Permessi insufficienti: ricollega Google concedendo l'accesso al Calendario."
+        if code == 403 and ("ratelimit" in low or "quota" in low):
+            return "Limite di richieste di Google raggiunto: riprovo da solo più tardi."
+        if code == 404:
+            return "Calendario o evento non trovato."
+        if code >= 500:
+            return f"Google ha avuto un problema (HTTP {code}): riprovo da solo."
+        return f"Google ha rifiutato la richiesta (HTTP {code}{', ' + reason if reason else ''})."
+    if isinstance(e, httpx.TransportError):
+        return "Google non raggiungibile (rete o timeout): riprovo da solo."
+    return f"Errore inatteso ({type(e).__name__})."
+
+
 class ReminderService:
     def __init__(self, settings: Settings, store, google=None):
         self.s, self.store, self.google = settings, store, google
         self.tz = ZoneInfo(settings.timezone)
+        self.on_change = None  # callable(): avvisa gli altri dispositivi che i promemoria sono cambiati
+        self.status: dict = {"ok": None, "at": "", "detail": "", "counts": {}, "failures": 0}
+        self._last_logged = ""
+
+    def _changed(self) -> None:
+        if self.on_change:
+            try:
+                self.on_change()
+            except Exception:
+                pass
+
+    def _record(self, ok: bool, detail: str = "", counts: dict | None = None) -> None:
+        s = self.status
+        s["ok"], s["at"], s["detail"] = ok, datetime.now(self.tz).isoformat(timespec="seconds"), detail
+        s["failures"] = 0 if ok else s["failures"] + 1
+        if counts is not None:
+            s["counts"] = counts
+        if not ok and detail != self._last_logged:  # un solo avviso per causa: niente log ripetuti ogni 5 minuti
+            log.warning("sincronizzazione Calendario: %s", detail)
+        self._last_logged = "" if ok else detail
 
     @property
     def linked(self) -> bool:
@@ -68,14 +123,16 @@ class ReminderService:
 
     # ------------------------------------------------------------------ operazioni usate da tool, API e bot
     async def create(self, text: str, due: datetime) -> dict:
-        event_id = ""
+        event_id, error = "", ""
         if self.linked:
             try:
                 event_id = await self._create_event(text, due)
             except Exception as e:  # il Calendario non risponde: il promemoria c'è comunque e la sincronizzazione lo collega più tardi
-                log.warning("promemoria non aggiunto al Calendario (%s): riprovo alla prossima sincronizzazione", type(e).__name__)
+                error = explain(e)
+                self._record(False, error)
         rid = await self.store.add_reminder(text, due, event_id)
-        return {"id": rid, "event_id": event_id, "calendar": bool(event_id)}
+        self._changed()
+        return {"id": rid, "event_id": event_id, "calendar": bool(event_id), "error": error}
 
     async def delete(self, reminder_id: int) -> bool:
         row = next((r for r in await self.store.list_reminders() if r["id"] == reminder_id), None)
@@ -83,8 +140,9 @@ class ReminderService:
             try:
                 await self._delete_event(row["event_id"])
             except Exception as e:
-                log.warning("evento del Calendario non eliminato (%s)", type(e).__name__)
+                self._record(False, explain(e))
         await self.store.delete_reminder(reminder_id)
+        self._changed()
         return row is not None
 
     async def snooze(self, reminder_id: int, minutes: int) -> datetime | None:
@@ -100,7 +158,8 @@ class ReminderService:
                 else:
                     await self.store.update_reminder(reminder_id, event_id=await self._create_event(row["text"], due))
             except Exception as e:
-                log.warning("evento del Calendario non spostato (%s)", type(e).__name__)
+                self._record(False, explain(e))
+        self._changed()
         return due
 
     async def snooze_delivered(self, text: str, minutes: int, event_id: str = "") -> dict:
@@ -125,9 +184,22 @@ class ReminderService:
         return list(out.values())
 
     async def sync(self) -> dict:
-        res = {"created": 0, "updated": 0, "removed": 0, "imported": 0}
+        """Allinea con il Calendario; il risultato (o la causa dell'errore) resta in `status` per l'app, e i dispositivi vengono avvisati se qualcosa cambia."""
         if not self.linked:
-            return res
+            self.status.update(ok=None, detail="Google non è collegato: i promemoria restano solo nell'app.")
+            return {"created": 0, "updated": 0, "removed": 0, "imported": 0}
+        try:
+            res = await self._sync()
+        except Exception as e:
+            self._record(False, explain(e))
+            raise
+        self._record(not res.get("error"), res.get("error", ""), {k: v for k, v in res.items() if k != "error"})
+        if any(res[k] for k in ("updated", "removed", "imported", "created")):
+            self._changed()
+        return res
+
+    async def _sync(self) -> dict:
+        res: dict = {"created": 0, "updated": 0, "removed": 0, "imported": 0}
         now = datetime.now(self.tz)
         local = await self.store.list_reminders()
         events = await self._tagged_events(now)
@@ -139,7 +211,7 @@ class ReminderService:
                         await self.store.update_reminder(r["id"], event_id=await self._create_event(r["text"], datetime.fromisoformat(r["due_at"]).astimezone(self.tz)))
                         res["created"] += 1
                     except Exception as e:
-                        log.info("collegamento al Calendario rimandato: %s", type(e).__name__)
+                        res["error"] = explain(e)
                 continue
             ev = events.get(eid)
             if ev is None:  # fuori finestra o già eliminato: si controlla l'evento singolo
@@ -149,6 +221,7 @@ class ReminderService:
                     if e.response.status_code in (404, 410):
                         ev = {"status": "cancelled"}
                     else:
+                        res["error"] = explain(e)
                         continue
             if ev.get("status") == "cancelled":  # eliminato sul Calendario → sparisce anche dall'app
                 await self.store.delete_reminder(r["id"])
@@ -178,8 +251,8 @@ class ReminderService:
             try:
                 await self.google.request("PATCH", f"{CAL}/events/{e['id']}", params={"sendUpdates": "none"}, json={"extendedProperties": {"private": TAG}})
             except Exception as ex:
-                log.info("evento importato non marcato (%s)", type(ex).__name__)
+                res["error"] = explain(ex)
             res["imported"] += 1
-        if any(res.values()):
-            log.info("promemoria ↔ Calendario: %s", res)
+        if any(res[k] for k in ("updated", "removed", "imported", "created")):
+            log.info("promemoria ↔ Calendario: %s", {k: v for k, v in res.items() if k != "error"})
         return res

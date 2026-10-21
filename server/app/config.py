@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     freellm_db_path: str = ""  # se FREELLM_API_KEY è vuota, la chiave unificata si legge da questo DB SQLite
     llm_timeout_s: float = 90.0
     llm_attempt_timeout_s: float = 35.0
+    llm_routing: bool = True  # profili auto:fast/smart/reliable/balanced scelti per tipo di richiesta (solo con modello «auto»)
     web_search_engines: bool = True  # ricerca web dai motori di FreeLLMAPI (Parallel); DuckDuckGo come ripiego  # primo tentativo: se il provider non risponde in tempo si ripiega su un altro modello (invece di aspettare 60 s)
     llm_temperature: float = 0.6
     llm_temperature_tools: float = 0.2  # con i tool serve precisione, non creatività
@@ -60,6 +61,12 @@ class Settings(BaseSettings):
     rag_context_chars: int = 1800  # quanto contesto del secondo cervello entra in ogni risposta
     rag_min_cosine: float = 0.35  # sotto questa somiglianza (e senza parole in comune) un frammento non entra nel contesto
     rag_enrich_per_cycle: int = 2  # documenti arricchiti (titolo, riassunto, tag, entità) ogni ciclo; 0 = spento
+    github_token: str = ""  # GITHUB_TOKEN: token classico con scope repo (+workflow) per le sessioni di coding; senza, la funzione è spenta
+    coding_repos_per_day: int = 3  # repository nuovi che JARVIS può creare ogni giorno
+    live_news: bool = True  # notizie in tempo reale dai feed RSS/Atom e salvataggio periodico nel secondo cervello
+    live_ingest_minutes: int = 20
+    live_news_per_cycle: int = 20
+    knowledge_refresh_per_day: int = 5  # voci di base riscaricate ogni giorno (a rotazione) per tenerle aggiornate
     knowledge_seed_per_cycle: int = 3  # voci di base di Wikipedia caricate ogni 5 minuti nel secondo cervello (0 = spento)
     skills_enabled: bool = True  # competenze specialistiche (programmazione, finanza, marketing...) attivate dalla richiesta
     skills_max_active: int = 2

@@ -14,7 +14,7 @@ from pathlib import Path
 log = logging.getLogger("jarvis.skills")
 LIBRARY = Path(__file__).parent / "library"
 DOMAINS = {"programmazione": "Programmazione", "comunicazione": "Comunicazione", "finanza": "Finanza", "marketing": "Marketing",
-           "grafica": "Grafica e design", "tecnologia": "Tecnologia", "business": "Lavoro e business", "vita": "Vita e crescita", "personali": "Le mie competenze"}
+           "grafica": "Grafica e design", "tecnologia": "Tecnologia", "business": "Lavoro e business", "vita": "Vita e crescita", "scienza": "Scienza e attualità", "personali": "Le mie competenze"}
 SLUG = re.compile(r"^[a-z0-9][a-z0-9-]{1,40}$")
 STOP = set("che con per una uno dei del della delle degli nel nella sul sulla non sono come anche piu pero ogni dove quando fare farmi fammi dammi voglio vorrei puoi potresti "
            "cosa cose qualcosa tutto tutti molto poco oggi domani ieri adesso ora sempre mai ancora gia qui qua quale quali perche quanto quanti quanta cosi bene male mio mia miei mie questo questa questi queste quello quella ciao jarvis mi ti ci vi lo gli le il la un di da in su tra fra e o a ho ha hai abbiamo sei".split())

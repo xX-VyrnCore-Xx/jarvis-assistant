@@ -124,7 +124,7 @@ class MemoryBrainStore:
         self.chunks[chunk_id].emb, self.chunks[chunk_id].emb_model = emb, model
 
     async def docs_to_enrich(self, limit: int) -> list[Doc]:
-        return [d for d in self.docs.values() if not d.enriched and d.source not in ("journal", "wiki", "skill")][:limit]
+        return [d for d in self.docs.values() if not d.enriched and d.source not in ("journal", "wiki", "skill", "news")][:limit]
 
     # ---- entità e grafo
     async def upsert_entity(self, kind: str, key_hash: str, name: str) -> int:
@@ -306,7 +306,7 @@ class SupabaseBrainStore(MemoryBrainStore):
         await self._write("PATCH", "brain_chunks", params={"id": f"eq.{chunk_id}"}, body={"emb": self._emb_enc(self.vault, emb), "emb_model": model})
 
     async def docs_to_enrich(self, limit: int) -> list[Doc]:
-        rows = await self._get("brain_docs", {"select": "*", "enriched": "eq.false", "source": "not.in.(journal,wiki,skill)", "order": "created_at.desc", "limit": limit})
+        rows = await self._get("brain_docs", {"select": "*", "enriched": "eq.false", "source": "not.in.(journal,wiki,skill,news)", "order": "created_at.desc", "limit": limit})
         return [self._doc(r) for r in rows]
 
     # ---- entità e grafo

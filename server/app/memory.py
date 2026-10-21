@@ -7,6 +7,15 @@ from .config import Settings
 from .crypto import Vault
 
 
+# La conversazione è una sola su tutti i dispositivi (app Android, app Windows): le sessioni «mobile» e «desktop» (e la nuova «main»)
+# sono la stessa. Telegram e le altre restano separate.
+SHARED_SESSIONS = ("main", "mobile", "desktop")
+
+
+def canonical_session(session_id: str) -> str:
+    return "main" if session_id in SHARED_SESSIONS else session_id
+
+
 class Store(Protocol):
     async def add_message(self, session_id: str, role: str, content: str) -> None: ...
     async def recent_messages(self, session_id: str, limit: int) -> list[dict]: ...
@@ -55,10 +64,10 @@ class MemoryStore:
         self.usage: dict[tuple[str, str, str], dict] = {}
 
     async def add_message(self, session_id, role, content):
-        self.messages.append({"session_id": session_id, "role": role, "content": content, "created_at": datetime.now(timezone.utc).isoformat()})
+        self.messages.append({"session_id": canonical_session(session_id), "role": role, "content": content, "created_at": datetime.now(timezone.utc).isoformat()})
 
     async def recent_messages(self, session_id, limit):
-        rows = [m for m in self.messages if m["session_id"] == session_id]
+        rows = [m for m in self.messages if canonical_session(m["session_id"]) == canonical_session(session_id)]
         return [{"role": m["role"], "content": m["content"]} for m in rows[-limit:]]
 
     async def add_memory(self, content):
@@ -72,7 +81,7 @@ class MemoryStore:
             self.memories[memory_id - 1] = None  # l'indice resta stabile
 
     async def clear_messages(self, session_id):
-        self.messages = [m for m in self.messages if m["session_id"] != session_id]
+        self.messages = [m for m in self.messages if canonical_session(m["session_id"]) != canonical_session(session_id)]
 
     async def search_memories(self, query, limit):
         words = [w for w in query.lower().split() if len(w) > 2]
@@ -199,14 +208,18 @@ class SupabaseStore:
         r.raise_for_status()
 
     async def add_message(self, session_id, role, content):
-        await self._insert("messages", {"session_id": session_id, "role": role, "content": self.vault.seal(content)})
+        await self._insert("messages", {"session_id": canonical_session(session_id), "role": role, "content": self.vault.seal(content)})
+
+    @staticmethod
+    def _session_filter(session_id: str) -> str:
+        return f"in.({','.join(SHARED_SESSIONS)})" if canonical_session(session_id) == "main" else f"eq.{session_id}"
 
     async def recent_messages(self, session_id, limit):
         rows = await self._get(
             "messages",
             {
                 "select": "role,content",
-                "session_id": f"eq.{session_id}",
+                "session_id": self._session_filter(session_id),
                 "order": "created_at.desc",
                 "limit": limit,
             },
@@ -237,7 +250,7 @@ class SupabaseStore:
         r.raise_for_status()
 
     async def clear_messages(self, session_id):
-        r = await self._client.delete(f"{self.base}/messages", params={"session_id": f"eq.{session_id}"}, headers=self.headers)
+        r = await self._client.delete(f"{self.base}/messages", params={"session_id": self._session_filter(session_id)}, headers=self.headers)
         r.raise_for_status()
 
     async def add_reminder(self, text, due_at, event_id=""):

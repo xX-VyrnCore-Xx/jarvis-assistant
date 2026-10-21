@@ -43,6 +43,28 @@ SEED: list[tuple[str, list[str]]] = [
                  "Calcio (sport)", "Giochi olimpici", "Cucina italiana", "Pizza", "Vino", "Caffè", "Olio d'oliva"]),
     ("Salute e vita pratica", ["Pronto soccorso", "Primo soccorso", "Febbre", "Influenza", "Diabete mellito", "Ipertensione arteriosa", "Antibiotico", "Allergia",
                                "Esercizio fisico", "Stress", "Meditazione", "Gestione del tempo", "Produttività", "Pianificazione finanziaria", "Risparmio"]),
+    ("Programmazione e IA", ["Linguaggio di programmazione", "Struttura dati", "Programmazione orientata agli oggetti", "Programmazione funzionale", "Git", "GitHub",
+                             "Docker", "Kubernetes", "Rust (linguaggio di programmazione)", "Go (linguaggio di programmazione)", "TypeScript", "SQL", "PostgreSQL",
+                             "Application programming interface", "REST", "Hypertext Transfer Protocol", "Transmission Control Protocol", "Domain Name System",
+                             "Rete neurale artificiale", "Apprendimento profondo", "Elaborazione del linguaggio naturale", "Visione artificiale", "Big data",
+                             "Algoritmo di ordinamento", "Complessità computazionale"]),
+    ("Sicurezza e crittografia", ["Crittografia asimmetrica", "Advanced Encryption Standard", "Transport Layer Security", "Funzione di hash", "Firma digitale", "Ransomware",
+                                  "Malware", "Ingegneria sociale (sicurezza informatica)", "Virtual private network", "Firewall", "Regolamento generale sulla protezione dei dati"]),
+    ("Spazio e fisica", ["Giove (astronomia)", "Saturno (astronomia)", "Stazione Spaziale Internazionale", "NASA", "Agenzia spaziale europea", "SpaceX",
+                         "Buco nero", "Pianeta extrasolare", "Telescopio spaziale James Webb", "Eclissi", "Modello standard", "Bosone di Higgs",
+                         "Termodinamica", "Elettromagnetismo", "Onda", "Fusione nucleare", "Energia nucleare", "Superconduttività", "Computer quantistico"]),
+    ("Ambiente e natura", ["Ecosistema", "Biodiversità", "Fotosintesi clorofilliana", "Effetto serra", "Anidride carbonica", "Riscaldamento globale", "Accordo di Parigi sul clima",
+                           "Terremoto", "Vulcano", "Maremoto", "Uragano", "Ciclo dell'acqua", "Inquinamento", "Economia circolare"]),
+    ("Economia e finanza pratica", ["Banca", "Conto corrente", "Carta di credito", "Tasso di interesse", "Euribor", "Debito pubblico", "Spread (finanza)", "Borsa Italiana",
+                                    "FTSE MIB", "S&P 500", "Exchange-traded fund", "Dividendo", "Diversificazione (finanza)", "Regime forfettario",
+                                    "Partita IVA", "Trattamento di fine rapporto", "Fatturazione elettronica", "Bilancio d'esercizio", "Contabilità"]),
+    ("Istituzioni e mondo", ["Consiglio dell'Unione europea", "Commissione europea", "Parlamento europeo", "Banca d'Italia", "Corte costituzionale (Italia)", "Governo italiano",
+                             "G7", "G20", "Fondo monetario internazionale", "Banca mondiale", "Organizzazione mondiale della sanità", "Organizzazione mondiale del commercio",
+                             "Brexit", "Medio Oriente", "Diritti umani", "Dichiarazione universale dei diritti umani"]),
+    ("Arte, cultura e lingue", ["Storia dell'arte", "Impressionismo", "Barocco", "Architettura", "Romanzo", "Poesia", "Teatro", "Opera lirica", "Jazz", "Rock", "Fotografia",
+                                "Fumetto", "Videogioco", "Linguistica", "Alfabeto", "Lingua spagnola", "Lingua tedesca", "Lingua francese", "Latino", "Etimologia"]),
+    ("Corpo, mente e benessere", ["Anatomia umana", "Sistema nervoso", "Apparato cardiocircolatorio", "Apparato respiratorio", "Ormone", "Microbiota intestinale", "Dieta mediterranea",
+                                  "Proteina", "Carboidrato", "Lipidi", "Psicologia", "Memoria (psicologia)", "Apprendimento", "Ansia", "Depressione", "Mindfulness", "Rianimazione cardiopolmonare"]),
 ]
 
 
@@ -122,6 +144,30 @@ class Knowledge:
         if pos >= len(titles):
             log.info("conoscenza di base completa: %d voci", len(titles))
         return done
+
+    async def refresh_stale(self, n: int) -> int:
+        """Riscarica a rotazione `n` voci enciclopediche già nel cervello: se Wikipedia è cambiata il testo si aggiorna (altrimenti nulla)."""
+        if n <= 0:
+            return 0
+        docs = [d for d in await self.brain.store.list_docs(400, source="wiki") if d.uri.startswith("wiki:")]
+        if not docs:
+            return 0
+        docs.sort(key=lambda d: d.id)
+        try:
+            pos = int(await self.store.get_setting("knowledge_refresh_pos") or 0)
+        except ValueError:
+            pos = 0
+        changed = 0
+        for i in range(min(n, len(docs))):
+            d = docs[(pos + i) % len(docs)]
+            _, lang, name = d.uri.split(":", 2)
+            try:
+                changed += (await self.learn(name, lang, resolve=False))["status"] == "aggiornato"
+            except Exception as e:
+                log.info("aggiornamento della voce «%s» rimandato: %s", name, type(e).__name__)
+                break
+        await self.store.set_setting("knowledge_refresh_pos", str((pos + n) % max(1, len(docs))))
+        return changed
 
     async def progress(self) -> tuple[int, int]:
         try:

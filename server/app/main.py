@@ -13,7 +13,7 @@ from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Re
 from pydantic import BaseModel, Field
 
 from .agent import Agent
-from .api import router as api_router
+from .api import VERSION, router as api_router
 from .auth import require_token, throttle
 from .backup import HFBackup
 from .brain.embed import Embedder
@@ -39,7 +39,10 @@ from .skills.registry import SkillRegistry
 from .skills.tools import register_skill_tools
 from .proactive import Proactive
 from .reminders import ReminderService
-from .scheduler import background_loop, brain_loop, heartbeat_loop, maintenance_loop, proactive_loop
+from .coding import CodingService
+from .tools.coding_tools import register_coding_tools
+from .live import LiveFeeds, register_live_tools
+from .scheduler import background_loop, brain_loop, heartbeat_loop, live_loop, maintenance_loop, proactive_loop
 from .updates import UpdateService
 from .usage import UsageTracker
 from .telegram import Telegram
@@ -108,6 +111,9 @@ async def lifespan(app: FastAPI):
     skills = app.state.skills = SkillRegistry()
     register_skill_tools(tools, skills, brain)
     app.state.agent.skills = skills
+    coding = app.state.coding = CodingService(settings, store)
+    register_coding_tools(tools, coding, pending)
+    app.state.agent.coding = coding
     try:
         custom = await skills.load_custom(brain)
     except Exception as e:  # il database può non essere pronto: le competenze personali tornano al prossimo avvio
@@ -135,6 +141,7 @@ async def lifespan(app: FastAPI):
     app.state.backup = HFBackup(settings)
     app.state.voice = VoiceService(pc)
     notifier = app.state.notifier = Notifier(settings, store, tg)
+    reminders.on_change = lambda: notifier.sync("reminders")
     prev = pending.on_create
 
     def on_pending(p) -> None:
@@ -149,6 +156,10 @@ async def lifespan(app: FastAPI):
     guard = None
     task = asyncio.create_task(background_loop(settings, store, notifier, budget, app.state.backup))
     updates = app.state.updates = UpdateService(settings, store, notifier)
+    live = app.state.live = LiveFeeds(settings, store)
+    await live.load_custom()
+    register_live_tools(tools, live, updates, brain, getattr(brain, "knowledge", None), VERSION)
+    live_task = asyncio.create_task(live_loop(settings, store, live, brain, getattr(brain, "knowledge", None))) if settings.live_news else None
     brain_task = asyncio.create_task(brain_loop(settings, store, brain, app.state.agent, notifier))
     maint_task = asyncio.create_task(maintenance_loop(settings, store, usage, updates, notifier, reminders))
     proactive = app.state.proactive = Proactive(settings, store, notifier, google, brain, budget)
@@ -174,6 +185,8 @@ async def lifespan(app: FastAPI):
     yield
     task.cancel()
     brain_task.cancel()
+    if live_task:
+        live_task.cancel()
     maint_task.cancel()
     proactive_task.cancel()
     heartbeat_task.cancel()
@@ -224,7 +237,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins(),
     allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "Accept"],
+    allow_headers=["Authorization", "Content-Type", "Accept", "X-Device-Id"],
     max_age=600,
 )
 app.add_middleware(SecurityHeaders)
@@ -266,7 +279,7 @@ async def health() -> dict:
 
 
 @app.post("/chat/stream", dependencies=[Depends(require_token)])
-async def chat_stream(body: ChatIn) -> StreamingResponse:
+async def chat_stream(body: ChatIn, x_device_id: str = Header(default="", max_length=64)) -> StreamingResponse:
     """Come /chat ma a eventi SSE: `status` (uso di un tool), `delta` (testo man mano), `done` (risposta intera), `error`."""
     limiter: RateLimiter = app.state.chat_limiter
     if wait := limiter.retry_after():
@@ -277,6 +290,8 @@ async def chat_stream(body: ChatIn) -> StreamingResponse:
         try:
             async for kind, data in app.state.agent.reply_stream(body.message, body.session_id, voice=body.voice, model=body.model, skills=[body.skill] if body.skill else None):
                 yield f"event: {kind}\ndata: {json.dumps({'text': data}, ensure_ascii=False)}\n\n"
+                if kind == "done":
+                    app.state.notifier.sync("chat", x_device_id)  # gli altri dispositivi mostrano subito lo scambio
         except LLMError as e:
             yield f"event: error\ndata: {json.dumps({'text': str(e)}, ensure_ascii=False)}\n\n"
         except Exception:
@@ -305,13 +320,15 @@ async def github_webhook(request: Request) -> dict:
 
 
 @app.post("/chat", response_model=ChatOut, dependencies=[Depends(require_token)])
-async def chat(body: ChatIn) -> ChatOut:
+async def chat(body: ChatIn, x_device_id: str = Header(default="", max_length=64)) -> ChatOut:
     limiter: RateLimiter = app.state.chat_limiter
     if wait := limiter.retry_after():
         raise HTTPException(429, "Troppe richieste: rallenta un momento", headers={"Retry-After": str(wait)})
     limiter.hit()
     try:
-        return ChatOut(reply=await app.state.agent.reply(body.message, body.session_id, voice=body.voice, model=body.model, skills=[body.skill] if body.skill else None))
+        reply = await app.state.agent.reply(body.message, body.session_id, voice=body.voice, model=body.model, skills=[body.skill] if body.skill else None)
+        app.state.notifier.sync("chat", x_device_id)
+        return ChatOut(reply=reply)
     except LLMError as e:
         raise HTTPException(502, str(e)) from e
 

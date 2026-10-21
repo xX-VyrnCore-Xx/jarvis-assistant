@@ -1,4 +1,4 @@
-import { Jarvis, ApiError } from "@shared/api.js";
+import { Jarvis, ApiError, deviceId } from "@shared/api.js";
 import { el, fmtDate, fmtTokens, fmtUptime, markdown, pct } from "@shared/format.js";
 import { icon } from "@shared/icons.js";
 import { Speaker } from "@shared/speech.js";
@@ -88,6 +88,8 @@ function shell() {
   content = el("main", { id: "m-view" });
   tabs = el("nav", { class: "m-tabs", "aria-label": "Sezioni" });
   $app.replaceChildren(el("div", { class: "m-col" }, top, content), tabs);
+  // la barra superiore prende rilievo (ombra + vetro più denso) solo quando il contenuto scorre sotto di essa
+  $app.addEventListener("scroll", (e) => { const t = e.target; if (t instanceof HTMLElement && t.scrollHeight > t.clientHeight) top.classList.toggle("scrolled", t.scrollTop > 6); }, { capture: true, passive: true });
   renderTop(); renderTabs();
 }
 
@@ -263,11 +265,28 @@ async function send(text) {
 async function loadHistory() {
   try {
     const rows = await api.history(SESSION, 30);
+    S.histSig = `${rows.length}|${rows.at(-1)?.content?.length ?? 0}|${rows.at(-1)?.role ?? ""}`;
     buildChat(); log.replaceChildren(); hello = null;
     if (!rows.length) return showHello();
     rows.forEach((r) => bubble(r.role === "user" ? "user" : "bot", r.content, { fresh: false }));
     log.scrollTop = log.scrollHeight;
   } catch { /* offline: resta la schermata di benvenuto */ }
+}
+
+/** Un altro dispositivo ha scritto: aggiorna solo la conversazione (senza toccare ciò che stai scrivendo) se è cambiata. */
+async function syncHistory() {
+  if (S.busy || !log) return;
+  try {
+    const rows = await api.history(SESSION, 30);
+    const sig = `${rows.length}|${rows.at(-1)?.content?.length ?? 0}|${rows.at(-1)?.role ?? ""}`;
+    if (sig === S.histSig) return;
+    S.histSig = sig;
+    const stick = nearBottom();
+    log.replaceChildren(); hello = null;
+    if (!rows.length) return showHello();
+    rows.forEach((r) => bubble(r.role === "user" ? "user" : "bot", r.content, { fresh: false }));
+    if (stick) log.scrollTop = log.scrollHeight;
+  } catch { /* offline: si riprova al prossimo avviso */ }
 }
 
 // ---------------------------------------------------------------- secondo cervello
@@ -450,6 +469,17 @@ async function loadReminders() {
   if (S.tab === "reminders") renderTab();
 }
 
+/** Allinea ora con il Calendario Google e mostra l'esito (o la causa dell'errore). */
+async function syncNow() {
+  try {
+    const r = await api.syncReminders();
+    if (S.status) S.status.calendar_sync = { ...r.status, linked: r.linked };
+    const c = r.counts || {}, n = (c.created || 0) + (c.updated || 0) + (c.removed || 0) + (c.imported || 0);
+    toast(!r.linked ? "Google non è collegato" : r.status.ok === false ? r.status.detail : n ? `Calendario allineato (${n} modifiche)` : "Calendario già allineato", r.status.ok === false);
+  } catch (e) { toast(errText(e), true); }
+  loadReminders();
+}
+
 function openSheet(title, ...body) {
   const entry = { close: null };
   const close = () => { sheet.classList.remove("up"); setTimeout(() => sheet.remove(), 240); S.sheets = S.sheets.filter((s) => s !== entry); };
@@ -510,7 +540,7 @@ async function removeReminder(r) {
 
 function reminderCard(r) {
   const due = relDue(r.due_at);
-  const card = el("div", { class: "m-card rem" }, el("div", {}, el("b", {}, r.text), el("small", { class: due.soon ? "soon" : "" }, due.label), r.event_id ? el("small", { class: "cal" }, "📅 Calendario") : null),
+  const card = el("div", { class: `m-card rem${new Date(r.due_at) < Date.now() ? " late" : due.soon ? " soon" : ""}` }, el("div", {}, el("b", {}, r.text), el("small", { class: due.soon ? "soon" : "" }, due.label), r.event_id ? el("small", { class: "cal" }, "📅 Calendario") : null),
     el("button", { class: "m-icon", "aria-label": "Elimina", onclick: () => removeReminder(r) }, icon("trash", 19)));
   let x0 = null, dx = 0;
   card.addEventListener("touchstart", (e) => { x0 = e.touches[0].clientX; dx = 0; card.classList.add("drag"); }, { passive: true });
@@ -522,7 +552,12 @@ function reminderCard(r) {
 function buildReminders() {
   const wrap = el("div", { class: "m-chat" });
   const page = el("div", { class: "m-page" });
-  page.append(el("div", { class: "m-head" }, el("h2", {}, "Promemoria"), el("button", { class: "m-ghost", onclick: () => { haptic(); loadReminders(); } }, icon("refresh", 16), "Aggiorna")));
+  page.append(el("div", { class: "m-head" }, el("h2", {}, "Promemoria"), el("button", { class: "m-ghost", onclick: () => { haptic(); syncNow(); } }, icon("refresh", 16), "Sincronizza")));
+  const cs = S.status?.calendar_sync;
+  if (cs?.linked && cs.ok === false) page.append(el("div", { class: "m-warn" }, icon("bell", 18), el("div", {}, el("b", {}, "Calendario non sincronizzato"), el("small", {}, cs.detail || "Errore sconosciuto.")),
+    el("button", { class: "m-ghost", onclick: () => syncNow() }, "Riprova")));
+  else if (cs?.linked && cs.ok) page.append(el("p", { class: "m-note ok cal-ok" }, `📅 Calendario Google sincronizzato alle ${new Date(cs.at).toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" })}`));
+  else if (cs && !cs.linked && cfg.token) page.append(el("p", { class: "m-note" }, "Google non è collegato: i promemoria restano solo nell'app (collegalo da Telegram con /google)."));
   if (!S.remindersLoaded && cfg.token) page.append(el("div", { class: "skel" }), el("div", { class: "skel" }));
   else if (!S.reminders.length) page.append(el("div", { class: "m-empty" }, el("div", { class: "ico" }, icon("clock", 32)), el("b", {}, "Nessun promemoria"), "Tocca + oppure chiedilo a JARVIS: te lo ricordo all'ora giusta, qui e su Telegram."));
   else {
@@ -751,7 +786,12 @@ function start() {
   closeStream = openStream({ url: () => cfg.url, token: () => cfg.token }, {
     onNotification: onNote,
     onRead: (ids) => { S.notes.forEach((n) => { if (!ids || ids.includes(n.id)) n.read = true; }); renderTop(); if (notesSheet) fillNotes(); },
-    onState: (st) => { if (st === "on") loadNotes(); },
+    onSync: ({ scope, origin }) => {  // un altro dispositivo (o il server) ha cambiato qualcosa: ci si aggiorna subito
+      if (scope === "reminders") loadReminders();
+      else if (scope === "brain") { S.brain.docs = null; S.brain.stats = null; if (S.tab === "brain") loadBrain(); }
+      else if (scope === "chat" && origin !== deviceId) syncHistory();
+    },
+    onState: (st) => { if (st === "on") { loadNotes(); loadReminders(); syncHistory(); } },
   });
   initPush(api, (route) => { if (ROUTE_TAB[route]) setTab(ROUTE_TAB[route]); }).catch(() => {});
   checkUpdate();

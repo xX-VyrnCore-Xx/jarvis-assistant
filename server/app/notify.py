@@ -160,6 +160,11 @@ class Notifier:
             except asyncio.QueueFull:
                 self._subs.discard(q)  # client lento: si riconnette e recupera dall'archivio
 
+    def sync(self, scope: str, origin: str = "") -> None:
+        """Avvisa le app aperte che i dati di un ambito (reminders, brain, chat…) sono cambiati: si aggiornano subito, senza aspettare il prossimo giro.
+        `origin` è l'id del dispositivo che ha fatto la modifica, così non ricarica se stesso."""
+        self.broadcast({"event": "sync", "scope": scope, "origin": origin})
+
     async def mark_read(self, ids: list[int] | None) -> None:
         await self.store.mark_notifications_read(ids)
         self.broadcast({"event": "read", "ids": ids})  # le altre app azzerano il contatore subito

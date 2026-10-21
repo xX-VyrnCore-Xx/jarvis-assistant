@@ -28,7 +28,7 @@ Hai competenze specialistiche (programmazione, comunicazione, finanza, marketing
 
 Come usare i tool:
 - Più tool indipendenti vanno chiamati insieme nello stesso turno (es. meteo di due città, agenda e email).
-- `calculate` per ogni calcolo; `date_info` per giorni della settimana e calcoli con le date; `convert_currency` per i cambi; `wikipedia` per fatti enciclopedici; `web_news` per le notizie; `get_weather` per il meteo; `web_search` poi `read_webpage` per approfondire una fonte.
+- `calculate` per ogni calcolo; `date_info` per giorni della settimana e calcoli con le date; `convert_currency` per i cambi; `wikipedia` per fatti enciclopedici; `news_headlines` per cosa succede ADESSO (notizie in tempo reale da feed: italia, mondo, tecnologia, ai, scienza, economia, sport, terremoti; filtra con topic) e `web_news`/`web_search` per approfondire; mai dare per «attuale» ciò che viene dalla memoria: se la domanda riguarda il presente controlla dal vivo e cita fonte e ora; `get_weather` per il meteo; `web_search` poi `read_webpage` per approfondire una fonte.
 - `remember`/`recall`/`list_memories`/`forget` per i ricordi brevi; `brain_*` per il secondo cervello: `brain_add_note` per note, idee, riunioni, decisioni; `brain_search` per ritrovare qualcosa di passato (cita gli id [#n], usa since/until per periodi come "la settimana scorsa"); `brain_deep_search` per domande difficili o vaghe (prova più formulazioni); `brain_about` per «cosa so di Luca / del progetto X»; `brain_learn` per studiare un argomento da Wikipedia e tenerlo (cultura generale); `brain_profile` per il profilo; `brain_save_url` per conservare una pagina; `brain_related` per i collegamenti. Il contesto pertinente del secondo cervello è già nel prompt: usalo senza ripeterlo. Salva solo ciò che è duraturo.
 - `add_reminder`/`remind_in`/`reminder_snooze`/`list_reminders`/`delete_reminder` per i promemoria; `task_*` per liste (da fare, spesa); `crypto_price`, `world_time`, `unit_convert` per prezzi, orari nel mondo e conversioni; calcola "when" da data e ora qui sopra.
 - `send_notification` per mandare un avviso alle app dell'utente.
@@ -51,9 +51,10 @@ class Agent:
         self.learner = Learner(settings, llm, brain, store)
         self.skills = None  # SkillRegistry, assegnato all'avvio
         self.selector = ToolSelector()
+        self.coding = None  # CodingService: con una sessione aperta il prompt lo dice e servono più passi di strumenti
 
     TOOL_LABELS = {
-        "web_search": "Cerco sul web…", "web_news": "Leggo le notizie…", "read_webpage": "Leggo la pagina…", "get_weather": "Controllo il meteo…",
+        "web_search": "Cerco sul web…", "news_headlines": "Leggo le notizie in tempo reale…", "code_write": "Scrivo il codice nella sandbox…", "code_commit": "Faccio il commit su GitHub…", "code_checks": "Controllo la CI…", "code_merge": "Unisco la PR…", "jarvis_status": "Controllo il mio stato…", "web_news": "Leggo le notizie…", "read_webpage": "Leggo la pagina…", "get_weather": "Controllo il meteo…",
         "calendar_list_events": "Leggo il calendario…", "calendar_create_event": "Creo l'evento…", "calendar_update_event": "Modifico l'evento…",
         "calendar_delete_event": "Preparo la conferma…", "gmail_search": "Cerco nelle email…", "gmail_read": "Leggo l'email…", "drive_search": "Cerco su Drive…",
         "brain_search": "Cerco nel secondo cervello…", "brain_add_note": "Salvo nel secondo cervello…", "recall": "Ricordo…", "remember": "Memorizzo…",
@@ -130,6 +131,9 @@ class Agent:
                 "\n\nLa risposta verrà LETTA AD ALTA VOCE: massimo 2-3 frasi brevi, "
                 "niente elenchi, markdown, emoji o URL."
             )
+        if self.coding and (block := self.coding.prompt_block()):
+            system += "\n\n" + block
+            active.add("coding")  # con una sessione aperta gli strumenti code_* restano sempre disponibili
         if skill_ctx := self._skill_context(user_text, forced):
             system += "\n\n" + skill_ctx
         if profile:
@@ -144,6 +148,9 @@ class Agent:
             system += ("\n\nPer privacy alcuni dati sensibili compaiono come segnaposto tra parentesi quadre (es. [IBAN_1], [CARTA_1], [EMAIL_1]): "
                        "usali tali e quali nelle risposte e negli argomenti dei tool, il sistema li sostituisce con i valori veri.")
         return [{"role": "system", "content": system}, *history, {"role": "user", "content": red.mask(user_text)}], red, active
+
+    def _rounds(self) -> int:
+        return self.s.max_tool_rounds + (12 if self.coding and self.coding.session else 0)
 
     def _specs(self, active: set[str]) -> list[dict]:
         return self.selector.specs(self.tools.specs, active)
@@ -182,7 +189,7 @@ class Agent:
     async def reply(self, user_text: str, session_id: str, voice: bool = False, model: str | None = None, skills: list[str] | None = None) -> str:
         messages, red, active = await self._prepare(user_text, session_id, voice, skills)
         answer = ""
-        for _ in range(self.s.max_tool_rounds):
+        for _ in range(self._rounds()):
             msg = await self.llm.chat(messages, self._specs(active), model=model)
             calls = msg.get("tool_calls") or []
             if not calls:
@@ -200,8 +207,9 @@ class Agent:
         """Come `reply`, ma a eventi: ("status", testo) mentre usa i tool, ("delta", testo) man mano che scrive, ("done", risposta intera)."""
         messages, red, active = await self._prepare(user_text, session_id, voice, skills)
         answer = ""
-        for _ in range(self.s.max_tool_rounds + 1):
-            last_round = _ == self.s.max_tool_rounds
+        rounds = self._rounds()
+        for _ in range(rounds + 1):
+            last_round = _ == rounds
             if last_round:
                 messages.append({"role": "user", "content": "Rispondi ora con le informazioni raccolte, senza usare altri tool."})
             unmask, msg = StreamUnmasker(red), {}
