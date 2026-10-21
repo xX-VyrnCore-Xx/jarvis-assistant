@@ -61,7 +61,7 @@ class Settings(BaseSettings):
     knowledge_seed_per_cycle: int = 3  # voci di base di Wikipedia caricate ogni 5 minuti nel secondo cervello (0 = spento)
     skills_enabled: bool = True  # competenze specialistiche (programmazione, finanza, marketing...) attivate dalla richiesta
     skills_max_active: int = 2
-    skills_context_chars: int = 2400
+    skills_context_chars: int = 3000
     learn_enabled: bool = True  # impara da solo fatti, preferenze e impegni dalle conversazioni (poi li salva nel secondo cervello)
     learn_max_per_day: int = 30
     proactive_enabled: bool = True  # JARVIS ti avvisa da solo: eventi in arrivo, email nuove, riepilogo serale e settimanale

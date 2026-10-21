@@ -20,14 +20,15 @@ def top(text, k=2):
 
 
 def test_library_is_complete_and_well_formed():
-    assert len(REG) >= 45
-    for d in ("programmazione", "comunicazione", "finanza", "marketing", "business", "vita"):
+    assert len(REG) >= 95
+    for d in ("comunicazione", "finanza", "marketing", "business", "vita", "tecnologia"):
         assert len(REG.by_domain(d)) >= 6, d
+    assert len(REG.by_domain("programmazione")) >= 25 and len(REG.by_domain("grafica")) >= 15
     for s in REG.skills.values():
         assert s.domain in DOMAINS and s.builtin
         assert 40 <= len(s.description) <= 300, s.name
         assert 3 <= len(s.triggers) <= 25, s.name
-        assert 500 <= len(s.body) <= 2200, (s.name, len(s.body))  # abbastanza ricco ma entro il budget del prompt
+        assert 500 <= len(s.body) <= 2400, (s.name, len(s.body))  # abbastanza ricco ma entro il budget del prompt
         assert "**Output**" in s.body or "**Metodo**" in s.body, s.name
 
 
@@ -67,12 +68,36 @@ def test_every_skill_is_reachable_from_its_own_trigger_phrases():
     ("ho un dilemma, devo scegliere: pro e contro", "decisioni-e-pensiero-critico"),
     ("organizza il viaggio: itinerario e valigia per Lisbona", "viaggi-e-logistica"),
     ("posso recedere da un acquisto online? ho diritto al rimborso?", "diritti-e-burocrazia-italia"),
+    ("il mio useeffect parte in loop, come evito i re-render in react?", "react-e-frontend-moderno"),
+    ("come faccio il graceful shutdown di un server express con node?", "nodejs-backend"),
+    ("errore del borrow checker in rust: value borrowed here after move", "rust"),
+    ("come uso le goroutine e i canali in go senza leak?", "go"),
+    ("come scrivo uno script bash sicuro con set -euo pipefail?", "shell-e-linux"),
+    ("mi spieghi la programmazione dinamica e la complessità big o?", "algoritmi-e-strutture-dati"),
+    ("come costruisco un rag con embedding per un chatbot e valuto le allucinazioni?", "ai-engineering-llm"),
+    ("devo aggiornare un progetto legacy senza test, riscrivo da zero?", "refactoring-e-codice-legacy"),
+    ("voglio una redis cache con ttl e invalidazione", "nosql-e-cache"),
+    ("devo progettare un design system con token e dark mode", "design-system-e-ui-kit"),
+    ("che font abbino per titoli e testo? serve una scala tipografica", "tipografia"),
+    ("scegli una palette di colori con il giusto contrasto wcag", "colore-e-palette"),
+    ("rendi il mio sito accessibile con screen reader e navigazione da tastiera", "accessibilita-web"),
+    ("disegna un'icona svg 24x24 con il path e ottimizzala", "grafica-vettoriale-e-svg"),
+    ("prepara l'icona adattiva android e l'ico per windows", "icone-e-app-icon"),
+    ("che grafico uso per mostrare l'andamento delle vendite nel tempo?", "data-visualization"),
+    ("come preparo il pdf per la stampa con abbondanza e cmyk?", "grafica-per-stampa"),
+    ("come faccio un'animazione css fluida con keyframes e transform?", "css-e-animazioni"),
+    ("il wifi è lento e il router va a scatti, come diagnostico la rete?", "reti-e-wifi"),
+    ("come proteggo gli account con password manager e 2fa dal phishing?", "privacy-e-sicurezza-personale"),
+    ("voglio montare un home server con docker compose e nextcloud", "linux-e-self-hosting"),
+    ("progetto con esp32 e sensore, resistenza per il led", "elettronica-arduino-raspberry"),
+    ("come imposto un backup 3-2-1 con restic?", "backup-e-cloud-storage"),
+    ("scrivi un prompt migliore con esempi few shot per il mio system prompt", "prompt-engineering"),
 ])
 def test_routing_picks_the_right_skill_first_or_second(text, expected):
     assert expected in top(text), (text, top(text))
 
 
-@pytest.mark.parametrize("text", ["ciao come stai", "che ore sono?", "che tempo fa domani a Roma", "grazie mille", "ricordami di chiamare Luca alle 18", "quanto fa 12 per 7", "cosa ho in agenda domani?", "metti un promemoria tra un'ora", "quanto costa un caffè a Milano", "dimmi le ultime notizie"])
+@pytest.mark.parametrize("text", ["ciao come stai", "che ore sono?", "che tempo fa domani a Roma", "grazie mille", "ricordami di chiamare Luca alle 18", "quanto fa 12 per 7", "cosa ho in agenda domani?", "metti un promemoria tra un'ora", "quanto costa un caffè a Milano", "dimmi le ultime notizie", "apri il sito di repubblica", "come si chiama la capitale della Francia?", "raccontami una barzelletta", "che giorno è oggi?"])
 def test_small_talk_and_simple_requests_activate_nothing(text):
     assert top(text) == []
 

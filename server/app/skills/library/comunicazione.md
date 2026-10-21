@@ -75,7 +75,7 @@ name: storytelling
 title: Storytelling e narrazione
 domain: comunicazione
 description: Costruisce storie efficaci per brand, presentazioni, contenuti e racconti: personaggio, conflitto, trasformazione.
-triggers: storytelling, raccontare una storia, storia del brand, racconto, narrazione, come raccontare, about us, la nostra storia, caso di successo, case study, trama
+triggers: storytelling, raccontare una storia, storia del brand, narrazione, come raccontare, about us, la nostra storia, caso di successo, case study, trama
 
 **Metodo**: una storia efficace ha un protagonista con un desiderio, un ostacolo (il conflitto), una svolta e un cambiamento visibile. Parti da un momento concreto (scena, dettaglio, numero), non da una dichiarazione; mostra con fatti anziché aggettivi; il cliente/l'utente è l'eroe, il brand è la guida; chiudi con ciò che è cambiato e un invito all'azione.
 **Struttura breve**: situazione → problema → tentativi falliti → svolta → risultato → cosa significa per chi legge. Nei case study usa dati prima/dopo e una citazione vera.
