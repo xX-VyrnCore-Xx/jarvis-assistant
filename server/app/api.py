@@ -271,6 +271,18 @@ async def unregister_device(request: Request, token: str = Query(min_length=8, m
     return {"ok": True}
 
 
+@router.post("/finetune/export")
+async def finetune_export(request: Request, days: int = Query(180, ge=1, le=730)) -> dict:
+    """Prepara il dataset LoRA (conversazioni ripulite dai dati sensibili) e lo salva cifrato su Hugging Face."""
+    from .finetune import export_dataset
+
+    st = request.app.state
+    try:
+        return await export_dataset(st.settings, st.store, st.backup, days)
+    except RuntimeError as e:
+        raise HTTPException(409, str(e)) from e
+
+
 @router.get("/stream")
 async def stream(request: Request) -> StreamingResponse:
     """Flusso SSE: ogni notifica arriva alle app aperte in tempo reale (heartbeat ogni 20 s per tenere viva la connessione)."""
