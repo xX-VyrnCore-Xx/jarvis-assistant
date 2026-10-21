@@ -5,6 +5,8 @@ import { Speaker } from "@shared/speech.js";
 import { openStream } from "@shared/stream.js";
 import { appVersion, dictationAvailable, haptic, hideSplash, onBack, openExternal, paintSystemBars, platform, startDictation, stopDictation } from "./native.js";
 import { initPush, teardownPush } from "./push.js";
+import { checkPin, cryptoOk, makePin, open as openSealed, seal } from "./secure.js";
+import { showLock } from "./lock.js";
 
 // URL pubblico del server (non è un segreto); il token personale resta nella memoria privata dell'app
 const DEFAULT_URL = "https://jarvis-ai-841t.onrender.com";
@@ -23,7 +25,21 @@ const store = {
   set(k, v) { try { localStorage.setItem(k, v); } catch { /* memoria non disponibile */ } },
   del(k) { try { localStorage.removeItem(k); } catch { /* ignora */ } },
 };
-const cfg = { url: (store.get("jarvis.url") || DEFAULT_URL).replace(/\/+$/, ""), token: store.get("jarvis.token") };
+const cfg = { url: (store.get("jarvis.url") || DEFAULT_URL).replace(/\/+$/, ""), token: "" };
+
+/** Il token sta sul telefono solo cifrato (chiave non esportabile). Al primo avvio dopo l'aggiornamento il vecchio token in chiaro viene cifrato e cancellato. */
+async function loadToken() {
+  const enc = store.get("jarvis.token.enc");
+  if (enc) cfg.token = await openSealed(enc);
+  const legacy = store.get("jarvis.token");
+  if (!cfg.token && legacy) cfg.token = legacy;
+  if (legacy) await saveToken(cfg.token);
+}
+async function saveToken(t) {
+  if (!t) { store.del("jarvis.token.enc"); store.del("jarvis.token"); return; }
+  const sealed = await seal(t);
+  if (sealed) { store.set("jarvis.token.enc", sealed); store.del("jarvis.token"); } else store.set("jarvis.token", t);  // senza WebCrypto (solo browser di prova) resta com'era
+}
 const api = new Jarvis({ url: () => cfg.url, token: () => cfg.token });
 const speaker = new Speaker({ tts: (t) => api.tts(t) });
 const voiceOn = () => store.get("jarvis.speak") !== "0";
@@ -90,6 +106,19 @@ function shell() {
   $app.replaceChildren(el("div", { class: "m-col" }, top, content), tabs);
   // la barra superiore prende rilievo (ombra + vetro più denso) solo quando il contenuto scorre sotto di essa
   $app.addEventListener("scroll", (e) => { const t = e.target; if (t instanceof HTMLElement && t.scrollHeight > t.clientHeight) top.classList.toggle("scrolled", t.scrollTop > 6); }, { capture: true, passive: true });
+  // scorri a sinistra/destra sul contenuto per passare alla sezione accanto (non su campi di testo, righe scorrevoli o fogli aperti)
+  let sx = 0, sy = 0, t0 = 0, ok = false;
+  content.addEventListener("touchstart", (e) => {
+    ok = e.touches.length === 1 && !S.sheets.length && !S.locked && !e.target.closest("input,textarea,.swipe,.m-chips,pre,table,.m-seg,.m-sheet");
+    sx = e.touches[0].clientX; sy = e.touches[0].clientY; t0 = Date.now();
+  }, { passive: true });
+  content.addEventListener("touchend", (e) => {
+    if (!ok) return;
+    const dx = e.changedTouches[0].clientX - sx, dy = e.changedTouches[0].clientY - sy;
+    if (Math.abs(dx) < 90 || Math.abs(dx) < 2.2 * Math.abs(dy) || Date.now() - t0 > 650) return;
+    const j = TABS.findIndex(([id]) => id === S.tab) + (dx < 0 ? 1 : -1);
+    if (TABS[j]) { haptic(); setTab(TABS[j][0]); }
+  }, { passive: true });
   renderTop(); renderTabs();
 }
 
@@ -107,9 +136,10 @@ function renderTop() {
   );
   document.getElementById("m-offline")?.remove();
   document.getElementById("m-update")?.remove();
-  if (S.update?.available) {
-    top.insertAdjacentElement("afterend", el("button", { id: "m-update", class: "m-update", onclick: openUpdate },
-      icon("down", 18), el("span", {}, `Nuova versione ${S.update.latest} disponibile`), el("b", {}, "Aggiorna")));
+  if (updateVisible()) {
+    top.insertAdjacentElement("afterend", el("div", { id: "m-update", class: "m-update", role: "button", tabindex: "0", onclick: openUpdate },
+      icon("down", 18), el("span", {}, `Nuova versione ${S.update.latest}`, S.update.size ? el("small", {}, ` · ${(S.update.size / 1048576).toFixed(1)} MB`) : null), el("b", {}, "Aggiorna"),
+      el("button", { class: "m-x", "aria-label": "Nascondi per un giorno", onclick: (e) => { e.stopPropagation(); store.set("jarvis.updhide", JSON.stringify({ v: S.update.latest, t: Date.now() })); renderTop(); haptic(); } }, icon("x", 15))));
   }
   if (offline) {
     top.insertAdjacentElement("afterend", el("div", { id: "m-offline", class: "m-offline", role: "status" }, icon("offline", 17),
@@ -575,30 +605,60 @@ function buildReminders() {
 }
 
 // ---------------------------------------------------------------- aggiornamenti dell'app
+// ---------------------------------------------------------------- aggiornamenti dell'app
+const WHATS_NEW = [
+  ["lock", "Blocco con PIN", "Sei cifre, schermata di blocco con scossa e attese crescenti; il token è cifrato sul telefono."],
+  ["bell", "Notifiche più chiare", "Raggruppate per giorno, con filtri, avviso in cima allo schermo e colori per tipo."],
+  ["down", "Aggiornamenti più sicuri", "Note di rilascio leggibili, controllo dell'indirizzo di download, «salta questa versione»."],
+  ["sparkle", "Gesti e animazioni", "Scorri a sinistra e a destra per cambiare sezione; transizioni e rimbalzi rifiniti."],
+];
+const skipped = () => store.get("jarvis.skipver");
+function hiddenToday(v) { try { const h = JSON.parse(store.get("jarvis.updhide", "{}")); return h.v === v && Date.now() - h.t < 864e5; } catch { return false; } }
+const updateVisible = () => !!(S.update?.available && skipped() !== S.update.latest && !hiddenToday(S.update.latest));
+const trustedDownload = (u) => /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/releases\/download\/[^\s]+$/.test(u || "");
+
 async function checkUpdate(manual = false) {
   if (!cfg.token || platform !== "android") { if (manual) toast("Gli aggiornamenti si controllano dall'app Android"); return; }
   try {
     S.appVer = S.appVer || await appVersion();
     if (!S.appVer) return;
     S.update = await api.appUpdate("android", S.appVer);
-    if (manual) toast(S.update.available ? `Disponibile la ${S.update.latest}` : "Sei già alla versione più recente");
+    if (manual) { store.del("jarvis.skipver"); store.del("jarvis.updhide"); toast(S.update.available ? `Disponibile la ${S.update.latest}` : "Sei già alla versione più recente"); }
+    whatsNew();
   } catch (e) { if (manual) toast(errText(e), true); }
   renderTop();
   if (S.tab === "more") renderTab();
 }
 
+/** Dopo un aggiornamento (versione diversa dall'ultima vista) mostra una volta cosa è cambiato. */
+function whatsNew() {
+  const last = store.get("jarvis.lastver");
+  if (last === S.appVer) return;
+  store.set("jarvis.lastver", S.appVer);
+  if (!last) return;  // prima installazione: niente
+  openSheet(`Novità della ${S.appVer}`, el("div", { class: "wn" }, WHATS_NEW.map(([ic, t, d], i) => el("div", { class: "wn-row", style: `--i:${i}` }, el("span", { class: "m-note-ic" }, icon(ic, 18)), el("div", {}, el("b", {}, t), el("p", {}, d))))),
+    el("div", { class: "m-btns" }, el("button", { class: "m-primary", onclick: () => S.sheets.at(-1)?.close() }, "Ottimo")));
+}
+
 function openUpdate() {
   const u = S.update;
   if (!u?.available) return toast("Nessun aggiornamento disponibile");
-  const notes = (u.notes || "").replace(/[#*`]/g, "").trim().slice(0, 700);
-  const s = openSheet(`JARVIS ${u.latest}`,
-    el("small", { class: "m-note" }, `Installata: ${u.current}${u.size ? ` · download ${(u.size / 1048576).toFixed(1)} MB` : ""}`),
-    notes ? el("div", { class: "notes-list", style: "white-space:pre-wrap;max-height:34vh" }, notes) : null,
-    el("p", { class: "m-note" }, "Si scarica l'APK dal sito ufficiale del progetto; poi Android chiede di installarlo sopra l'app attuale. I tuoi dati restano."),
-    u.sha256 ? el("small", { class: "m-note", style: "word-break:break-all" }, `SHA-256: ${u.sha256}`) : null,
+  const notes = (u.notes || "").replace(/(^|\n)#{1,3} Installazione[\s\S]*?(?=\n#{1,3} |$)/, "").replace(/^#{1,6}\s*(.+)$/gm, "**$1**").trim().slice(0, 900);
+  const copy = () => navigator.clipboard?.writeText(u.sha256).then(() => toast("SHA-256 copiato")).catch(() => toast("Copia non riuscita", true));
+  const s = openSheet("Aggiornamento disponibile",
+    el("div", { class: "ver-line" }, el("span", { class: "ver" }, u.current), el("span", { class: "ver-arrow" }, icon("down", 18)), el("span", { class: "ver new" }, u.latest)),
+    el("div", { class: "m-chips-row" }, u.size ? el("span", { class: "pill" }, `${(u.size / 1048576).toFixed(1)} MB`) : null, u.published_at ? el("span", { class: "pill" }, fmtDate(u.published_at)) : null,
+      u.sha256 ? el("span", { class: "pill ok" }, icon("shield", 13), "SHA-256 verificabile") : null),
+    notes ? el("div", { class: "upd-notes" }, markdown(notes)) : null,
+    el("ol", { class: "upd-steps" }, el("li", {}, "Scarica l'APK dal sito ufficiale del progetto."), el("li", {}, "Aprilo e consenti l'installazione da questa origine."), el("li", {}, "Installa sopra l'app attuale: dati e impostazioni restano.")),
+    u.sha256 ? el("button", { class: "sha", onclick: copy, "aria-label": "Copia SHA-256" }, el("small", {}, "SHA-256"), el("code", {}, `${u.sha256.slice(0, 16)}…${u.sha256.slice(-8)}`), icon("copy", 14)) : null,
     el("div", { class: "m-btns" },
-      el("button", { class: "m-ghost", onclick: () => { s.close(); openExternal(u.page); } }, "Note di rilascio"),
-      el("button", { class: "m-primary", onclick: () => { haptic("medium"); s.close(); openExternal(u.url); } }, "Scarica e installa")));
+      el("button", { class: "m-ghost", onclick: () => { store.set("jarvis.updhide", JSON.stringify({ v: u.latest, t: Date.now() })); s.close(); renderTop(); } }, "Più tardi"),
+      el("button", { class: "m-primary", onclick: () => {
+        if (!trustedDownload(u.url)) { toast("Indirizzo di download non attendibile: non lo apro.", true); return haptic("heavy"); }
+        haptic("medium"); s.close(); openExternal(u.url);
+      } }, "Scarica e installa")),
+    el("button", { class: "m-linkbtn", onclick: () => { store.set("jarvis.skipver", u.latest); s.close(); renderTop(); renderTab(); toast(`Salto la ${u.latest}: ti avviso alla prossima`); } }, "Salta questa versione"));
 }
 
 // ---------------------------------------------------------------- competenze
@@ -647,6 +707,49 @@ async function openModelPicker() {
 // ---------------------------------------------------------------- altro
 function row(label, value, ok) { return el("div", { class: "m-row" }, el("span", {}, label), el("b", { class: ok === undefined ? "" : ok ? "ok" : "off" }, value)); }
 
+// ---------------------------------------------------------------- sicurezza: PIN, blocco automatico, copertura nelle app recenti
+const pinSet = () => !!store.get("jarvis.pin");
+const autolock = () => Number(store.get("jarvis.autolock", "30"));
+const privacyOn = () => store.get("jarvis.privacy", "1") !== "0";
+
+function pinSheet(title, hint, onDone, { confirm = false } = {}) {
+  const a = el("input", { type: "password", inputmode: "numeric", maxlength: "6", autocomplete: "off", placeholder: "••••••", "aria-label": "PIN" });
+  const b = confirm ? el("input", { type: "password", inputmode: "numeric", maxlength: "6", autocomplete: "off", placeholder: "Ripeti il PIN", "aria-label": "Ripeti il PIN" }) : null;
+  const err = el("p", { class: "m-note bad" });
+  const s = openSheet(title, el("p", { class: "m-note" }, hint), el("div", { class: "m-card form pin-form" }, a, b), err,
+    el("div", { class: "m-btns" }, el("button", { class: "m-ghost", onclick: () => s.close() }, "Annulla"),
+      el("button", { class: "m-primary", onclick: async () => {
+        if (!/^\d{6}$/.test(a.value)) { err.textContent = "Servono esattamente 6 cifre."; return haptic("heavy"); }
+        if (b && a.value !== b.value) { err.textContent = "I due PIN non coincidono."; return haptic("heavy"); }
+        if (await onDone(a.value, err) !== false) s.close();
+      } }, "Conferma")));
+  setTimeout(() => a.focus(), 350);
+}
+
+function securityCard() {
+  const lockSwitch = el("input", { type: "checkbox", class: "m-switch", "aria-label": "Blocco con PIN", checked: pinSet(), onchange: (e) => {
+    const box = e.target;
+    if (box.checked) pinSheet("Imposta il PIN", "Sei cifre. Lo chiedo all'apertura e dopo il tempo che scegli in background. Non lascia mai il telefono.", async (pin) => {
+      store.set("jarvis.pin", await makePin(pin)); store.set("jarvis.lockfails", "0"); toast("Blocco attivato"); haptic("medium"); renderTab();
+    }, { confirm: true });
+    else pinSheet("Disattiva il blocco", "Inserisci il PIN attuale.", async (pin, err) => {
+      if (!(await checkPin(pin, store.get("jarvis.pin")))) { err.textContent = "PIN errato."; haptic("heavy"); return false; }
+      store.del("jarvis.pin"); toast("Blocco disattivato"); renderTab();
+    });
+    box.checked = !box.checked;  // lo stato vero lo decide la schermata dopo la conferma
+    haptic();
+  } });
+  const autoSeg = el("div", { class: "m-seg", role: "group", "aria-label": "Blocca dopo" }, [["0", "Subito"], ["30", "30 s"], ["300", "5 min"]].map(([v, l]) =>
+    el("button", { class: String(autolock()) === v ? "on" : "", onclick: (e) => { store.set("jarvis.autolock", v); autoSeg.querySelectorAll("button").forEach((x) => x.classList.toggle("on", x === e.currentTarget)); haptic(); } }, l)));
+  const privSwitch = el("input", { type: "checkbox", class: "m-switch", "aria-label": "Nascondi il contenuto nelle app recenti", checked: privacyOn(),
+    onchange: (e) => { store.set("jarvis.privacy", e.target.checked ? "1" : "0"); haptic(); } });
+  return el("div", { class: "m-card" },
+    el("label", { class: "m-row" }, el("span", {}, "Blocco con PIN"), lockSwitch),
+    pinSet() ? el("div", { class: "m-row stack" }, el("span", {}, "Blocca dopo"), autoSeg) : null,
+    el("label", { class: "m-row" }, el("span", {}, "Nascondi il contenuto nelle app recenti"), privSwitch),
+    el("p", { class: "m-note" }, cryptoOk() ? "🔐 Il token personale è cifrato sul telefono con una chiave che l'app non può esportare." : "Cifratura del token non disponibile in questo browser."));
+}
+
 function buildMore() {
   const st = S.status;
   const url = el("input", { type: "text", value: cfg.url, spellcheck: "false", autocapitalize: "off", "aria-label": "Indirizzo del server" });
@@ -660,7 +763,7 @@ function buildMore() {
   };
   const save = () => {
     cfg.url = url.value.trim().replace(/\/+$/, ""); cfg.token = token.value.trim();
-    store.set("jarvis.url", cfg.url); store.set("jarvis.token", cfg.token);
+    store.set("jarvis.url", cfg.url); saveToken(cfg.token);
     toast("Salvato"); start();
   };
   const pref = store.get("jarvis.theme", "auto");
@@ -673,6 +776,8 @@ function buildMore() {
     el("h3", { class: "m-sub" }, "Collegamento"),
     el("div", { class: "m-card form" }, el("label", {}, "Indirizzo del server", url), el("label", {}, "Token personale", token),
       el("div", { class: "m-btns" }, el("button", { class: "m-ghost", onclick: test }, "Prova"), el("button", { class: "m-primary", onclick: save }, "Salva")), out),
+    el("h3", { class: "m-sub" }, "Sicurezza"),
+    securityCard(),
     el("h3", { class: "m-sub" }, "Aspetto"),
     el("div", { class: "m-card" }, seg),
     el("h3", { class: "m-sub" }, "Aggiornamenti"),
@@ -699,7 +804,7 @@ function buildMore() {
       row("Memoria", st ? (st.memory === "supabase" ? "permanente" : "temporanea") : "—", st ? st.memory === "supabase" : undefined),
       st ? row("Attivo da", fmtUptime(st.uptime_s)) : null),
     el("div", { class: "m-card safe" }, icon("shield", 20), el("p", {}, "Le azioni sensibili, come inviare un'email o eliminare un evento, richiedono sempre la tua conferma.")),
-    el("button", { class: "m-danger", onclick: () => { teardownPush(api).catch(() => {}); store.del("jarvis.token"); cfg.token = ""; stop(); renderTab(); toast("Token rimosso da questo telefono"); } }, "Rimuovi il token da questo telefono"),
+    el("button", { class: "m-danger", onclick: () => { teardownPush(api).catch(() => {}); saveToken(""); cfg.token = ""; stop(); renderTab(); toast("Token rimosso da questo telefono"); } }, "Rimuovi il token da questo telefono"),
     el("p", { class: "m-about" }, st ? `JARVIS · server v${st.version}` : "JARVIS"));
 }
 
@@ -715,21 +820,60 @@ async function loadNotes() {
   if (notesSheet) fillNotes();
 }
 
+const HAPTIC = { alert: "heavy", pending: "heavy", reminder: "medium" };
+let headsTimer = 0;
+
+/** Avviso in cima allo schermo mentre l'app è aperta: scende con la molla, si tocca per aprire la sezione, si scaccia con un gesto verso l'alto. */
+function headsUp(n) {
+  document.getElementById("m-heads")?.remove(); clearTimeout(headsTimer);
+  const go = () => { box.remove(); const tab = ROUTE_TAB[n.meta?.route]; if (n.kind === "update") openUpdate(); else if (tab) setTab(tab); else openNotes(); };
+  const box = el("div", { id: "m-heads", class: `heads k-${n.kind}`, role: "alert", onclick: go },
+    el("span", { class: "m-note-ic" }, icon(KIND[n.kind] || "bell", 20)),
+    el("div", {}, el("b", {}, n.title), n.body ? el("p", {}, n.body) : null),
+    el("small", {}, "adesso"));
+  let y0 = null, dy = 0;
+  box.addEventListener("touchstart", (e) => { y0 = e.touches[0].clientY; dy = 0; }, { passive: true });
+  box.addEventListener("touchmove", (e) => { if (y0 == null) return; dy = Math.min(0, e.touches[0].clientY - y0); box.style.transform = `translateY(${dy}px)`; box.style.opacity = String(1 + dy / 120); }, { passive: true });
+  box.addEventListener("touchend", () => { if (dy < -40) { box.classList.add("gone"); setTimeout(() => box.remove(), 250); } else { box.style.transform = ""; box.style.opacity = ""; } y0 = null; });
+  document.body.append(box);
+  requestAnimationFrame(() => box.classList.add("in"));
+  headsTimer = setTimeout(() => { box.classList.add("gone"); setTimeout(() => box.remove(), 300); }, n.kind === "alert" || n.kind === "pending" ? 9000 : 5500);
+}
+
 function onNote(n) {
   if (S.notes.some((x) => x.id === n.id)) return;
   if (n.kind === "update") checkUpdate();
   S.notes.unshift(n);
   renderTop();
-  haptic("heavy");
-  if (notesSheet) fillNotes(); else toast(n.title);
+  haptic(HAPTIC[n.kind] || "light");
+  const bell = top?.querySelector(".m-bell");
+  if (bell) { bell.classList.remove("ring"); void bell.offsetWidth; bell.classList.add("ring"); }
+  if (notesSheet) fillNotes(); else headsUp(n);
 }
+
+const NOTE_FILTERS = [["all", "Tutte"], ["unread", "Non lette"], ["reminder", "Promemoria"], ["alert", "Avvisi"], ["proactive", "Suggerimenti"], ["update", "Aggiornamenti"]];
+const dayLabel = (iso) => {
+  const d = new Date(iso), now = new Date();
+  return d.toDateString() === now.toDateString() ? "Oggi" : d.toDateString() === new Date(Date.now() - 864e5).toDateString() ? "Ieri" : d.toLocaleDateString("it-IT", { weekday: "long", day: "numeric", month: "long" });
+};
 
 function fillNotes() {
   const body = notesSheet.sheet.querySelector(".notes-list");
-  body.replaceChildren(...(S.notes.length
-    ? S.notes.map((n) => el("div", { class: `m-note-row${n.read ? "" : " unread"}` }, el("span", { class: "m-note-ic" }, icon(KIND[n.kind] || "bell", 18)),
-      el("div", {}, el("b", {}, n.title), n.body ? el("p", {}, n.body) : null, el("small", {}, fmtDate(n.created_at)), noteActions(n))))
-    : [el("div", { class: "m-empty" }, el("div", { class: "ico" }, icon("bell", 30)), "Nessuna notifica.")]));
+  const f = S.noteFilter || "all";
+  notesSheet.sheet.querySelectorAll(".note-chips button").forEach((b) => b.classList.toggle("on", b.dataset.f === f));
+  const rows = S.notes.filter((n) => f === "all" || (f === "unread" ? !n.read : f === "alert" ? ["alert", "pending"].includes(n.kind) : f === "proactive" ? ["proactive", "brain", "info"].includes(n.kind) : n.kind === f));
+  if (!rows.length) return body.replaceChildren(el("div", { class: "m-empty" }, el("div", { class: "ico" }, icon("bell", 30)), f === "all" ? "Nessuna notifica." : "Nessuna notifica in questa categoria."));
+  const out = []; let day = "";
+  rows.forEach((n, i) => {
+    const d = dayLabel(n.created_at);
+    if (d !== day) { day = d; out.push(el("h3", { class: "m-sub note-day" }, d)); }
+    const tab = ROUTE_TAB[n.meta?.route];
+    out.push(el("div", { class: `m-note-row k-${n.kind}${n.read ? "" : " unread"}`, style: `--i:${Math.min(i, 12)}`,
+      onclick: (e) => { if (e.target.closest("button")) return; if (n.kind === "update") { notesSheet?.close(); openUpdate(); } else if (tab) { notesSheet?.close(); setTab(tab); } } },
+      el("span", { class: "m-note-ic" }, icon(KIND[n.kind] || "bell", 18)),
+      el("div", {}, el("div", { class: "nt" }, el("b", {}, n.title), el("small", {}, clock(new Date(n.created_at)))), n.body ? el("p", {}, n.body) : null, noteActions(n))));
+  });
+  body.replaceChildren(...out);
 }
 
 function noteActions(n) {
@@ -744,7 +888,8 @@ function noteActions(n) {
 function openNotes() {
   if (notesSheet) return;
   const list = el("div", { class: "notes-list" });
-  const s = openSheet("Notifiche", list, el("div", { class: "m-btns" },
+  const chipsRow = el("div", { class: "note-chips m-chips" }, NOTE_FILTERS.map(([v, l]) => el("button", { "data-f": v, onclick: () => { S.noteFilter = v; haptic(); fillNotes(); } }, l)));
+  const s = openSheet("Notifiche", chipsRow, list, el("div", { class: "m-btns" },
     el("button", { class: "m-ghost", onclick: async () => { try { await api.testNotification(); } catch (e) { toast(errText(e), true); } } }, "Prova"),
     el("button", { class: "m-primary", onclick: async () => { try { await api.markRead(null); S.notes.forEach((n) => (n.read = true)); renderTop(); fillNotes(); } catch (e) { toast(errText(e), true); } } }, "Segna lette")));
   const close = s.close;
@@ -795,15 +940,35 @@ function start() {
   });
   initPush(api, (route) => { if (ROUTE_TAB[route]) setTab(ROUTE_TAB[route]); }).catch(() => {});
   checkUpdate();
-  timers = [setInterval(refreshStatus, 30_000), setInterval(pollPending, 5_000)];
+  timers = [setInterval(refreshStatus, 30_000), setInterval(pollPending, 5_000), setInterval(checkUpdate, 6 * 3600_000)];
 }
 function stop() { closeStream?.(); closeStream = null; timers.forEach(clearInterval); timers = []; S.status = null; S.checked = false; S.online = false; S.pending = []; renderTop(); renderPending(); }
 
-// risparmia batteria e dati: nulla gira con l'app in secondo piano
-document.addEventListener("visibilitychange", () => { if (document.hidden) { speaker.stop(); closeStream?.(); closeStream = null; timers.forEach(clearInterval); timers = []; } else start(); });
+// risparmia batteria e dati: nulla gira con l'app in secondo piano; con il blocco attivo, dopo il tempo scelto serve il PIN
+let hiddenAt = 0;
+async function lockIfNeeded(force = false) {
+  const rec = store.get("jarvis.pin");
+  if (!rec || S.locked) return;
+  if (!force && Date.now() - hiddenAt < autolock() * 1000) return;
+  S.locked = true; stop();
+  await showLock({ store, record: rec, orb });
+  S.locked = false;
+}
+document.addEventListener("visibilitychange", async () => {
+  if (document.hidden) {
+    hiddenAt = Date.now();
+    document.body.classList.toggle("privacy", privacyOn());  // copre il contenuto nella schermata delle app recenti
+    speaker.stop(); closeStream?.(); closeStream = null; timers.forEach(clearInterval); timers = [];
+  } else {
+    document.body.classList.remove("privacy");
+    await lockIfNeeded();
+    if (!S.locked) start();
+  }
+});
 
 // tasto Indietro: chiude i fogli, poi torna alla chat, poi mette l'app in secondo piano
 onBack(() => {
+  if (S.locked) return true;
   const sheet = S.sheets[S.sheets.length - 1];
   if (sheet) { sheet.close(); return true; }
   if (S.tab !== "chat") { setTab("chat"); return true; }
@@ -812,8 +977,13 @@ onBack(() => {
 
 applyTheme();
 shell();
-if (!cfg.token) S.tab = "more";
 renderTabs(); renderTab();
-if (cfg.token) start();
-dictationAvailable().then((ok) => { S.canMic = ok; if (micBtn) micBtn.style.display = ok ? "" : "none"; });
+(async () => {
+  await loadToken();
+  if (!cfg.token) S.tab = "more";
+  renderTabs(); renderTab();
+  await lockIfNeeded(true);  // all'apertura, con il PIN attivo, si parte bloccati
+  if (cfg.token) start();
+  dictationAvailable().then((ok) => { S.canMic = ok; if (micBtn) micBtn.style.display = ok ? "" : "none"; });
+})();
 setTimeout(hideSplash, 350);
