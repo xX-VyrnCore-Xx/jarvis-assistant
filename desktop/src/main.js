@@ -7,6 +7,7 @@ import { Speaker } from "@shared/speech.js";
 import { openStream } from "@shared/stream.js";
 import { initVoice, installVoice, onVoiceChange, removeVoice, synth, toBase64, voice } from "./voice.js";
 import { clearToken, loadToken, saveToken } from "./secrets.js";
+import { runWizard } from "./wizard.js";
 
 // URL pubblico del server (non è un segreto); il token personale sta nel Gestore credenziali
 const DEFAULT_URL = "https://jarvis-ai-841t.onrender.com";
@@ -461,6 +462,7 @@ function buildSettings() {
     isTauri ? el("label", { class: "check" }, autostart, "Avvia JARVIS con Windows (resta nella barra delle applicazioni)") : null,
     el("div", { class: "row" }, el("button", { class: "btn danger", onclick: async () => { await clearToken(); cfg.token = ""; token.value = ""; stop(); toast("Token rimosso da questo computer"); } }, "Rimuovi il token da questo PC")),
     el("p", { class: "tiny" }, "Scorciatoia: Alt+Spazio mostra o nasconde la finestra."),
+    isTauri ? el("div", { class: "row" }, el("button", { class: "btn danger", title: "Chiude JARVIS, la voce e tutti i suoi processi", onclick: () => invoke("quit_app").catch((e) => toast(String(e), true)) }, "Esci definitivamente")) : null,
   );
 }
 
@@ -568,16 +570,21 @@ function stop() {
   const { token, where } = await loadToken();
   cfg.token = token; cfg.where = where;
   shell();
-  if (isTauri && !localStorage.getItem("jarvis.init")) { // al primo avvio: parte con Windows
+  const firstRun = isTauri && !cfg.token && !localStorage.getItem("jarvis.wizard"); // installazione nuova: procedura guidata
+  if (isTauri && !localStorage.getItem("jarvis.init") && !firstRun) { // chi aggiorna da una versione precedente: parte con Windows come prima
     localStorage.setItem("jarvis.init", "1");
     invoke("autostart_set", { enabled: true }).catch(() => {});
   }
+  if (isTauri && cfg.token) localStorage.setItem("jarvis.wizard", "1");
   if (!cfg.token) S.view = "settings";
   renderRail(); renderView();
   if (cfg.token) start();
   await initVoice();
+  if (firstRun) {
+    runWizard({ cfg, api, invoke, saveToken, errText, installVoice, onDone: (r) => { renderRail(); renderView(); if (cfg.token) start(); if (r.voice) setView("settings"); } });
+  }
   onVoiceChange(() => { if (ws?.readyState === 1) ws.send(JSON.stringify({ type: "caps", voice: voice.installed })); });
-  if (isTauri && !voice.installed && !voice.installing && !localStorage.getItem("jarvis.voice.asked")) {
+  if (isTauri && !firstRun && !voice.installed && !voice.installing && !localStorage.getItem("jarvis.voice.asked")) {
     localStorage.setItem("jarvis.voice.asked", "1");
     const o = el("div", { class: "overlay" }, el("div", { class: "dialog", role: "dialog" },
       el("div", { class: "dlg-icon" }, icon("volume", 28)), el("h2", {}, "Voce di JARVIS"),

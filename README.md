@@ -66,6 +66,9 @@ Permessi richiesti: Gmail lettura + bozze/invio, Calendar, Drive in sola lettura
 
 ## App Windows
 `desktop/` (Tauri). L'installer `.exe` è prodotto dalla CI (artifact `JARVIS-windows-installer`).
+- **Installer** (NSIS, in italiano, per l'utente corrente, senza permessi di amministratore): immagini dedicate, cartella JARVIS nel menu Start; prima di installare, aggiornare o disinstallare chiude da solo JARVIS (voce compresa) così i file in uso si sostituiscono senza errori.
+- **Primo avvio**: procedura guidata in quattro passi (benvenuto → collegamento con prova del token → preferenze: avvio con Windows e voce parlata → voce locale opzionale).
+- **Uscita**: la X nasconde la finestra; «Esci definitivamente» (icona nella barra o Impostazioni) chiude voce, installazione in corso e tutti i processi figli (`taskkill /T`), toglie l'icona e termina il processo (con terminazione forzata dopo 3 secondi se qualcosa resta appeso). Una sola copia dell'app alla volta: riaprirla porta davanti quella già attiva.
 Al primo avvio apri ⚙ e inserisci URL del server e `JARVIS_API_TOKEN`. `Alt+Spazio` mostra/nasconde la finestra.
 Sviluppo: `cd desktop && npm install && npm run tauri dev` (richiede Rust).
 

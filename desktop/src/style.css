@@ -160,3 +160,13 @@ button, input, textarea { font: inherit; color: inherit; }
 .brain-text { margin: 0; max-height: 46vh; overflow: auto; white-space: pre-wrap; font: 13px/1.55 var(--mono); color: var(--text); opacity: .9; }
 
 .side-card.update { display: flex; align-items: center; gap: 8px; border-color: var(--cy); } .side-card.update span { flex: 1; }
+
+/* procedura guidata del primo avvio */
+.dialog.wizard { width: min(480px, 94vw); text-align: center; }
+.wiz-dots { display: flex; justify-content: center; gap: 8px; margin-bottom: 16px; }
+.wiz-dot { width: 26px; height: 4px; border-radius: 3px; background: var(--line); transition: .25s; } .wiz-dot.done { background: rgba(62, 224, 255, .45); } .wiz-dot.on { background: var(--cy); box-shadow: 0 0 10px var(--cy); }
+.wiz-list { text-align: left; margin: 6px 0 4px; padding-left: 20px; font-size: 14px; color: var(--text); opacity: .9; } .wiz-list li { margin: 7px 0; }
+.wiz-left { text-align: left; }
+.dialog.wizard .row.end { margin-top: 20px; }
+.dialog .tiny.ok { color: var(--ok, #5cf2a6); } .dialog .tiny.bad { color: var(--bad); }
+.btn:disabled { opacity: .45; cursor: default; }
