@@ -16,7 +16,7 @@ GROUPS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     "web": (("web_news", "read_webpage", "wikipedia", "get_weather"),
             ("notizie", "news", "meteo", "piove", "pioggia", "temperatura", "previsioni", "wikipedia", "chi è", "cos'è", "cosa è", "che cos'è", "sito", "pagina", "http", "leggi", "ultime", "attualità", "fa caldo", "fa freddo")),
     "coding": (("code_*",), ("coding", "codice", "programma", "programmare", "sandbox", "repo", "repository", "github", "commit", "pull request", "branch", "merge", "crea un progetto", "sviluppa", "scrivi il codice",
-                              "implementa", "sessione di coding", "applicazione", "sito web", "script", "bug", "refactor", "ci verde", "test automatici")),
+                              "implementa", "sessione di coding", "applicazione", "sito web", "script", "bug", "refactor", "ci verde", "test automatici", "elimina il repo", "elimina la repo", "cancella il repo", "lista dei repo", "issue", "rilascio", "release")),
     "notizie": (("news_headlines", "feed_list", "feed_add", "feed_remove", "jarvis_status"),
                 ("notizie", "news", "ultime notizie", "cosa succede", "cosa è successo", "successo oggi", "oggi nel mondo", "attualità", "titoli", "giornale", "giornali", "rss", "feed",
                  "terremoto", "terremoti", "sisma", "breaking", "ultim'ora", "aggiornato", "aggiornamento", "aggiornati", "versione", "release", "ti sei aggiornato", "stato di jarvis")),
