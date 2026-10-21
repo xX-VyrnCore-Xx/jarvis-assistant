@@ -180,6 +180,7 @@ async def maintenance_loop(settings: Settings, store: Store, usage, updates, not
         beat("manutenzione", 300)
         try:
             await usage.flush(store)
+            await store.set_setting("last_alive", datetime.now(ZoneInfo("UTC")).isoformat(timespec="seconds"))  # per l'avviso «sono di nuovo online» dopo un'interruzione
             if reminders is not None:  # il Calendario comanda: spostamenti ed eliminazioni arrivano nell'app, e i promemoria senza evento ne ricevono uno
                 try:
                     await reminders.sync()  # l'esito e l'eventuale causa dell'errore restano in reminders.status (e nei log, una volta per causa)

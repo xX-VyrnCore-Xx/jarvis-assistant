@@ -201,7 +201,8 @@ class Notifier:
         icon = {"reminder": "⏰", "alert": "⚠️", "pending": "🔐", "update": "🆕", "brain": "🧠", "proactive": "💡", "info": "ℹ️"}.get(kind, "🔔")
         title = row["title"] if not row["title"] or row["title"][0] in "⏰⚠🔐🆕🧠💡ℹ" else f"{icon} {row['title']}"
         plain = f"{title}\n{row['body']}".strip()
-        text = f"**{title}**\n{row['body']}".strip()  # il bot lo trasforma in grassetto
+        quoted = "\n".join(f"> {ln}" if ln.strip() else ">" for ln in row["body"].strip().splitlines())
+        text = f"**{title}**\n{quoted}".strip()  # il bot lo trasforma in grassetto, il corpo in citazione
         if kind == "reminder" and row.get("id"):
             await self.tg.send_buttons(self.tg.s.telegram_owner_id, plain, [("⏰ +10 min", f"rs:{row['id']}:10"), ("⏰ +1 ora", f"rs:{row['id']}:60"), ("✔ Fatto", f"rs:{row['id']}:0")])
         elif kind == "update" and meta.get("url"):

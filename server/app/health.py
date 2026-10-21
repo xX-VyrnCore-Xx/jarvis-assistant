@@ -77,6 +77,9 @@ def heartbeat_line(app, now: float | None = None) -> str:
              f"modelli oggi {t['requests']} ({t['errors']} err, {t['avg_latency_ms'] / 1000:.1f} s)",
              f"cervello {len(st.brain.index)} frammenti", f"app in diretta {st.notifier.listeners}",
              f"conferme {len(st.pending.list_pending())}"]
+    tgh = getattr(getattr(st, "tg", None), "health", None) or {}
+    if tgh.get("mode"):
+        parts.append(f"telegram {tgh['mode']} {'ok' if tgh.get('url_ok') and not tgh.get('last_error') else 'PROBLEMA: ' + (tgh.get('last_error') or 'webhook diverso')[:50]}")
     bad = stale_loops(now)
     parts.append("cicli ok" if not bad else "CICLI FERMI: " + ", ".join(f"{n} ({m} min)" for n, m in bad))
     return " | ".join(parts)

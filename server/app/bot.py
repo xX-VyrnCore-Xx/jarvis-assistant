@@ -41,21 +41,22 @@ COMMANDS = [
     ("nuova", "Azzera la conversazione"),
 ]
 
-HELP = """<b>JARVIS a sua disposizione, {owner}.</b>
-Mi scriva (o mi mandi un vocale) in linguaggio naturale: agenda, email, meteo, ricerche, promemoria, calcoli, controllo del PC.
+HELP = """<b>🤖 JARVIS a sua disposizione, {owner}.</b>
+Mi scriva (o mi mandi un vocale) in linguaggio naturale: agenda, email, meteo, notizie in tempo reale, ricerche, promemoria, calcoli, programmazione, controllo del PC.
 
-<b>Ogni giorno</b>
-/oggi — il punto di oggi · /agenda — impegni · /email — non lette
-/promemoria · /liste — attività · /riepilogo — il buongiorno
+<b>📅 Ogni giorno</b>
+/oggi · /agenda · /email · /promemoria · /liste · /riepilogo
 
-<b>Secondo cervello</b>
-/nota testo · /cerca testo · /impara argomento · /ricordi · /profilo · /cervello
+<b>🧠 Secondo cervello</b>
+/nota · /cerca · /impara · /ricordi · /profilo · /cervello
 
-<b>Sistema</b>
-/proattivo — avvisi automatici · /impostazioni — notifiche · /modello
-/uso · /token · /stato · /salute · /aggiornamenti · /nuova
+<b>🛠 Competenze</b>
+/skills · /skill nome richiesta
 
-Esempi: «Che tempo fa a Roma domani?», «Ricordami alle 18 di chiamare Luca», «Cosa so di Luca?», «Studia la fotosintesi».
+<b>⚙️ Sistema</b>
+/proattivo · /impostazioni · /modello · /uso · /token · /stato · /salute · /aggiornamenti · /nuova
+
+<blockquote>«Che notizie ci sono oggi?» · «Ricordami alle 18 di chiamare Luca» · «Cosa so di Luca?» · «Crea un progetto Python su GitHub»</blockquote>
 I tasti qui sotto portano ai comandi più usati."""
 
 MENU = {"📅 Agenda": "agenda", "✉️ Email": "email", "✅ Attività": "liste", "🧠 Cervello": "cervello", "📊 Consumo": "uso", "⚙️ Impostazioni": "impostazioni"}
@@ -70,6 +71,7 @@ class TelegramBot:
         self._locks: OrderedDict[int, asyncio.Lock] = OrderedDict()
         self._replies: OrderedDict[tuple[int, int], tuple[str, str]] = OrderedDict()  # (chat, messaggio) -> (domanda, risposta)
         self._models: list[str] = []
+        self.last_update_at = 0.0
 
     @property
     def tg(self):
@@ -91,6 +93,7 @@ class TelegramBot:
         return src.get("id") == self.s.telegram_owner_id
 
     async def handle_update(self, update: dict) -> None:
+        self.last_update_at = time.time()
         uid = update.get("update_id")
         if uid is not None:
             if uid in self._seen:  # Telegram rinvia l'aggiornamento se la risposta tarda
@@ -121,7 +124,7 @@ class TelegramBot:
             cmd = text.split()[0][1:].split("@")[0].lower()
             return await self._command(chat_id, cmd, text.partition(" ")[2].strip())
         async with self._lock(chat_id):
-            await self._ask(chat_id, text)
+            await self._ask(chat_id, text, user_mid=msg.get("message_id", 0))
 
     async def _voice(self, chat_id: int, voice: dict) -> None:
         """Vocali: li trascrive con il router (/v1/audio/transcriptions) e poi risponde come a un messaggio scritto."""
@@ -147,8 +150,11 @@ class TelegramBot:
         while len(self._replies) > 60:
             self._replies.popitem(last=False)
 
-    async def _ask(self, chat_id: int, text: str, skill: str | None = None) -> None:
-        """Risposta in diretta: un messaggio che si riempie man mano (e mostra lo strumento in uso), poi formattato con i pulsanti."""
+    async def _ask(self, chat_id: int, text: str, skill: str | None = None, user_mid: int = 0) -> None:
+        """Risposta in diretta: un messaggio che si riempie man mano (e mostra lo strumento in uso), poi formattato con i pulsanti.
+        Il messaggio dell'utente riceve subito un 👀 («ricevuto»), tolto a risposta pronta."""
+        if user_mid:
+            asyncio.create_task(self.tg.react(chat_id, user_mid, "👀"))
         async def typing() -> None:
             while True:
                 try:
@@ -160,7 +166,7 @@ class TelegramBot:
         indicator = asyncio.create_task(typing())
         mid, buf, final, status, last, shown = 0, "", "", "", 0.0, ""
         try:
-            mid = await self.tg.send_id(chat_id, "…", silent=True)
+            mid = await self.tg.send_id(chat_id, "💭 Ci sto pensando…", silent=True)
             model = await self.app.state.store.get_setting("tg_model") or None
             async for kind, data in self.app.state.agent.reply_stream(text, f"tg-{chat_id}", model=model, skills=[skill] if skill else None):
                 if kind == "status":
@@ -182,6 +188,8 @@ class TelegramBot:
             final = "Si è verificato un problema, signore. Riprovi tra un momento."
         finally:
             indicator.cancel()
+            if user_mid:
+                asyncio.create_task(self.tg.react(chat_id, user_mid, None))
         final = final or buf or "…"
         from .telegram import split_text
 
@@ -208,19 +216,7 @@ class TelegramBot:
         if cmd == "proattivo":
             return await self._proactive(chat_id)
         if cmd == "stato":
-            s = self.s
-            lines = [
-                "<b>Stato dei sistemi</b>",
-                f"• Intelligenza: {'pronta' if (await st.admin.ready() if st.budget.enabled else True) else 'in avvio'}",
-                f"• PC Windows: {'collegato' if st.pc.connected else 'scollegato'}",
-                f"• Voce sul PC: {'sì' if st.voice.enabled else 'no'}",
-                f"• Google: {'collegato' if st.google.enabled else 'non collegato (usa /google)' if st.google.has_client else 'non configurato'}",
-                f"• Notifiche push Android: {'attive' if st.notifier.fcm.enabled else 'non configurate'}",
-                f"• Backup su Hugging Face: {'attivo' if st.backup.enabled else 'non configurato'}",
-                f"• Memoria: {'permanente (Supabase)' if s.supabase_url and s.supabase_service_key else 'temporanea'}",
-                f"• Conferme in attesa: {len(st.pending.list_pending())}",
-            ]
-            return await self.tg.send(chat_id, "\n".join(lines))
+            return await self._status(chat_id)
         if cmd == "token":
             if not st.budget.enabled:
                 return await self.tg.send(chat_id, "FreeLLMAPI non è in questo server, signore.")
@@ -233,9 +229,15 @@ class TelegramBot:
             if not rows:
                 return await self.tg.send(chat_id, "Nessun promemoria attivo, signore.")
             tz = ZoneInfo(self.s.timezone)
-            body = "\n".join(f"• {datetime.fromisoformat(r['due_at']).astimezone(tz):%d/%m %H:%M} — {r['text']}" + (" 📅" if r.get("event_id") else "") for r in rows)
+            today = datetime.now(tz).date()
+            days: dict[str, list[str]] = {}
+            for r in sorted(rows, key=lambda r: r["due_at"]):
+                d = datetime.fromisoformat(r["due_at"]).astimezone(tz)
+                label = "⚠️ Scaduti" if d < datetime.now(tz) else "Oggi" if d.date() == today else "Domani" if (d.date() - today).days == 1 else f"{d:%a %d/%m}"
+                days.setdefault(label, []).append(f"⏰ <b>{d:%H:%M}</b>  {html.escape(r['text'])}" + (" 📅" if r.get("event_id") else ""))
+            body = "\n\n".join(f"<b>{k}</b>\n" + "\n".join(v) for k, v in days.items())
             keys = [[{"text": f"🗑 {r['text'][:28]}", "callback_data": f"rd:{r['id']}"}] for r in rows[:10]]
-            return await self.tg.send(chat_id, "<b>Promemoria attivi</b> (📅 = anche sul Calendario)\n" + body, {"inline_keyboard": keys})
+            return await self.tg.send(chat_id, "<b>🔔 Promemoria attivi</b>  <i>(📅 = anche sul Calendario)</i>\n━━━━━━━━━━━━━━\n" + body, {"inline_keyboard": keys})
         if cmd == "ricordi":
             rows = await st.store.list_memories(15)
             if not rows:
@@ -435,12 +437,60 @@ class TelegramBot:
                 lines.append("(token di FreeLLMAPI non disponibili ora)")
         await self.tg.send(chat_id, "\n".join(lines))
 
+    @staticmethod
+    def _ago(ts: float) -> str:
+        if not ts:
+            return "mai"
+        d = max(0, int(time.time() - ts))
+        return "adesso" if d < 60 else f"{d // 60} min fa" if d < 3600 else f"{d // 3600} h fa" if d < 172800 else f"{d // 86400} giorni fa"
+
+    def tg_line(self) -> tuple[bool | None, str]:
+        """(stato, testo) del collegamento con Telegram: webhook attivo, messaggi in coda, ultimo messaggio ricevuto, ultimo errore di consegna."""
+        h = self.tg.health
+        if not h.get("mode"):
+            return None, "controllo in corso"
+        last = f" · ultimo messaggio {self._ago(self.last_update_at)}" if self.last_update_at else ""
+        if h["mode"] == "polling":
+            return True, "lettura diretta (polling)" + last
+        if not h["url_ok"]:
+            return False, "webhook non corretto: lo sto ripristinando"
+        if h["last_error"]:
+            return False, f"errore di consegna recente ({h['last_error'][:60]}): riarmo" + last
+        return True, "webhook attivo" + (f" · {h['pending']} in coda" if h["pending"] else "") + last
+
+    async def _status(self, chat_id: int) -> None:
+        st, s = self.app.state, self.s
+        ic = lambda ok: "🟢" if ok else "🟡" if ok is None else "🔴"  # noqa: E731
+        ai = (await st.admin.ready()) if st.budget.enabled else None
+        tg_ok, tg_text = self.tg_line()
+        cal = getattr(st, "reminders", None)
+        cs = cal.status if cal else {}
+        live = getattr(st, "live", None)
+        rows = [
+            f"{ic(True if ai is None else ai)} <b>Intelligenza</b> — {'pronta' if ai or ai is None else 'in avvio'}",
+            f"{ic(tg_ok)} <b>Telegram</b> — {tg_text}",
+            f"{ic(True if st.pc.connected else None)} <b>PC Windows</b> — {'collegato' if st.pc.connected else 'scollegato'}" + (" · voce attiva" if st.voice.enabled else ""),
+            f"{ic(True if st.google.enabled else None)} <b>Google</b> — {'collegato' if st.google.enabled else 'non collegato (usa /google)' if st.google.has_client else 'non configurato'}",
+        ]
+        if st.google.enabled and cs.get("ok") is not None:
+            rows.append(f"{ic(cs['ok'])} <b>Calendario</b> — " + ("sincronizzato" if cs["ok"] else html.escape(cs.get("detail", "errore")[:140])))
+        if live is not None:
+            rows.append(f"{ic(True if live.last_ingest else None)} <b>Notizie</b> — " + (f"aggiornate {live.last_ingest[11:16]} UTC · {len(live.errors)} feed non raggiungibili" if live.last_ingest else "in avvio"))
+        rows += [
+            f"{ic(True if st.notifier.fcm.enabled else None)} <b>Push Android</b> — {'attive' if st.notifier.fcm.enabled else 'non configurate'}",
+            f"{ic(True if st.backup.enabled else None)} <b>Backup</b> — {'attivo (Hugging Face)' if st.backup.enabled else 'non configurato'}",
+            f"{ic(True if s.supabase_url and s.supabase_service_key else False)} <b>Memoria</b> — {'permanente (Supabase)' if s.supabase_url and s.supabase_service_key else 'temporanea'}",
+            f"🔐 <b>Conferme in attesa</b> — {len(st.pending.list_pending())}",
+        ]
+        await self.tg.send(chat_id, "<b>🛰 Stato di JARVIS</b>\n━━━━━━━━━━━━━━\n" + "\n".join(rows) + "\n━━━━━━━━━━━━━━\n<i>/salute per i dettagli tecnici</i>")
+
     async def _health(self, chat_id: int) -> None:
         from .health import deep_health
 
         h = await deep_health(self.app)
         m = h["memory"]
-        lines = ["<b>Salute del server</b>", f"• Database: {'ok' if h['db']['ok'] else 'NON RAGGIUNGIBILE'} ({h['db']['latency_ms']} ms)",
+        tg_ok, tg_text = self.tg_line()
+        lines = ["<b>🩺 Salute del server</b>", f"• Telegram: {tg_text}", f"• Database: {'ok' if h['db']['ok'] else 'NON RAGGIUNGIBILE'} ({h['db']['latency_ms']} ms)",
                  f"• Memoria: {m['container_mb'] or m['process_mb']} MB su {m['limit_mb']}", f"• Intelligenza: {'pronta' if h['freellm_ready'] else 'in avvio' if h['freellm_ready'] is not None else '—'}",
                  f"• Secondo cervello: {h['brain']['indexed']} frammenti in memoria", f"• App collegate in diretta: {h['realtime_listeners']}"]
         b = h["backup"]

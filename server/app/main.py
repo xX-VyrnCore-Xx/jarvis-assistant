@@ -27,7 +27,7 @@ from .budget_service import BudgetService
 from .freellm_admin import FreeLLMAdmin
 from .pending import PendingStore
 from .security import RateLimiter, SecurityHeaders, client_ip
-from .config import get_settings
+from .config import Settings, get_settings
 from .llm import LLMClient, LLMError
 from .gateway import make_client
 from .gateway import router as gateway_router
@@ -41,6 +41,7 @@ from .proactive import Proactive
 from .reminders import ReminderService
 from .coding import CodingService
 from .tools.coding_tools import register_coding_tools
+from . import tgwatch
 from .live import LiveFeeds, register_live_tools
 from .scheduler import background_loop, brain_loop, heartbeat_loop, live_loop, maintenance_loop, proactive_loop
 from .updates import UpdateService
@@ -66,14 +67,15 @@ class ChatOut(BaseModel):
     reply: str
 
 
-async def _webhook_guard(tg: Telegram, hook: str) -> None:
-    """Se un vecchio servizio con lo stesso bot ripristina il suo webhook, lo riprende (controllo ogni 10 minuti)."""
-    while True:
-        await asyncio.sleep(600)
-        try:
-            await tg.ensure_webhook(hook)
-        except Exception:
-            log.warning("controllo del webhook Telegram fallito")
+async def _telegram_run(app: FastAPI, settings: Settings) -> None:
+    """Collega il bot (webhook o lettura diretta), poi lo tiene collegato; all'avvio avvisa se il servizio è stato fermo a lungo."""
+    tg: Telegram = app.state.tg
+    mode = await tgwatch.setup(tg, settings, COMMANDS)
+    await tgwatch.announce_return(tg, app.state.store, VERSION)
+    if mode == "webhook":
+        await tgwatch.guard_loop(tg, settings)
+    else:
+        await tgwatch.poll_loop(tg, app.state.bot, app.state.bot.accepts)
 
 
 @asynccontextmanager
@@ -166,16 +168,7 @@ async def lifespan(app: FastAPI):
     proactive_task = asyncio.create_task(proactive_loop(settings, proactive))
     heartbeat_task = asyncio.create_task(heartbeat_loop(app))
     if tg.enabled:
-        base = settings.public_url or settings.render_external_url
-        if base and settings.telegram_webhook_secret:
-            hook = f"{base.rstrip('/')}/telegram/webhook"
-            try:
-                # prende il posto di un eventuale vecchio bot con lo stesso token e imposta il menu dei comandi
-                await tg.set_webhook(hook, drop_pending=await tg.webhook_url() != hook)
-                await tg.set_commands(COMMANDS)
-            except Exception:
-                log.exception("configurazione del bot Telegram fallita")
-            guard = asyncio.create_task(_webhook_guard(tg, hook))
+        guard = asyncio.create_task(_telegram_run(app, settings))
     vault = getattr(store, "vault", None)
     log.info("sicurezza: cifratura_dati=%s privacy_modelli=%s", "attiva" if vault and vault.enabled else "NO (manca ENCRYPTION_KEY)", settings.privacy_mode)
     log.info("secondo_cervello: attivo=%s embedding=%s modello=%s", brain.enabled, brain.embedder.enabled, brain.embedder.model)

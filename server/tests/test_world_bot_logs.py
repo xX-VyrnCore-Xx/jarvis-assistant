@@ -177,5 +177,5 @@ async def test_notifier_telegram_messages_are_titled_and_reminders_keep_buttons(
     await n.set_prefs({"quiet": {"enabled": False}})
     await n.push("proactive", "Tra 30 minuti: Riunione", "Alle 10:30.", telegram=True)
     await n.push("reminder", "⏰ Promemoria, signore", "chiamare Luca")
-    assert tg.sent == ["**💡 Tra 30 minuti: Riunione**\nAlle 10:30."]
+    assert tg.sent == ["**💡 Tra 30 minuti: Riunione**\n> Alle 10:30."]
     assert tg.buttons and tg.buttons[0].startswith("⏰ Promemoria") and "**" not in tg.buttons[0]

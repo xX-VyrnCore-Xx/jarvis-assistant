@@ -15,7 +15,7 @@ def test_to_html_formats_and_escapes():
     out = to_html("**Ciao** <b>x</b> e `a<b` con [sito](https://a.it/x?y=1&z=2)\n- uno\n- due\n```py\nx = 1 < 2\n```")
     assert "<b>Ciao</b>" in out and "&lt;b&gt;x&lt;/b&gt;" in out
     assert "<code>a&lt;b</code>" in out and '<a href="https://a.it/x?y=1&amp;z=2">sito</a>' in out
-    assert "• uno" in out and "<pre>x = 1 &lt; 2</pre>" in out
+    assert "• uno" in out and '<pre><code class="language-py">x = 1 &lt; 2</code></pre>' in out
     assert "<i>" not in to_html("2 * 3 * 4")  # asterischi aritmetici non diventano corsivo
 
 
@@ -108,6 +108,9 @@ class FakeTG(Telegram):
     async def typing(self, chat_id):
         pass
 
+    async def react(self, chat_id, message_id, emoji):
+        pass
+
     async def answer_callback(self, callback_id, text=""):
         self.out.append(("cb:" + text, None))
 
@@ -148,7 +151,7 @@ async def test_bot_owner_only_dedup_commands_and_buttons():
 
     await bot.handle_update(msg(42, "ciao", 1))
     await bot.handle_update(msg(42, "ciao", 1))  # duplicato di Telegram
-    assert [o[0] for o in st.tg.out if o[0] != "…"] == ["eco:ciao"]  # il duplicato non produce una seconda risposta
+    assert [o[0] for o in st.tg.out if o[0] not in ("…", "💭 Ci sto pensando…")] == ["eco:ciao"]  # il duplicato non produce una seconda risposta
     assert st.tg.out[-1][1]["inline_keyboard"][1][0]["callback_data"] == "sv"  # sotto la risposta: Approfondisci / Più breve, poi Salva / Rigenera
 
     from datetime import datetime, timedelta, timezone
