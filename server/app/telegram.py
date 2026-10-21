@@ -1,3 +1,4 @@
+import asyncio
 import html
 import logging
 import re
@@ -51,15 +52,28 @@ class Telegram:
     def enabled(self) -> bool:
         return bool(self.s.telegram_bot_token and self.s.telegram_owner_id)
 
+    async def _post(self, method: str, **kw) -> httpx.Response:
+        """POST all'API del bot; se Telegram risponde 429 (troppi messaggi) aspetta quanto richiesto e riprova una volta."""
+        r = await self._client.post(f"{self.api}/{method}", **kw)
+        if r.status_code == 429:
+            try:
+                wait = float(r.json().get("parameters", {}).get("retry_after", 1))
+            except (ValueError, TypeError):
+                wait = 1.0
+            log.info("Telegram chiede di rallentare: attendo %.0f s", wait)
+            await asyncio.sleep(min(wait, 8))
+            r = await self._client.post(f"{self.api}/{method}", **kw)
+        return r
+
     async def send(self, chat_id: int, text: str, markup: dict | None = None) -> None:
         """Invia formattando in HTML; se Telegram rifiuta la formattazione ripiega sul testo semplice."""
         chunks = split_text(text or "…") or ["…"]
         for n, part in enumerate(chunks):
             extra = {"reply_markup": markup} if markup and n == len(chunks) - 1 else {}
-            r = await self._client.post(f"{self.api}/sendMessage", json={
+            r = await self._post("sendMessage", json={
                 "chat_id": chat_id, "text": to_html(part), "parse_mode": "HTML", "link_preview_options": {"is_disabled": True}, **extra})
             if r.status_code == 400:  # HTML non valido: meglio un messaggio brutto che nessun messaggio
-                r = await self._client.post(f"{self.api}/sendMessage", json={"chat_id": chat_id, "text": part[:MAX_LEN], **extra})
+                r = await self._post("sendMessage", json={"chat_id": chat_id, "text": part[:MAX_LEN], **extra})
             r.raise_for_status()
 
     async def download_file(self, file_id: str) -> bytes:
@@ -76,11 +90,11 @@ class Telegram:
         mid = 0
         for n, part in enumerate(chunks):
             extra = {"reply_markup": markup} if markup and n == len(chunks) - 1 else {}
-            r = await self._client.post(f"{self.api}/sendMessage", json={
+            r = await self._post("sendMessage", json={
                 "chat_id": chat_id, "text": to_html(part), "parse_mode": "HTML", "disable_notification": silent,
                 "link_preview_options": {"is_disabled": True}, **extra})
             if r.status_code == 400:
-                r = await self._client.post(f"{self.api}/sendMessage", json={"chat_id": chat_id, "text": part[:MAX_LEN], "disable_notification": silent, **extra})
+                r = await self._post("sendMessage", json={"chat_id": chat_id, "text": part[:MAX_LEN], "disable_notification": silent, **extra})
             r.raise_for_status()
             mid = r.json()["result"]["message_id"]
         return mid
@@ -92,8 +106,8 @@ class Telegram:
             body["parse_mode"] = "HTML"
         if markup is not None:
             body["reply_markup"] = markup
-        r = await self._client.post(f"{self.api}/editMessageText", json=body)
-        if r.status_code == 400 and html:
+        r = await self._post("editMessageText", json=body)
+        if r.status_code == 400 and html and "not modified" not in r.text:
             return await self.edit(chat_id, message_id, text, markup, html=False)
         return r.status_code == 200
 

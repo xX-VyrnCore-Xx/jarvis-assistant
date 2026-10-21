@@ -58,6 +58,7 @@ class Settings(BaseSettings):
     rag_context_chars: int = 1800  # quanto contesto del secondo cervello entra in ogni risposta
     rag_min_cosine: float = 0.35  # sotto questa somiglianza (e senza parole in comune) un frammento non entra nel contesto
     rag_enrich_per_cycle: int = 2  # documenti arricchiti (titolo, riassunto, tag, entità) ogni ciclo; 0 = spento
+    knowledge_seed_per_cycle: int = 3  # voci di base di Wikipedia caricate ogni 5 minuti nel secondo cervello (0 = spento)
     learn_enabled: bool = True  # impara da solo fatti, preferenze e impegni dalle conversazioni (poi li salva nel secondo cervello)
     learn_max_per_day: int = 30
     proactive_enabled: bool = True  # JARVIS ti avvisa da solo: eventi in arrivo, email nuove, riepilogo serale e settimanale

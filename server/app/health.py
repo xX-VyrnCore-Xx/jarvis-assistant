@@ -1,8 +1,12 @@
 """Stato di salute del servizio: memoria, database, backup, aggiornamenti, consumo dei modelli."""
 import json
+import logging
 import os
 import time
 
+log = logging.getLogger("jarvis.heartbeat")
+STARTED = time.monotonic()
+PULSE: dict[str, tuple[float, float]] = {}  # ciclo -> (ultimo giro, ogni quanti secondi dovrebbe girare)
 PAGE = os.sysconf("SC_PAGE_SIZE") if hasattr(os, "sysconf") else 4096
 
 
@@ -50,3 +54,29 @@ async def deep_health(app) -> dict:
         "realtime_listeners": st.notifier.listeners,
         "pending_actions": len(st.pending.list_pending()),
     }
+
+
+def beat(name: str, every_s: float) -> None:
+    """Ogni ciclo di fondo segna qui che è vivo: il battito del server li controlla tutti."""
+    PULSE[name] = (time.monotonic(), every_s)
+
+
+def stale_loops(now: float | None = None) -> list[tuple[str, int]]:
+    """Cicli che non girano da più di 3 volte il loro intervallo (+1 minuto): (nome, minuti di silenzio)."""
+    now = now or time.monotonic()
+    return [(n, int((now - t) / 60)) for n, (t, every) in PULSE.items() if now - t > 3 * every + 60]
+
+
+def heartbeat_line(app, now: float | None = None) -> str:
+    st = app.state
+    now = now or time.monotonic()
+    up = int(now - STARTED)
+    t = st.usage.today()
+    mem = container_mb() or rss_mb()
+    parts = [f"su {up // 3600}h{up % 3600 // 60:02d}", f"mem {mem:.0f}/512 MB",
+             f"modelli oggi {t['requests']} ({t['errors']} err, {t['avg_latency_ms'] / 1000:.1f} s)",
+             f"cervello {len(st.brain.index)} frammenti", f"app in diretta {st.notifier.listeners}",
+             f"conferme {len(st.pending.list_pending())}"]
+    bad = stale_loops(now)
+    parts.append("cicli ok" if not bad else "CICLI FERMI: " + ", ".join(f"{n} ({m} min)" for n, m in bad))
+    return " | ".join(parts)

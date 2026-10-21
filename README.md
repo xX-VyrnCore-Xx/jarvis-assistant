@@ -104,6 +104,12 @@ Promemoria, avvisi (token in esaurimento, backup fallito) e richieste di conferm
 - **Ricerca più furba**: `brain_deep_search` riformula la domanda in più modi, `brain_about` raccoglie tutto su una persona o un progetto, e le ricerche accettano un periodo (`since`/`until`).
 - **Proattivo** (`PROACTIVE_ENABLED`, `PROACTIVE_MAX_PER_DAY`, `EVENING_HOUR`): avviso 10-45 minuti prima di ogni evento (anche su Telegram), email nuove nella posta principale, punto della sera con l'agenda di domani, riepilogo della domenica e allarme se i token finiscono prima del reset. Zero token spesi: i testi si compongono dai dati; rispetta le ore silenziose e non ripete mai lo stesso avviso.
 
+## Log, Telegram e conoscenza di base
+
+- **Log ogni minuto**: nei log di Render compare una riga `heartbeat` al minuto (uptime, memoria, richieste ai modelli, secondo cervello, app collegate, stato dei cicli di fondo); se un ciclo si ferma scatta un avviso. Ogni chiamata a un modello lascia una riga con durata e token. `PYTHONUNBUFFERED` è attivo: le righe arrivano subito.
+- **Bot Telegram**: tastiera rapida (Agenda, Email, Attività, Cervello, Consumo, Impostazioni), `/oggi`, `/agenda`, `/email` (istantanei, senza modello), `/impara argomento`, `/proattivo` (stato e pausa degli avvisi), pulsanti «Approfondisci» e «Più breve» sotto ogni risposta, suggerimento se sbaglia un comando, notifiche con icone e grassetto, attesa automatica se Telegram limita i messaggi.
+- **Cultura generale nel secondo cervello**: ~200 voci essenziali di Wikipedia (Italia, geografia, paesi, scienza, storia, economia, tecnologia, cultura, salute) si caricano da sole, 3 ogni 5 minuti (`KNOWLEDGE_SEED_PER_CYCLE`, 0 = spento), senza spendere token del modello. Nel prompt entra al massimo una voce, solo se pertinente; il tool `brain_learn` e `/impara` aggiungono qualsiasi altro argomento.
+
 ## Secondo cervello (RAG)
 Memoria a lungo termine per note, ricordi, pagine web, file, email e Drive, con recupero **ibrido** e tutto **cifrato a riposo**:
 - **Acquisizione**: `brain_add_note`, `brain_save_url`, `drive_save_to_brain`, `gmail_save_to_brain`; su Telegram `/nota testo`, e file `.txt/.md/.pdf` inviati al bot; nelle app la scheda **Cervello**. Frammenti coerenti (~1200 caratteri, per titolo e paragrafo, con sovrapposizione), deduplicazione per contenuto e per URI (stesso URI = aggiornamento).

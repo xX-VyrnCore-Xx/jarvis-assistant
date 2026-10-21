@@ -18,7 +18,7 @@ SCOPE = "https://www.googleapis.com/auth/firebase.messaging"
 CHANNELS = {"reminder": "reminders", "alert": "alerts", "pending": "alerts", "update": "updates", "brain": "general", "proactive": "general", "info": "general"}
 ROUTES = {"reminder": "reminders", "alert": "tokens", "pending": "chat", "update": "more", "brain": "brain", "proactive": "chat", "info": "chat"}
 CRITICAL = {"reminder", "alert", "pending"}  # arrivano anche nelle ore silenziose
-DEFAULT_PREFS = {"kinds": {k: {"inapp": True, "push": True, "telegram": k in ("reminder", "alert", "update")} for k in ("reminder", "alert", "pending", "update", "brain", "proactive", "info")},
+DEFAULT_PREFS = {"kinds": {k: {"inapp": True, "push": True, "telegram": k in ("reminder", "alert", "update", "proactive")} for k in ("reminder", "alert", "pending", "update", "brain", "proactive", "info")},
                  "quiet": {"enabled": True, "from": "23:00", "to": "07:30"}}
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 
@@ -192,10 +192,13 @@ class Notifier:
     async def _telegram(self, wanted: bool, row: dict) -> None:
         if not (wanted and self.tg and self.tg.enabled):
             return
-        text = f"{row['title']}\n{row['body']}".strip()
         kind, meta = row["kind"], row.get("meta") or {}
+        icon = {"reminder": "⏰", "alert": "⚠️", "pending": "🔐", "update": "🆕", "brain": "🧠", "proactive": "💡", "info": "ℹ️"}.get(kind, "🔔")
+        title = row["title"] if not row["title"] or row["title"][0] in "⏰⚠🔐🆕🧠💡ℹ" else f"{icon} {row['title']}"
+        plain = f"{title}\n{row['body']}".strip()
+        text = f"**{title}**\n{row['body']}".strip()  # il bot lo trasforma in grassetto
         if kind == "reminder" and row.get("id"):
-            await self.tg.send_buttons(self.tg.s.telegram_owner_id, text, [("⏰ +10 min", f"rs:{row['id']}:10"), ("⏰ +1 ora", f"rs:{row['id']}:60"), ("✔ Fatto", f"rs:{row['id']}:0")])
+            await self.tg.send_buttons(self.tg.s.telegram_owner_id, plain, [("⏰ +10 min", f"rs:{row['id']}:10"), ("⏰ +1 ora", f"rs:{row['id']}:60"), ("✔ Fatto", f"rs:{row['id']}:0")])
         elif kind == "update" and meta.get("url"):
             await self.tg.send(self.tg.s.telegram_owner_id, text, {"inline_keyboard": [[{"text": "Scarica", "url": meta["url"]}]]})
         else:

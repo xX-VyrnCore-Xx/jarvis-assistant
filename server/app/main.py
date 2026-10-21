@@ -34,8 +34,9 @@ from .gateway import router as gateway_router
 from .memory import build_store
 from .pc import PCBridge
 from .notify import Notifier
+from .brain.knowledge import Knowledge
 from .proactive import Proactive
-from .scheduler import background_loop, brain_loop, maintenance_loop, proactive_loop
+from .scheduler import background_loop, brain_loop, heartbeat_loop, maintenance_loop, proactive_loop
 from .updates import UpdateService
 from .usage import UsageTracker
 from .telegram import Telegram
@@ -84,6 +85,7 @@ async def lifespan(app: FastAPI):
     usage = app.state.usage = UsageTracker()
     llm = LLMClient(settings, usage=usage)
     brain = app.state.brain = Brain(settings, bstore, Embedder(settings, usage=usage), vault, llm)
+    brain.knowledge = Knowledge(settings, brain, store)
     register_basic_tools(tools, settings, store, budget=budget.text if budget.enabled else None, brain=brain)
     register_brain_tools(tools, brain)
     app.state.gateway_client = make_client()
@@ -136,6 +138,7 @@ async def lifespan(app: FastAPI):
     maint_task = asyncio.create_task(maintenance_loop(settings, store, usage, updates, notifier))
     proactive = app.state.proactive = Proactive(settings, store, notifier, google, brain, budget)
     proactive_task = asyncio.create_task(proactive_loop(settings, proactive))
+    heartbeat_task = asyncio.create_task(heartbeat_loop(app))
     if tg.enabled:
         base = settings.public_url or settings.render_external_url
         if base and settings.telegram_webhook_secret:
@@ -158,6 +161,7 @@ async def lifespan(app: FastAPI):
     brain_task.cancel()
     maint_task.cancel()
     proactive_task.cancel()
+    heartbeat_task.cancel()
     await usage.flush(store)  # non perde i consumi dell'ultima ora allo spegnimento
     if guard:
         guard.cancel()
