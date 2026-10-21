@@ -1,10 +1,13 @@
 import asyncio
+import logging
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from ..config import Settings
 from ..memory import Store
 from . import UNTRUSTED, ToolRegistry
+
+log = logging.getLogger("jarvis.tools")
 
 _GIORNI = ["lunedì", "martedì", "mercoledì", "giovedì", "venerdì", "sabato", "domenica"]
 
@@ -14,9 +17,10 @@ def parse_due(when: str, tz: ZoneInfo) -> datetime:
     return due.replace(tzinfo=tz) if due.tzinfo is None else due.astimezone(tz)
 
 
-def register_basic_tools(reg: ToolRegistry, settings: Settings, store: Store, budget=None, brain=None, reminders=None) -> None:
+def register_basic_tools(reg: ToolRegistry, settings: Settings, store: Store, budget=None, brain=None, reminders=None, search=None) -> None:
     """`budget`: coroutine che restituisce il testo sui token disponibili (se FreeLLMAPI è nel container).
-    `reminders`: ReminderService (promemoria collegati al Calendario Google)."""
+    `reminders`: ReminderService (promemoria collegati al Calendario Google).
+    `search`: coroutine (query, max_results, topic) -> risultati dei motori di FreeLLMAPI (Parallel); se manca o fallisce si usa DuckDuckGo."""
     if reminders is None:
         from ..reminders import ReminderService
 
@@ -64,6 +68,14 @@ def register_basic_tools(reg: ToolRegistry, settings: Settings, store: Store, bu
         return "\n".join(f"- {h}" for h in hits) or "Nessun ricordo trovato."
 
     async def web_search(query: str) -> str:
+        if search is not None:
+            try:
+                hits = await search(query, 6, "general")
+                if hits:
+                    return UNTRUSTED + "\n\n".join(f"{h.get('title', '')}\n{h['url']}\n{str(h.get('content', ''))[:500]}" for h in hits)
+            except Exception as e:  # motore non disponibile: ripiego su DuckDuckGo
+                log.info("ricerca Parallel/FreeLLMAPI non disponibile (%s): uso DuckDuckGo", type(e).__name__)
+
         def _search() -> list[dict]:
             from ddgs import DDGS
 

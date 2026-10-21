@@ -32,7 +32,7 @@ loopback; JARVIS ne inoltra pubblicamente solo `/v1/*` (la dashboard resta priva
    **Conserva `ENCRYPTION_KEY`**: senza di essa il backup non si decifra.
 4. **Chiavi dei provider** in `FREEAPI_CONFIG_JSON` (applicato a ogni avvio), per esempio:
    `{"keys":[{"platform":"groq","key":"gsk_..."},{"platform":"google","key":"AIza..."}],"routing":{"strategy":"balanced"}}`
-   Le piattaforme valide sono quelle del catalogo FreeLLMAPI. JARVIS legge da solo la chiave unificata dal DB.
+   Le piattaforme valide sono quelle del catalogo FreeLLMAPI. **Senza chiave** si attivano da sole all'avvio OVH AI Endpoints (`ovh`), Kilo Gateway (`kilo`) e la ricerca web **Parallel** (`AUTO_KEYLESS_PROVIDERS=0` le disattiva); **SiliconFlow** si attiva impostando `SILICONFLOW_API_KEY` su Render. `web_search` e `web_news` interrogano prima i motori di FreeLLMAPI (Parallel) e ripiegano su DuckDuckGo. JARVIS legge da solo la chiave unificata dal DB.
 
 ### Usare FreeLLMAPI da altre app
 Qualunque app compatibile OpenAI/Anthropic può usare `https://<servizio>.onrender.com/v1` con la chiave unificata.

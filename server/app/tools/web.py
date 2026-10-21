@@ -2,6 +2,7 @@
 import ast
 import asyncio
 import ipaddress
+import logging
 import math
 import operator
 import re
@@ -163,7 +164,7 @@ def convert_units(value: float, a: str, b: str) -> str:
     return "Errore: unità non riconosciute o di categorie diverse (supporto: lunghezza, massa, volume, velocità, area, dati, temperatura)."
 
 
-def register_web_tools(reg: ToolRegistry, client: httpx.AsyncClient | None = None) -> None:
+def register_web_tools(reg: ToolRegistry, client: httpx.AsyncClient | None = None, search=None) -> None:
     http = client or httpx.AsyncClient(timeout=20)
 
     async def read_webpage(url: str) -> str:
@@ -200,6 +201,14 @@ def register_web_tools(reg: ToolRegistry, client: httpx.AsyncClient | None = Non
         return str(round(r, 10) if isinstance(r, float) else r)
 
     async def web_news(query: str) -> str:
+        if search is not None:
+            try:
+                hits = await search(query, 6, "news")
+                if hits:
+                    return UNTRUSTED + "\n\n".join(f"{h.get('title', '')}\n{h['url']}\n{str(h.get('content', ''))[:400]}" for h in hits)
+            except Exception as e:
+                logging.getLogger("jarvis.web").info("notizie dal motore di ricerca non disponibili (%s): uso DuckDuckGo", type(e).__name__)
+
         def _news() -> list[dict]:
             from ddgs import DDGS
 

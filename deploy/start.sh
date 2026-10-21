@@ -9,6 +9,10 @@ DATA=/app/server/data
 mkdir -p "$DATA" && chown -R node:node "$DATA"
 as_node() { setpriv --reuid=node --regid=node --init-groups -- "$@"; }
 
+# Provider gratuiti senza chiave (OVH, Kilo, ricerca Parallel) e SiliconFlow (se c'è SILICONFLOW_API_KEY) si aggiungono da soli.
+FREEAPI_CONFIG_JSON=$(/opt/venv/bin/python /usr/local/bin/merge_providers.py) && export FREEAPI_CONFIG_JSON
+[ -n "${FREEAPI_CONFIG_JSON:-}" ] || unset FREEAPI_CONFIG_JSON
+
 # Controllo di sintassi: non stampa mai il contenuto (contiene le chiavi), solo posizione e carattere.
 if [ -n "${FREEAPI_CONFIG_JSON:-}" ]; then
   if ! /opt/venv/bin/python - <<'PY'

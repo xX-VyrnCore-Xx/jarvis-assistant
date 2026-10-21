@@ -187,6 +187,17 @@ class LLMClient:
                     await asyncio.sleep(min(2**attempt, 8) + random.random() * 0.5)
         raise LLMError(f"FreeLLMAPI non raggiungibile: {last}")
 
+    async def search(self, query: str, max_results: int = 6, topic: str = "general") -> list[dict]:
+        """Ricerca web tramite i motori di FreeLLMAPI (Parallel senza chiave, poi gli altri attivi). Solleva LLMError se nessuno risponde."""
+        try:
+            r = await self._client.post(self._url("/search"), headers={"Authorization": f"Bearer {self._api_key()}"},
+                                        json={"query": query, "max_results": max_results, "topic": topic}, timeout=25)
+        except httpx.HTTPError as e:
+            raise LLMError(f"ricerca non raggiungibile: {type(e).__name__}") from e
+        if r.status_code != 200:
+            raise LLMError(f"ricerca web: HTTP {r.status_code}")
+        return [h for h in r.json().get("results", []) if isinstance(h, dict) and h.get("url")]
+
     async def models(self) -> list[dict]:
         """Modelli disponibili sul router (cache di 10 minuti)."""
         if self._models and self._models[0] > time.monotonic():
