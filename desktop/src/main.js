@@ -7,6 +7,7 @@ import { icon } from "@shared/icons.js";
 import { Speaker } from "@shared/speech.js";
 import { createCodeStudio } from "@shared/codeview.js";
 import { dictationSupported, recordUtterance } from "@shared/dictate.js";
+import { Typewriter } from "@shared/typewriter.js";
 import { openStream } from "@shared/stream.js";
 import { initVoice, installVoice, onVoiceChange, removeVoice, synth, toBase64, voice } from "./voice.js";
 import { clearToken, loadToken, saveToken } from "./secrets.js";
@@ -241,22 +242,24 @@ async function send(text) {
   S.busy = true;
   const wait = addMessage("sys", "JARVIS sta pensando…");
   wait.classList.add("thinking");
-  let live = null, acc = "";
+  let live = null;
+  const tw = new Typewriter((text) => {  // il testo compare mentre «scrive»
+    if (!live) { wait.remove(); live = addMessage("bot", ""); }
+    live.querySelector(".bubble").replaceChildren(markdown(text));
+    chatLog.scrollTop = chatLog.scrollHeight;
+  });
   try {
     const reply = await api.chatStream(msg, SESSION, {
       onStatus: (t) => { wait.textContent = t; },
-      onDelta: (t) => {
-        if (!live) { wait.remove(); live = addMessage("bot", ""); }
-        acc += t;
-        live.querySelector(".bubble").replaceChildren(markdown(acc));
-        chatLog.scrollTop = chatLog.scrollHeight;
-      },
+      onDelta: (t) => tw.push(t),
     });
+    await tw.finish(reply);
     live?.remove();
     addMessage("bot", reply);
     if (voiceOn() && voice.installed) speaker.speak(reply);
     refreshStatus();
   } catch (e) {
+    tw.stop(); live?.remove();
     addMessage("sys", errText(e));
   } finally {
     wait.remove();

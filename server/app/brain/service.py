@@ -254,7 +254,7 @@ class Brain:
             return ""
         budget = budget or self.s.rag_context_chars
         try:
-            results = await asyncio.wait_for(self.search(query, k=k), 6)
+            results = await asyncio.wait_for(self.search(query, k=k), 2.5)  # il contesto non deve ritardare la risposta: oltre 2,5 s si va avanti senza
         except Exception as e:
             log.info("contesto del secondo cervello non disponibile: %s", type(e).__name__)
             return ""

@@ -10,7 +10,7 @@ import httpx
 
 from .config import Settings
 from .ctx import TOO_LARGE, ContextBudget, classify_error, fit, tokens_of
-from .routing import Router
+from .routing import FAST, RELIABLE, Router
 from .tools.select import CORE
 from .usage import UsageTracker, est_tokens
 
@@ -135,6 +135,10 @@ class LLMClient:
                 p.pop("tools", None); p.pop("tool_choice", None)
             self.ctx.saved += saved
             log.info("richiesta troppo grande per %s: riprovo con un contesto più corto (tetto %d token)", st["profile"], budget)
+        elif category == "bad_tools" and p.get("tools") and route and route.profile == FAST and not st.get("upgraded"):
+            st["upgraded"] = True  # il modello veloce non gestisce gli strumenti: si passa a uno affidabile CON gli strumenti (senza, risponderebbe a memoria)
+            p["model"] = RELIABLE
+            log.info("%s ha rifiutato gli strumenti: riprovo con un modello affidabile", route.profile)
         elif category == "bad_tools" and p.get("tools"):
             p.pop("tools", None); p.pop("tool_choice", None)  # un modello che non digerisce gli strumenti risponde comunque in testo
             p["temperature"] = self.s.llm_temperature
@@ -286,7 +290,7 @@ class LLMClient:
                 try:
                     # il limite vale per ogni attesa di dati: se il primo token non arriva in tempo si riprova con un altro modello
                     async with self._client.stream("POST", url, json=payload, headers={"Authorization": f"Bearer {self._api_key()}", **({"X-FreeLLM-Task-Type": route.task} if route else {})},
-                                                   timeout=httpx.Timeout(self.s.llm_attempt_timeout_s if attempt == 0 else self.s.llm_timeout_s, connect=10.0)) as r:
+                                                   timeout=httpx.Timeout(min(self.s.llm_attempt_timeout_s, self.s.llm_first_token_s) if attempt == 0 else self.s.llm_timeout_s, connect=10.0)) as r:
                         body = ""
                         if r.status_code >= 400:
                             body = (await r.aread()).decode("utf-8", "ignore")[:600]

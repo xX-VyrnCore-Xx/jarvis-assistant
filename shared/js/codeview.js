@@ -3,6 +3,7 @@
 import "./codeview.css";
 import { el, markdown } from "./format.js";
 import { icon } from "./icons.js";
+import { Typewriter } from "./typewriter.js";
 
 const FEATURED = ["revisione-codice", "debug-sistematico", "test-e-qualita", "architettura-software", "refactoring-e-codice-legacy", "sicurezza-applicativa",
   "ottimizzazione-prestazioni", "git-e-devops", "python-pro", "javascript-typescript", "sql-database", "ci-cd-github-actions"];
@@ -221,16 +222,20 @@ export function createCodeStudio({ api, toast, errText, haptic = () => {} }) {
     S.busy = true; sendBtn.disabled = true; status.textContent = "JARVIS sta lavorando…";
     const skill = S.skill?.name || "";
     S.skill = null; drawSkills();
-    let live = null, acc = "";
-    const tick = () => { if (live) { const s = stick(); live.replaceChildren(decorate(markdown(acc))); if (s) down(); } };
+    let live = null;
+    const tw = new Typewriter((text) => {
+      if (!live) live = bubble("bot", "");
+      const s = stick(); live.replaceChildren(decorate(markdown(text))); if (s) down();
+    });
     try {
       const reply = await api.codeChatStream(msg, {
         skill,
         onStatus: (t) => { status.textContent = t; },
-        onDelta: (t) => { if (!live) live = bubble("bot", ""); acc += t; tick(); },
+        onDelta: (t) => tw.push(t),
       });
+      await tw.finish(reply);
       live?.remove(); bubble("bot", reply); haptic("light");
-    } catch (e) { live?.remove(); bubble("sys", errText(e)); }
+    } catch (e) { tw.stop(); live?.remove(); bubble("sys", errText(e)); }
     finally { S.busy = false; sendBtn.disabled = false; status.textContent = ""; down(); refresh(false); }
   }
 
