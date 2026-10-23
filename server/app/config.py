@@ -92,7 +92,7 @@ class Settings(BaseSettings):
     auth_lock_s: int = 900
     pending_ttl_s: int = 600
 
-    history_messages: int = 14
+    history_messages: int = 30  # si leggono di più di quelli inviati per intero: i più vecchi diventano il «filo» della conversazione
     memory_hits: int = 5
 
 

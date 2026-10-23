@@ -150,6 +150,10 @@ export class Jarvis {
   callsConfig() { return this.#req("/api/calls/config"); }
   setCallsConfig(mode, numbers, greeting = "") { return this.#req("/api/calls/config", { method: "POST", body: { mode, numbers, greeting } }); }
   runBackup() { return this.#req("/api/backup/run", { method: "POST", timeout: 150_000 }); }
+  /** Cancella la conversazione corrente (di tutti i dispositivi e di Telegram) e ne inizia una nuova. */
+  newChat() { return this.#req("/api/chat/new", { method: "POST" }); }
+  contactsAccess() { return this.#req("/api/contacts/access"); }
+  setContactsAccess(enabled) { return this.#req("/api/contacts/access", { method: "POST", body: { enabled } }); }
   tasks() { return this.#get("/api/tasks"); }
   addTask(text, list = "attività") { return this.#req("/api/tasks", { method: "POST", body: { text, list } }); }
   setTaskDone(id, done) { return this.#req(`/api/tasks/${id}`, { method: "PATCH", body: { done } }); }

@@ -163,13 +163,31 @@ function buildChat() {
   });
   chatInput.addEventListener("input", () => { chatInput.style.height = "auto"; chatInput.style.height = `${Math.min(chatInput.scrollHeight, 140)}px`; });
   chatView = el("div", { class: "chat" },
-    panelHead("Conversazione", "Parla con JARVIS: usa gli stessi poteri di Telegram e della voce."),
+    panelHead("Conversazione", "Parla con JARVIS: usa gli stessi poteri di Telegram e della voce.",
+      el("button", { class: "btn", title: "Cancella la conversazione e riparti da zero", onclick: newChat }, icon("plus", 16), "Nuova chat")),
     chatLog,
     el("div", { class: "chips" }, CHIPS.map(([label, text]) => el("button", { class: "chip", onclick: () => send(text) }, label))),
     el("div", { class: "composer" }, chatInput, el("button", { class: "send", title: "Invia", "aria-label": "Invia", onclick: () => send() }, icon("send", 20))),
   );
   addMessage("sys", cfg.token ? "Pronto, signore." : "Inserisci il token personale in Impostazioni per iniziare.");
   return chatView;
+}
+
+let newChatArmed = 0;
+async function newChat(e) {
+  if (S.busy) return toast("Aspetta che JARVIS finisca di rispondere");
+  const btn = e?.currentTarget;
+  if (Date.now() - newChatArmed > 4000) {  // conferma a due tocchi (le finestre di dialogo del browser non sono affidabili nell'app)
+    newChatArmed = Date.now();
+    if (btn) btn.lastChild.textContent = "Conferma: cancella tutto";
+    toast("Tocca di nuovo per cancellare la conversazione (anche su Telegram e sul telefono). Ricordi e promemoria restano.");
+    setTimeout(() => { if (btn?.lastChild) btn.lastChild.textContent = "Nuova chat"; }, 4000);
+    return;
+  }
+  newChatArmed = 0;
+  if (btn) btn.lastChild.textContent = "Nuova chat";
+  try { await api.newChat(); S.histSig = null; chatLog.replaceChildren(); addMessage("sys", "Nuova conversazione. Pronto, signore."); }
+  catch (e) { toast(errText(e), true); }
 }
 
 async function send(text) {

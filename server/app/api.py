@@ -5,7 +5,7 @@ import time
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -195,6 +195,32 @@ class PhoneResultIn(BaseModel):
 async def phone_result(body: PhoneResultIn, request: Request) -> dict:
     """L'app risponde a un ordine del server (es. ricerca in rubrica). Nessun dato resta sul server: va solo a chi lo aspettava."""
     return {"ok": request.app.state.phone.resolve(body.id, body.ok, body.data, body.error)}
+
+
+class ContactsAccessIn(BaseModel):
+    enabled: bool
+
+
+@router.get("/contacts/access")
+async def contacts_access(request: Request) -> dict:
+    """Interruttore e registro degli accessi alla rubrica: chi ha cercato cosa e quando (solo in memoria, mai i numeri)."""
+    b = request.app.state.phone
+    return {"enabled": b.enabled, "log": list(b.log)[-20:]}
+
+
+@router.post("/contacts/access")
+async def set_contacts_access(body: ContactsAccessIn, request: Request) -> dict:
+    request.app.state.phone.enabled = body.enabled
+    await request.app.state.store.set_setting("contacts_access", "on" if body.enabled else "off")
+    return {"ok": True, "enabled": body.enabled}
+
+
+@router.post("/chat/new")
+async def chat_new(request: Request, x_device_id: str = Header(default="", max_length=64)) -> dict:
+    """Cancella la conversazione corrente (condivisa da app e Telegram) e ne fa partire una nuova. Ricordi, cervello e promemoria restano."""
+    await request.app.state.store.clear_messages("main")
+    request.app.state.notifier.sync("chat", x_device_id)
+    return {"ok": True}
 
 
 class CallsIn(BaseModel):
