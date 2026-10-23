@@ -131,3 +131,9 @@ def test_twilio_routes_require_a_valid_signature_and_the_config_api_works(client
     assert ok.status_code == 200 and ok.json()["mode"] == "allowed"
     r2 = client.post("/twilio/voice", data=params, headers={"X-Twilio-Signature": sig})
     assert "<Gather" in r2.text and re.search(r"Matteo|signore", r2.text)
+
+
+def test_phone_result_endpoint_delivers_only_to_the_waiting_request(client):
+    r = client.post("/api/phone/result", headers=AUTH, json={"id": "inesistente", "ok": True, "data": {"contacts": []}})
+    assert r.status_code == 200 and r.json() == {"ok": False}
+    assert client.post("/api/phone/result", json={"id": "xxxx", "ok": True}).status_code == 401
