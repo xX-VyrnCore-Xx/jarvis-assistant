@@ -24,6 +24,9 @@ PERSONAL = re.compile(r"\b(sono|ho|mio|mia|miei|mie|mi\s|devo|dovr[òo]|voglio|v
 REMINDER_MADE = re.compile(r"promemoria (fissato|creato|impostato|rimandato)|ti ricorder[òo]", re.I)
 
 
+CONTACTS = re.compile(r"\b(chiam\w+|telefon\w+|whatsapp|rubrica|contatt\w+|numero di)\b", re.I)  # nomi e numeri della rubrica non finiscono nel cervello
+
+
 class Learner:
     def __init__(self, settings: Settings, llm, brain, store):
         self.s, self.llm, self.brain, self.store = settings, llm, brain, store
@@ -32,7 +35,7 @@ class Learner:
 
     def schedule(self, user_text: str, answer: str) -> None:
         """Parte in secondo piano: la risposta all'utente non aspetta mai l'apprendimento."""
-        if not self.eligible(user_text) or REMINDER_MADE.search(answer or ""):  # una richiesta di promemoria non è un fatto da ricordare
+        if not self.eligible(user_text) or CONTACTS.search(user_text) or REMINDER_MADE.search(answer or ""):  # una richiesta di promemoria non è un fatto da ricordare
             return
         try:
             t = asyncio.get_running_loop().create_task(self.observe(user_text, answer))

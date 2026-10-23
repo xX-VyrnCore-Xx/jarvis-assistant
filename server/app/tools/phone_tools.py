@@ -3,14 +3,18 @@
 JARVIS non può far partire una chiamata da solo: crea una richiesta di conferma (come per le email); solo dopo l'OK dell'utente manda
 al telefono l'ordine di chiamare, che l'app esegue (i contatti si risolvono sul telefono, il server non li vede mai)."""
 import re
+import time
 
-from ..phonebridge import BridgeError
+from ..phonebridge import BridgeError, clean_contacts
 from . import UNTRUSTED, ToolRegistry
 
 NUMBER = re.compile(r"^[+0-9 ()./-]{3,24}$")
+# numeri a pagamento italiani (89x, 144, 166, 178, 199, 892, 895, 899…): non si chiamano su ordine del modello
+PREMIUM = re.compile(r"^(?:\+39|0039)?(?:89\d|144|166|178|199)")
+CALLS_PER_DAY = 10
 
 
-def register_phone_tools(reg: ToolRegistry, pending, notifier_of, bridge=None) -> None:
+def register_phone_tools(reg: ToolRegistry, pending, notifier_of, bridge=None, store=None) -> None:
     async def contacts_search(query: str) -> str:
         """Cerca nella rubrica del telefono (solo nomi e codici: i numeri non lasciano mai il telefono)."""
         q = " ".join((query or "").split())[:60]
@@ -20,7 +24,8 @@ def register_phone_tools(reg: ToolRegistry, pending, notifier_of, bridge=None) -
             data = await bridge.ask("contacts.search", {"query": q})
         except BridgeError as e:
             return f"Errore: {e}"
-        rows = data.get("contacts") or []
+        rows = clean_contacts(data.get("contacts"))
+        bridge.audit("search", q, len(rows))
         if not rows:
             return f"Nessun contatto trovato per «{q}»."
         out = []
@@ -39,11 +44,19 @@ def register_phone_tools(reg: ToolRegistry, pending, notifier_of, bridge=None) -
             return "Errore: indica chi chiamare (nome o numero)."
         if way not in ("phone", "whatsapp"):
             return "Errore: 'via' deve essere phone o whatsapp."
+        if NUMBER.fullmatch(who) and PREMIUM.match(re.sub(r"[ ()./-]", "", who)):
+            return "Errore: non chiamo numeri a pagamento o a sovrapprezzo."
         if video and way != "whatsapp":
             return "Errore: la videochiamata è disponibile solo su WhatsApp."
         label = f"{'videochiamata' if video else 'chiamata'} {'WhatsApp' if way == 'whatsapp' else 'telefonica'} a «{who}»" + (" (numero)" if NUMBER.fullmatch(who) else "")
 
         async def go() -> str:
+            if store is not None:
+                day = f"calls:{time.strftime('%Y-%m-%d')}"
+                n = int(await store.get_setting(day) or 0)
+                if n >= CALLS_PER_DAY:
+                    return f"Limite di {CALLS_PER_DAY} chiamate al giorno raggiunto: per sicurezza non ne avvio altre."
+                await store.set_setting(day, str(n + 1))
             await notifier_of().push("call", f"Chiama {who}", f"{label[0].upper()}{label[1:]}: tocca per avviarla.",
                                      telegram=False, meta={"contact": who, "contact_id": cid, "via": way, "video": bool(video)})
             return "Ordine inviato al telefono: la chiamata parte dall'app JARVIS."

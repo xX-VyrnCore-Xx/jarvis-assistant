@@ -64,13 +64,24 @@ class Agent:
 
     def _trim_history(self, rows: list[dict]) -> list[dict]:
         """Cronologia entro un budget di caratteri: le conversazioni lunghe si accorciano dai messaggi più vecchi (meno token spesi)."""
+        return self._split_history(rows)[0]
+
+    def _split_history(self, rows: list[dict]) -> tuple[list[dict], list[dict]]:
+        """(messaggi recenti da inviare per intero, messaggi più vecchi che non entrano)."""
         out, used = [], 0
         for m in reversed(rows):
             used += len(m["content"])
             if used > self.s.history_chars and len(out) >= 2:
                 break
             out.append(m)
-        return list(reversed(out))
+        out.reverse()
+        return out, rows[: len(rows) - len(out)]
+
+    @staticmethod
+    def _thread(older: list[dict]) -> str:
+        """Filo della conversazione: gli ultimi argomenti dell'utente tra i messaggi che non entrano per intero (zero token di modello, solo estratto)."""
+        asked = [" ".join(m["content"].split())[:80] for m in older if m["role"] == "user"]
+        return ("Prima in questa conversazione l'utente aveva chiesto: " + "; ".join(asked[-6:])) if asked else ""
 
     async def _profile(self) -> str:
         if not (self.brain and self.brain.enabled):
@@ -116,10 +127,12 @@ class Agent:
         rows_raw, brain_raw, profile_raw, situation_raw = await asyncio.gather(
             self.store.recent_messages(session_id, self.s.history_messages),
             self.brain.context(user_text) if self.brain else asyncio.sleep(0, ""), self._profile(), self._situation())
-        rows = self._trim_history(rows_raw)
+        rows, older = self._split_history(rows_raw)
+        thread = self._thread(older)
         prior = [m["content"] for m in reversed(rows) if m["role"] == "user"][:2]
         active = self.selector.groups_for(user_text, prior)  # gruppi di strumenti pertinenti a questa richiesta
         history = [{**m, "content": red.mask(m["content"])} for m in rows]
+        thread = red.mask(thread)
         brain_ctx = red.mask(brain_raw)  # secondo cervello: contesto pertinente, mascherato
         profile = red.mask(profile_raw)
         situation = red.mask(situation_raw)
@@ -141,6 +154,8 @@ class Agent:
             system += "\n\nChi è l'utente (profilo compilato dai suoi ricordi):\n" + profile
         if situation:
             system += "\n\nSituazione adesso:\n" + situation
+        if thread:
+            system += "\n\n" + thread
         if brain_ctx:
             system += "\n\n" + brain_ctx
         elif memories:
@@ -149,7 +164,7 @@ class Agent:
             system += ("\n\nPer privacy alcuni dati sensibili compaiono come segnaposto tra parentesi quadre (es. [IBAN_1], [CARTA_1], [EMAIL_1]): "
                        "usali tali e quali nelle risposte e negli argomenti dei tool, il sistema li sostituisce con i valori veri.")
         # blocchi che si possono togliere se il contesto è troppo lungo, dal meno importante al più (vedi ctx.fit)
-        optional = [b for b in (brain_ctx, profile and "Chi è l'utente (profilo compilato dai suoi ricordi):\n" + profile, situation and "Situazione adesso:\n" + situation,
+        optional = [b for b in (thread, brain_ctx, profile and "Chi è l'utente (profilo compilato dai suoi ricordi):\n" + profile, situation and "Situazione adesso:\n" + situation,
                                 ("Ricordi rilevanti:\n" + "\n".join(f"- {m}" for m in memories)) if not brain_ctx and memories else "", skill_ctx) if b]
         return [{"role": "system", "content": system, "_opt": optional}, *history, {"role": "user", "content": red.mask(user_text)}], red, active
 

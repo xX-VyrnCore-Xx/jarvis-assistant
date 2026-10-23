@@ -9,8 +9,6 @@ Il tetto dipende dal profilo e si restringe da solo quando un provider risponde 
 import json
 import re
 
-from .usage import est_tokens
-
 TOOL_CAP = 2600  # caratteri massimi di un risultato di tool inviato al modello
 OLD_TURN = 260  # caratteri conservati dei turni vecchi
 BUDGET = {"auto:fast": 5200}  # i provider veloci gratuiti hanno i limiti più stretti (es. 7000 token al minuto)
@@ -38,12 +36,25 @@ def classify_error(status: int, body: str = "") -> str:
     return "retry"
 
 
+def est(text: str) -> int:
+    """Stima prudente dei token: l'italiano, il JSON e il codice costano più di 1 token ogni 4 caratteri (≈3,5), e sottostimare fa sforare i limiti dei provider."""
+    return -(-len(text) * 2 // 7) or 1
+
+
 def tokens_of(messages: list[dict], tools: list[dict] | None = None) -> int:
-    n = sum(est_tokens(str(m.get("content") or "")) + 4 + sum(est_tokens(json.dumps(c.get("function", {}))) for c in m.get("tool_calls") or []) for m in messages)
-    return n + (est_tokens(json.dumps(tools)) if tools else 0)
+    n = sum(est(str(m.get("content") or "")) + 4 + sum(est(json.dumps(c.get("function", {}))) for c in m.get("tool_calls") or []) for m in messages)
+    return n + (est(json.dumps(tools)) if tools else 0)
+
+
+def squeeze(text: str) -> str:
+    """Toglie ciò che non porta informazione: spazi a fine riga, righe vuote ripetute, rientri enormi."""
+    text = re.sub(r"[ \t]+\n", "\n", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return re.sub(r"(?m)^[ \t]{8,}", "    ", text).strip()
 
 
 def cap_text(text: str, limit: int) -> str:
+    text = squeeze(text) if len(text) > limit else text
     if len(text) <= limit:
         return text
     head, tail = int(limit * 0.7), int(limit * 0.25)
@@ -106,13 +117,21 @@ def fit(messages: list[dict], tools: list[dict] | None, budget: int, core_tools:
             break
     msgs = head + [m for g in body for m in g]
     # 4) ancora troppo: si buttano i turni vecchi più lontani (mai l'ultima domanda dell'utente né l'ultimo giro di tool)
-    while tokens_of(msgs, tools) > budget:
+    lost: list[str] = []
+    reserve = 0  # spazio per l'elenco degli argomenti già trattati, quando qualcosa viene tolto
+    while tokens_of(msgs, tools) + reserve > budget:
         gs = _groups(msgs[len(head):])
         keep_user = max((i for i, g in enumerate(gs) if g[0].get("role") == "user"), default=len(gs) - 1)
         drop = next((i for i in range(len(gs) - 1) if i != keep_user), None)
         if drop is None:
             break
+        if gs[drop][0].get("role") == "user":
+            lost.append(" ".join(str(gs[drop][0].get("content") or "").split())[:70])
+            reserve = 110 if head else 0
         msgs = head + [m for i, g in enumerate(gs) if i != drop for m in g]
+    if lost and head and tokens_of(msgs, tools) + reserve <= budget:  # ciò che è stato tolto non sparisce del tutto: resta l'elenco degli argomenti già trattati
+        note = "\n\nArgomenti già trattati prima in questa conversazione (turni omessi per spazio): " + "; ".join(lost[-5:])
+        msgs[0] = {**msgs[0], "content": str(msgs[0]["content"]) + note}
     if tools and tokens_of(msgs, tools) > budget:
         keep = core_tools or set()
         slim = [t for t in tools if t["function"]["name"] in keep or t["function"]["name"] == "need_tools"]

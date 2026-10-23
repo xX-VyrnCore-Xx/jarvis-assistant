@@ -121,7 +121,11 @@ async def lifespan(app: FastAPI):
     coding = app.state.coding = CodingService(settings, store)
     register_coding_tools(tools, coding, pending)
     bridge = app.state.phone = PhoneBridge(lambda: app.state.notifier)
-    register_phone_tools(tools, pending, lambda: app.state.notifier, bridge)
+    try:
+        bridge.enabled = await store.get_setting("contacts_access") != "off"
+    except Exception:
+        pass
+    register_phone_tools(tools, pending, lambda: app.state.notifier, bridge, store)
     app.state.agent.coding = coding
     try:
         custom = await skills.load_custom(brain)

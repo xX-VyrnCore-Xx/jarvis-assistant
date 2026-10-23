@@ -136,6 +136,7 @@ function renderTop() {
   top.replaceChildren(
     el("div", { class: "m-title" }, orb(), el("div", {}, el("h1", {}, "JARVIS", cfg.token ? el("i", { class: `m-link ${linkState()}`, role: "img", "aria-label": LINK_TEXT[linkState()] }) : null), el("p", {}, `${greeting()}, signore`))),
     el("div", { class: "m-right" },
+      cfg.token && S.tab === "chat" ? el("button", { class: "m-bell", onclick: askNewChat, "aria-label": "Nuova chat", title: "Nuova chat" }, icon("plus", 22)) : null,
       t ? el("button", { class: `m-pill${low ? " low" : ""}`, onclick: () => setTab("tokens"), "aria-label": "Token disponibili" }, icon("gauge", 15), fmtTokens(t.remaining_tokens)) : null,
       el("button", { class: "m-bell", onclick: openNotes, "aria-label": "Notifiche" }, icon("bell", 21), unread() ? el("i", {}, unread() > 9 ? "9+" : String(unread())) : null)),
   );
@@ -200,7 +201,7 @@ function setTab(id) {
     clearTimeout(setTab.t); setTab.t = setTimeout(() => delete content.dataset.dir, 520);
   }
   S.tab = id;
-  renderTabs(); renderTab();
+  renderTabs(); renderTab(); renderTop();
   if (id === "brain") loadBrain();
   if (id === "tokens") loadTokens();
   if (id === "reminders") { loadReminders(); loadTasks(); }
@@ -267,6 +268,21 @@ function buildChat() {
   chatView = el("div", { class: "m-chat" }, log, downBtn, chips, el("div", { id: "m-skillchip" }), el("div", { class: "m-composer" }, micBtn, input, sendBtn));
   showHello();
   return chatView;
+}
+
+/** Chiede conferma e cancella la conversazione (la stessa su tutti i dispositivi e su Telegram): ricordi, cervello e promemoria restano. */
+function askNewChat() {
+  haptic();
+  if (S.busy) return toast("Aspetta che JARVIS finisca di rispondere");
+  const s = openSheet("Nuova chat", el("div", { class: "ask" }, icon("plus", 30)),
+    el("p", { class: "ask-t" }, "Cancello la conversazione corrente e ne comincio una nuova, su tutti i tuoi dispositivi e su Telegram."),
+    el("small", { class: "m-note" }, "Ricordi, secondo cervello, promemoria e attività non vengono toccati."),
+    el("div", { class: "m-btns" }, el("button", { class: "m-ghost", onclick: () => s.close() }, "Annulla"),
+      el("button", { class: "m-primary", onclick: async () => {
+        s.close();
+        try { await api.newChat(); S.histSig = null; log.replaceChildren(); hello = null; showHello(); haptic("medium"); toast("Nuova conversazione"); }
+        catch (e) { toast(errText(e), true); }
+      } }, "Cancella e riparti")));
 }
 
 function renderSkillChip() {
@@ -669,6 +685,8 @@ function buildReminders() {
 // ---------------------------------------------------------------- aggiornamenti dell'app
 // ---------------------------------------------------------------- aggiornamenti dell'app
 const WHATS_NEW = [
+  ["plus", "Nuova chat", "Il + in alto cancella la conversazione e ne comincia una nuova, ovunque."],
+  ["shield", "Rubrica più protetta", "Ogni ricerca si vede, c'è un limite di richieste e al modello arrivano solo nomi e codici."],
   ["refresh", "Tutto in tempo reale", "Attività, promemoria, ricordi e chat sono gli stessi su Telegram, Android e Windows e si aggiornano all'istante."],
   ["check", "Attività nell'app", "Nella scheda Promemoria c'è la lista delle attività: aggiungi, completa o elimina, anche da Telegram."],
   ["phone", "Chiamate", "Chiama con Telefono o WhatsApp da Altro o chiedilo a JARVIS (con la tua conferma). L'app ora resta solo in verticale."],
@@ -834,6 +852,7 @@ function phoneCard() {
     el("label", { class: "m-row" }, el("span", {}, "JARVIS può cercare nei contatti (vede i nomi, mai i numeri)"), el("input", { type: "checkbox", class: "m-switch", "aria-label": "Ricerca nei contatti per JARVIS", checked: contactShare(),
       onchange: async (e) => {
         store.set("jarvis.contacts.share", e.target.checked ? "1" : "0"); haptic();
+        api.setContactsAccess(e.target.checked).catch(() => {});  // lo stesso interruttore vale anche sul server
         if (e.target.checked && !S.phone?.perms?.contacts) { try { S.phone = await phone.requestPermissions(); } catch (er) { toast(errText(er), true); } rerenderMore(); }  // chiede subito il permesso Contatti
       } })),
     el("div", { class: "m-row" }, el("span", {}, "Chiama con Telefono o WhatsApp"), el("button", { class: "m-ghost", onclick: () => openCallSheet() }, icon("phone", 16), "Chiama")),
@@ -1097,6 +1116,7 @@ async function handleCommand({ id, cmd, args = {} }) {
   if (cmd !== "contacts.search") return reply(false, null, "Comando sconosciuto");
   if (!contactShare()) return reply(false, null, "La ricerca nei contatti è disattivata dall'utente (Altro → Telefono).");
   try {
+    toast(`JARVIS cerca «${String(args.query || "").slice(0, 30)}» nei contatti`);  // trasparenza: ogni accesso alla rubrica si vede
     const found = await phone.findContacts(String(args.query || "").slice(0, 60));
     reply(true, { contacts: rememberContacts(found) });
   } catch (e) { reply(false, null, /permesso/i.test(e?.message || "") ? "Manca il permesso Contatti sul telefono." : "Ricerca non riuscita sul telefono."); }
