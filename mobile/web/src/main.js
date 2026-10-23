@@ -7,6 +7,7 @@ import { appVersion, dictationAvailable, haptic, hideSplash, onBack, openExterna
 import { initPush, teardownPush } from "./push.js";
 import { checkPin, cryptoOk, makePin, open as openSealed, seal } from "./secure.js";
 import { showLock } from "./lock.js";
+import { NUMBER_RE, phone, phoneAvailable } from "./phone.js";
 
 // URL pubblico del server (non è un segreto); il token personale resta nella memoria privata dell'app
 const DEFAULT_URL = "https://jarvis-ai-841t.onrender.com";
@@ -43,7 +44,7 @@ async function saveToken(t) {
 const api = new Jarvis({ url: () => cfg.url, token: () => cfg.token });
 const speaker = new Speaker({ tts: (t) => api.tts(t) });
 const voiceOn = () => store.get("jarvis.speak") !== "0";
-const S = { skill: null, update: null, prefs: null, models: null, usage: null, appVer: "", brain: { q: "", results: null, docs: null, stats: null, busy: false }, tab: "chat", status: null, checked: false, tokens: null, tokensErr: "", tokensAt: null, reminders: [], remindersLoaded: false, notes: [], pending: [], online: false, live: "off", backup: null, busy: false, mic: false, canMic: false, sheets: [] };
+const S = { skill: null, update: null, prefs: null, models: null, usage: null, appVer: "", brain: { q: "", results: null, docs: null, stats: null, busy: false }, tab: "chat", status: null, checked: false, tokens: null, tokensErr: "", tokensAt: null, reminders: [], remindersLoaded: false, notes: [], pending: [], online: false, live: "off", backup: null, phone: null, busy: false, mic: false, canMic: false, sheets: [] };
 
 const $app = document.getElementById("m-app");
 let top, content, tabs, log, input, sendBtn, micBtn, downBtn, chatView, hello, chips;
@@ -203,7 +204,7 @@ function setTab(id) {
   if (id === "brain") loadBrain();
   if (id === "tokens") loadTokens();
   if (id === "reminders") loadReminders();
-  if (id === "more") loadBackup();
+  if (id === "more") { loadBackup(); loadPhone(); }
 }
 
 function renderTab() {
@@ -640,10 +641,10 @@ function buildReminders() {
 // ---------------------------------------------------------------- aggiornamenti dell'app
 // ---------------------------------------------------------------- aggiornamenti dell'app
 const WHATS_NEW = [
-  ["refresh", "Promemoria ricorrenti", "Ogni giorno, nei feriali, ogni settimana, mese o anno: il prossimo compare da solo."],
-  ["bell", "Avvisi con azioni", "«+10 min», «+1 ora» o «Fatto» direttamente dall'avviso in cima allo schermo."],
-  ["sparkle", "Collegamento più solido", "Un pallino accanto al nome mostra lo stato; riconnessione automatica con conto alla rovescia."],
-  ["down", "Salvataggi sotto controllo", "Stato del backup e «Esegui ora» nella scheda Altro, con il motivo se qualcosa va storto."],
+  ["phone", "Chiamate", "Chiama con Telefono o WhatsApp (anche in video) da Altro, o chiedilo a JARVIS: parte solo dopo la tua conferma."],
+  ["shield", "Risposta automatica", "JARVIS accetta le chiamate solo dai numeri che autorizzi e solo se lo attivi; ogni risposta resta nel registro."],
+  ["sliders", "Orizzontale più pulito", "Via i finti pulsanti di finestra dalla barra laterale quando giri lo schermo."],
+  ["refresh", "Promemoria ricorrenti", "Ogni giorno, nei feriali, ogni settimana, mese o anno."],
 ];
 const skipped = () => store.get("jarvis.skipver");
 function hiddenToday(v) { try { const h = JSON.parse(store.get("jarvis.updhide", "{}")); return h.v === v && Date.now() - h.t < 864e5; } catch { return false; } }
@@ -783,6 +784,115 @@ function securityCard() {
     el("p", { class: "m-note" }, cryptoOk() ? "🔐 Il token personale è cifrato sul telefono con una chiave che l'app non può esportare." : "Cifratura del token non disponibile in questo browser."));
 }
 
+// ---------------------------------------------------------------- telefono e WhatsApp
+async function loadPhone() {
+  if (!phoneAvailable) return;
+  try { S.phone = await phone.status(); } catch { return; }
+  rerenderMore();
+}
+const phoneOk = () => !!S.phone && Object.values(S.phone.perms).every(Boolean);
+const missingPerms = () => (S.phone ? Object.values(S.phone.perms).filter((v) => !v).length : 4);
+
+function phoneCard() {
+  const ph = S.phone, auto = ph?.auto;
+  const allowed = auto?.allowed || [];
+  const sw = el("input", { type: "checkbox", class: "m-switch", "aria-label": "Risposta automatica alle chiamate", checked: !!auto?.enabled,
+    onchange: (e) => { e.target.checked ? confirmAutoAnswer(e.target) : saveAuto({ enabled: false }); } });
+  return el("div", { class: "m-card" },
+    row("Permessi", !ph ? "…" : phoneOk() ? "concessi" : `mancano ${missingPerms()}`, !ph ? undefined : phoneOk()),
+    !phoneOk() ? el("div", { class: "m-row" }, el("span", {}, "Servono per chiamare, leggere i contatti e rispondere"), el("button", { class: "m-ghost", onclick: async () => { try { S.phone = await phone.requestPermissions(); } catch (e) { toast(errText(e), true); } rerenderMore(); } }, "Concedi")) : null,
+    el("div", { class: "m-row" }, el("span", {}, "Chiama con Telefono o WhatsApp"), el("button", { class: "m-ghost", onclick: () => openCallSheet() }, icon("phone", 16), "Chiama")),
+    el("label", { class: "m-row" }, el("span", {}, "Rispondi da solo ai numeri autorizzati"), sw),
+    el("div", { class: "m-row" }, el("span", {}, allowed.length ? `Numeri autorizzati: ${allowed.length}` : "Nessun numero autorizzato"), el("button", { class: "m-ghost", onclick: openAllowSheet }, icon("sliders", 16), "Gestisci")),
+    el("div", { class: "m-row" }, el("span", {}, "Registro delle chiamate gestite"), el("button", { class: "m-ghost", onclick: openPhoneLog }, "Apri")),
+    el("p", { class: "m-note" }, "JARVIS risponde (accetta la chiamata, con il viva voce se vuoi) solo se la funzione è attiva e il numero è nell'elenco. Non può parlare al posto tuo: Android non lo permette alle app. Le chiamate WhatsApp non si possono accettare da un'app."));
+}
+
+async function saveAuto(patch) {
+  const cur = S.phone?.auto || { enabled: false, allowed: [], delay: 3, speaker: false };
+  try { S.phone = await phone.setAuto({ ...cur, ...patch }); haptic(); } catch (e) { toast(e?.message || errText(e), true); }
+  rerenderMore();
+}
+
+/** L'attivazione non è un semplice interruttore: spiega cosa succede e chiede un consenso esplicito. */
+function confirmAutoAnswer(box) {
+  if (!(S.phone?.auto?.allowed || []).length) { box.checked = false; toast("Prima aggiungi almeno un numero autorizzato", true); return openAllowSheet(); }
+  if (!S.phone.perms.answer || !S.phone.perms.state) { box.checked = false; toast("Concedi prima i permessi del telefono", true); return; }
+  box.checked = false;
+  const s = openSheet("Rispondere da solo?", el("div", { class: "ask" }, icon("shield", 30)),
+    el("p", { class: "ask-t" }, `JARVIS accetterà le chiamate telefoniche in arrivo solo da ${S.phone.auto.allowed.length} numer${S.phone.auto.allowed.length === 1 ? "o" : "i"} che hai autorizzato, dopo alcuni secondi di squillo. Le altre chiamate non vengono toccate.`),
+    el("small", { class: "m-note" }, "Puoi disattivarlo in qualsiasi momento da qui. Ogni risposta resta nel registro."),
+    el("div", { class: "m-btns" }, el("button", { class: "m-ghost", onclick: () => s.close() }, "Annulla"), el("button", { class: "m-primary", onclick: () => { s.close(); saveAuto({ enabled: true }); } }, "Autorizza")));
+}
+
+function openAllowSheet() {
+  const q = el("input", { type: "text", placeholder: "Cerca nei contatti o scrivi un numero", "aria-label": "Contatto o numero", autocapitalize: "off" });
+  const results = el("div", { class: "pick-list" });
+  const list = el("div", { class: "pick-list" });
+  const s = openSheet("Numeri autorizzati", q, results, el("h3", { class: "m-sub" }, "Autorizzati"), list);
+  const draw = () => {
+    const cur = S.phone?.auto?.allowed || [];
+    list.replaceChildren(...(cur.length ? cur.map((a) => el("div", { class: "pick-row" }, el("span", {}, el("b", {}, a.name || a.number), a.name ? el("small", {}, a.number) : null),
+      el("button", { class: "m-icon", "aria-label": "Rimuovi", onclick: async () => { await saveAuto({ allowed: cur.filter((x) => x !== a), enabled: cur.length > 1 && S.phone.auto.enabled }); draw(); } }, icon("trash", 18))))
+      : [el("p", { class: "m-note" }, "Nessuno: JARVIS non risponderà a nessuna chiamata.")]));
+  };
+  const add = async (name, number) => {
+    const cur = S.phone?.auto?.allowed || [];
+    if (cur.some((a) => a.number.replace(/\D/g, "").slice(-9) === number.replace(/\D/g, "").slice(-9))) return toast("Già autorizzato");
+    await saveAuto({ allowed: [...cur, { name, number }] }); q.value = ""; results.replaceChildren(); draw(); toast(`${name || number} autorizzato`);
+  };
+  let timer = 0;
+  q.addEventListener("input", () => {
+    clearTimeout(timer); const v = q.value.trim();
+    if (NUMBER_RE.test(v)) return results.replaceChildren(el("button", { class: "pick-row", onclick: () => add("", v) }, el("span", {}, el("b", {}, v), el("small", {}, "Aggiungi questo numero")), icon("plus", 18)));
+    if (v.length < 2) return results.replaceChildren();
+    timer = setTimeout(async () => {
+      try {
+        const found = await phone.findContacts(v);
+        results.replaceChildren(...(found.length ? found.flatMap((c) => c.numbers.map((n) => el("button", { class: "pick-row", onclick: () => add(c.name, n) }, el("span", {}, el("b", {}, c.name), el("small", {}, n)), icon("plus", 18))))
+          : [el("p", { class: "m-note" }, "Nessun contatto trovato.")]));
+      } catch (e) { results.replaceChildren(el("p", { class: "m-note bad" }, e?.message || "Concedi il permesso Contatti")); }
+    }, 250);
+  });
+  draw();
+}
+
+function openCallSheet(prefill = "", meta = {}) {
+  const q = el("input", { type: "text", placeholder: "Nome in rubrica o numero", "aria-label": "Chi chiamare", value: prefill, autocapitalize: "off" });
+  const video = el("input", { type: "checkbox", class: "m-switch", "aria-label": "Videochiamata", checked: !!meta.video });
+  const results = el("div", { class: "pick-list" });
+  const go = async (way, name, number) => {
+    try {
+      if (way === "whatsapp") { const r = await phone.whatsapp({ number, name, video: video.checked }); toast(r.method === "chat" ? "Chat WhatsApp aperta: tocca l'icona del telefono" : `Chiamo ${name || number} su WhatsApp…`); }
+      else { await phone.dial(number); toast(`Chiamo ${name || number}…`); }
+      s.close(); haptic("medium");
+    } catch (e) { toast(e?.message || "Chiamata non riuscita", true); }
+  };
+  const rowFor = (name, number) => el("div", { class: "pick-row" }, el("span", {}, el("b", {}, name || number), name ? el("small", {}, number) : null),
+    el("div", { class: "pick-act" }, el("button", { class: "m-ghost", onclick: () => go("phone", name, number) }, icon("phone", 15), "Telefono"), el("button", { class: "m-ghost", onclick: () => go("whatsapp", name, number) }, "WhatsApp")));
+  const s = openSheet("Chiama", q, el("label", { class: "m-inline" }, el("span", {}, "Videochiamata (WhatsApp)"), video), results);
+  const search = async () => {
+    const v = q.value.trim();
+    if (NUMBER_RE.test(v)) return results.replaceChildren(rowFor("", v));
+    if (v.length < 2) return results.replaceChildren();
+    try {
+      const found = await phone.findContacts(v);
+      results.replaceChildren(...(found.length ? found.flatMap((c) => c.numbers.map((n) => rowFor(c.name, n))) : [el("div", {}, el("p", { class: "m-note" }, "Nessun contatto con questo nome."), meta.via === "whatsapp" ? el("button", { class: "m-ghost", onclick: () => go("whatsapp", v, "") }, "Prova con WhatsApp") : null)]));
+    } catch (e) { results.replaceChildren(el("p", { class: "m-note bad" }, e?.message || "Concedi il permesso Contatti")); }
+  };
+  let timer = 0;
+  q.addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(search, 250); });
+  if (prefill) search(); else setTimeout(() => q.focus(), 280);
+}
+
+async function openPhoneLog() {
+  let rows = [];
+  try { rows = await phone.log(); } catch (e) { toast(errText(e), true); }
+  const body = rows.length ? rows.map((r) => el("div", { class: "m-row" }, el("span", {}, r.e), el("small", {}, new Date(r.t).toLocaleString("it-IT", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }))))
+    : [el("p", { class: "m-note" }, "Ancora nessuna chiamata gestita.")];
+  const s = openSheet("Registro del telefono", ...body, rows.length ? el("button", { class: "m-ghost", style: "width:100%;margin-top:10px", onclick: async () => { await phone.log(true); s.close(); toast("Registro svuotato"); } }, "Svuota") : null);
+}
+
 async function loadBackup() {
   if (!cfg.token) return;
   try { S.backup = (await api.serverHealth()).backup || {}; } catch { return; }
@@ -856,6 +966,7 @@ function buildMore() {
       el("div", { class: "m-row" }, el("span", {}, "Prova la voce"), el("button", { class: "m-ghost", onclick: () => speaker.speak("Buongiorno, signore. Tutti i sistemi sono operativi.") }, icon("volume", 16), "Ascolta")),
       el("div", { class: "m-row" }, el("span", {}, "Canali e ore silenziose"), el("button", { class: "m-ghost", onclick: openNotifySettings }, icon("sliders", 16), "Imposta")),
       el("div", { class: "m-row" }, el("span", {}, "Notifica di prova"), el("button", { class: "m-ghost", onclick: async () => { try { await api.testNotification(); toast("Inviata"); } catch (e) { toast(errText(e), true); } } }, icon("bell", 16), "Invia"))),
+    phoneAvailable ? [el("h3", { class: "m-sub" }, "Telefono"), phoneCard()] : null,
     el("h3", { class: "m-sub" }, "Salvataggi"),
     backupCard(),
     el("h3", { class: "m-sub" }, "Stato"),
@@ -873,7 +984,7 @@ function buildMore() {
 }
 
 // ---------------------------------------------------------------- notifiche
-const KIND = { reminder: "clock", alert: "shield", pending: "shield", update: "down", brain: "sparkle", proactive: "sparkle", info: "bell" };
+const KIND = { call: "phone", reminder: "clock", alert: "shield", pending: "shield", update: "down", brain: "sparkle", proactive: "sparkle", info: "bell" };
 const ROUTE_TAB = { chat: "chat", brain: "brain", tokens: "tokens", reminders: "reminders", more: "more" };
 let notesSheet = null;
 
@@ -881,6 +992,7 @@ async function loadNotes() {
   if (!cfg.token) return;
   try { S.notes = await api.notifications(40); } catch { return; }
   renderTop();
+  offerPendingCall();
   if (notesSheet) fillNotes();
 }
 
@@ -909,7 +1021,44 @@ function headsUp(n) {
   headsTimer = setTimeout(() => { box.classList.add("gone"); setTimeout(() => box.remove(), 300); }, n.kind === "alert" || n.kind === "pending" ? 9000 : n.kind === "reminder" ? 12000 : 5500);
 }
 
+// ---------------------------------------------------------------- chiamate
+const callDone = () => store.get("jarvis.call.done");
+/** Esegue un ordine di chiamata approvato dall'utente (chiesto a JARVIS in chat o su Telegram). I contatti si cercano sul telefono. */
+async function runCall(meta, id) {
+  if (!phoneAvailable) return toast("Le chiamate funzionano solo nell'app Android", true);
+  if (id) store.set("jarvis.call.done", String(id));
+  const who = String(meta.contact || "").trim();
+  if (!who) return;
+  const direct = NUMBER_RE.test(who);
+  try {
+    let number = direct ? who : "", name = direct ? "" : who;
+    if (!direct) {
+      let found = [];
+      try { found = await phone.findContacts(who); } catch { /* senza permesso Contatti si apre la scelta a mano */ }
+      const numbers = found.flatMap((c) => c.numbers.map((n) => ({ name: c.name, number: n })));
+      if (numbers.length === 1) { number = numbers[0].number; name = numbers[0].name; }
+      else if (meta.via === "whatsapp" && !numbers.length) { /* WhatsApp può cercare per nome tra i suoi contatti */ }
+      else return openCallSheet(who, meta);
+    }
+    if (meta.via === "whatsapp") {
+      const r = await phone.whatsapp({ number, name, video: !!meta.video });
+      toast(r.method === "chat" ? "Chat WhatsApp aperta: tocca l'icona del telefono" : `Chiamo ${name || number} su WhatsApp…`);
+    } else { await phone.dial(number); toast(`Chiamo ${name || number}…`); }
+    haptic("medium");
+  } catch (e) { toast(e?.message || "Chiamata non riuscita", true); }
+}
+/** L'ordine è arrivato mentre l'app era chiusa: lo si mostra e si parte solo con un tocco (Android non permette di chiamare da sfondo). */
+function offerPendingCall() {
+  const n = S.notes.find((x) => x.kind === "call" && !x.read && String(x.id) !== callDone() && Date.now() - new Date(x.created_at) < 120_000);
+  if (!n || S.sheets.length) return;
+  store.set("jarvis.call.done", String(n.id));
+  const m = n.meta || {};
+  const s = openSheet("Chiamata richiesta", el("div", { class: "ask" }, icon("phone", 30)), el("p", { class: "ask-t" }, n.body || `Chiamare ${m.contact}`),
+    el("div", { class: "m-btns" }, el("button", { class: "m-ghost", onclick: () => s.close() }, "Annulla"), el("button", { class: "m-primary", onclick: () => { s.close(); runCall(m, n.id); } }, "Chiama")));
+}
+
 function onNote(n) {
+  if (n.kind === "call" && document.visibilityState === "visible" && String(n.id) !== callDone()) { S.notes.unshift(n); renderTop(); runCall(n.meta || {}, n.id); return; }
   if (S.notes.some((x) => x.id === n.id)) return;
   if (n.kind === "update") checkUpdate();
   S.notes.unshift(n);

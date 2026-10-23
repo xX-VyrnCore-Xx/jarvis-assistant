@@ -47,6 +47,17 @@ grep -q 'networkSecurityConfig' "$MANIFEST" || sed -i 's/<application/<applicati
 grep -q 'networkSecurityConfig' "$MANIFEST" || { echo "manifest: configurazione di rete non applicata"; exit 1; }
 grep -q 'allowBackup="false"' "$MANIFEST" || { echo "manifest: allowBackup non disattivato"; exit 1; }
 
+# telefono e WhatsApp: plugin nativo (chiamare, contatti, risposta automatica solo per i numeri autorizzati dall'utente)
+JAVA_DIR=android/app/src/main/java/it/vyrncore/jarvis
+[ -d "$JAVA_DIR" ] || { echo "cartella Java di Capacitor non trovata: $JAVA_DIR"; exit 1; }
+cp native/phone/*.java "$JAVA_DIR/"
+if ! grep -q 'ANSWER_PHONE_CALLS' "$MANIFEST"; then
+  sed -i 's#<application#<uses-permission android:name="android.permission.CALL_PHONE" />\n    <uses-permission android:name="android.permission.ANSWER_PHONE_CALLS" />\n    <uses-permission android:name="android.permission.READ_PHONE_STATE" />\n    <uses-permission android:name="android.permission.READ_CALL_LOG" />\n    <uses-permission android:name="android.permission.READ_CONTACTS" />\n    <queries><package android:name="com.whatsapp" /><package android:name="com.whatsapp.w4b" /></queries>\n    <application#' "$MANIFEST"
+  sed -i 's#</application>#    <receiver android:name="it.vyrncore.jarvis.CallStateReceiver" android:exported="true"><intent-filter><action android:name="android.intent.action.PHONE_STATE" /></intent-filter></receiver>\n    </application>#' "$MANIFEST"
+fi
+grep -q 'CallStateReceiver' "$MANIFEST" && grep -q 'ANSWER_PHONE_CALLS' "$MANIFEST" || { echo "manifest: permessi del telefono non applicati"; exit 1; }
+grep -q 'registerPlugin(JarvisPhonePlugin.class)' "$JAVA_DIR/MainActivity.java" || { echo "MainActivity: plugin del telefono non registrato"; exit 1; }
+
 if [ -n "${ANDROID_GOOGLE_SERVICES_JSON_B64:-}" ]; then
   echo "$ANDROID_GOOGLE_SERVICES_JSON_B64" | base64 -d > android/app/google-services.json
   grep -q '"it.vyrncore.jarvis"' android/app/google-services.json || { echo "google-services.json: package diverso da it.vyrncore.jarvis"; exit 1; }

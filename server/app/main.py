@@ -42,6 +42,7 @@ from .brain.mirror import BrainMirror
 from .reminders import ReminderService
 from .coding import CodingService
 from .tools.coding_tools import register_coding_tools
+from .tools.phone_tools import register_phone_tools
 from . import tgwatch
 from .live import LiveFeeds, register_live_tools
 from .scheduler import background_loop, brain_loop, heartbeat_loop, live_loop, maintenance_loop, proactive_loop
@@ -116,6 +117,7 @@ async def lifespan(app: FastAPI):
     app.state.agent.skills = skills
     coding = app.state.coding = CodingService(settings, store)
     register_coding_tools(tools, coding, pending)
+    register_phone_tools(tools, pending, lambda: app.state.notifier)
     app.state.agent.coding = coding
     try:
         custom = await skills.load_custom(brain)
