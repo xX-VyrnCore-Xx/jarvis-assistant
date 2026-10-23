@@ -50,7 +50,7 @@ grep -q 'allowBackup="false"' "$MANIFEST" || { echo "manifest: allowBackup non d
 # telefono e WhatsApp: plugin nativo (chiamare, contatti, risposta automatica solo per i numeri autorizzati dall'utente)
 JAVA_DIR=android/app/src/main/java/it/vyrncore/jarvis
 [ -d "$JAVA_DIR" ] || { echo "cartella Java di Capacitor non trovata: $JAVA_DIR"; exit 1; }
-cp native/android/*.java "$JAVA_DIR/"
+cp native/phone/*.java "$JAVA_DIR/"
 if ! grep -q 'ANSWER_PHONE_CALLS' "$MANIFEST"; then
   sed -i 's#<application#<uses-permission android:name="android.permission.CALL_PHONE" />\n    <uses-permission android:name="android.permission.ANSWER_PHONE_CALLS" />\n    <uses-permission android:name="android.permission.READ_PHONE_STATE" />\n    <uses-permission android:name="android.permission.READ_CALL_LOG" />\n    <uses-permission android:name="android.permission.READ_CONTACTS" />\n    <queries><package android:name="com.whatsapp" /><package android:name="com.whatsapp.w4b" /></queries>\n    <application#' "$MANIFEST"
   sed -i 's#</application>#    <receiver android:name="it.vyrncore.jarvis.CallStateReceiver" android:exported="true"><intent-filter><action android:name="android.intent.action.PHONE_STATE" /></intent-filter></receiver>\n    </application>#' "$MANIFEST"
