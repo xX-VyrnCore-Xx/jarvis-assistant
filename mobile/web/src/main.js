@@ -641,9 +641,9 @@ function buildReminders() {
 // ---------------------------------------------------------------- aggiornamenti dell'app
 // ---------------------------------------------------------------- aggiornamenti dell'app
 const WHATS_NEW = [
-  ["phone", "Chiamate", "Chiama con Telefono o WhatsApp (anche in video) da Altro, o chiedilo a JARVIS: parte solo dopo la tua conferma."],
+  ["phone", "Chiamate", "Chiama con Telefono o WhatsApp da Altro o chiedilo a JARVIS (con la tua conferma). L'app ora resta solo in verticale."],
   ["shield", "Risposta automatica", "JARVIS accetta le chiamate solo dai numeri che autorizzi e solo se lo attivi; ogni risposta resta nel registro."],
-  ["sliders", "Orizzontale più pulito", "Via i finti pulsanti di finestra dalla barra laterale quando giri lo schermo."],
+  ["sparkle", "Segreteria con voce", "Con Twilio, JARVIS risponde a voce alle chiamate inoltrate e ti riferisce il messaggio."],
   ["refresh", "Promemoria ricorrenti", "Ogni giorno, nei feriali, ogni settimana, mese o anno."],
 ];
 const skipped = () => store.get("jarvis.skipver");
@@ -805,6 +805,7 @@ function phoneCard() {
     el("label", { class: "m-row" }, el("span", {}, "Rispondi da solo ai numeri autorizzati"), sw),
     el("div", { class: "m-row" }, el("span", {}, allowed.length ? `Numeri autorizzati: ${allowed.length}` : "Nessun numero autorizzato"), el("button", { class: "m-ghost", onclick: openAllowSheet }, icon("sliders", 16), "Gestisci")),
     el("div", { class: "m-row" }, el("span", {}, "Registro delle chiamate gestite"), el("button", { class: "m-ghost", onclick: openPhoneLog }, "Apri")),
+    el("div", { class: "m-row" }, el("span", {}, "Segreteria con voce e intelligenza artificiale"), el("button", { class: "m-ghost", onclick: openVoiceLine }, icon("sparkle", 16), "Imposta")),
     el("p", { class: "m-note" }, "JARVIS risponde (accetta la chiamata, con il viva voce se vuoi) solo se la funzione è attiva e il numero è nell'elenco. Non può parlare al posto tuo: Android non lo permette alle app. Le chiamate WhatsApp non si possono accettare da un'app."));
 }
 
@@ -883,6 +884,24 @@ function openCallSheet(prefill = "", meta = {}) {
   let timer = 0;
   q.addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(search, 250); });
   if (prefill) search(); else setTimeout(() => q.focus(), 280);
+}
+
+/** Segreteria telefonica con voce (Twilio): JARVIS risponde alle chiamate inoltrate a un numero Twilio, parla e riferisce il messaggio. */
+async function openVoiceLine() {
+  let cfg;
+  try { cfg = await api.callsConfig(); } catch (e) { return toast(errText(e), true); }
+  const mode = el("select", { class: "m-select", "aria-label": "Modalità" }, [["off", "Spenta"], ["allowed", "Solo numeri autorizzati"], ["all", "Tutti i chiamanti"]].map(([v, l]) => el("option", { value: v, selected: cfg.mode === v }, l)));
+  const greet = el("input", { type: "text", maxlength: 300, placeholder: "Saluto (facoltativo)", value: cfg.greeting || "", "aria-label": "Saluto" });
+  const copy = (text) => async () => { try { await navigator.clipboard.writeText(text); toast("Copiato"); } catch { toast(text); } };
+  const s = openSheet("Segreteria con voce", cfg.enabled ? el("p", { class: "m-note ok" }, "Collegata: manca solo l'inoltro dal tuo telefono.") : el("p", { class: "m-note bad" }, "Non attiva: su Render imposta TWILIO_AUTH_TOKEN (il token del tuo account Twilio)."),
+    el("label", { class: "m-inline" }, el("span", {}, "Rispondi a"), mode), greet,
+    el("p", { class: "m-note" }, "Con «Solo numeri autorizzati» usa l'elenco della risposta automatica. JARVIS non ha accesso a nulla di privato durante la chiamata: prende solo un messaggio e te lo riferisce."),
+    el("div", { class: "m-row" }, el("span", {}, "Indirizzo della voce (Twilio)"), el("button", { class: "m-ghost", onclick: copy(cfg.voice_url) }, "Copia")),
+    el("div", { class: "m-row" }, el("span", {}, "Indirizzo dello stato (Twilio)"), el("button", { class: "m-ghost", onclick: copy(cfg.status_url) }, "Copia")),
+    el("p", { class: "m-note" }, "Su Twilio, nel numero scelto, metti questi due indirizzi (metodo POST) in «A call comes in» e «Call status changes». Poi inoltra al numero Twilio le chiamate senza risposta: da tastiera **61*NUMERO# (inoltro se non rispondi)."),
+    el("button", { class: "m-primary", style: "width:100%", onclick: async () => {
+      try { await api.setCallsConfig(mode.value, S.phone?.auto?.allowed || [], greet.value.trim()); s.close(); toast(mode.value === "off" ? "Segreteria spenta" : "Segreteria impostata"); haptic("medium"); } catch (e) { toast(errText(e), true); }
+    } }, "Salva"));
 }
 
 async function openPhoneLog() {

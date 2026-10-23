@@ -41,6 +41,8 @@ class Settings(BaseSettings):
     public_url: str = ""  # su Render viene da RENDER_EXTERNAL_URL
     render_external_url: str = ""
     reminder_poll_s: float = 30.0
+    twilio_auth_token: str = ""  # attiva la linea telefonica di JARVIS (segreteria con voce e intelligenza artificiale); serve a verificare la firma di Twilio
+    twilio_voice: str = "Polly.Bianca"  # voce italiana letta da Twilio
 
     google_client_id: str = ""
     google_client_secret: str = ""
