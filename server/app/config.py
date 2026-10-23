@@ -26,6 +26,10 @@ class Settings(BaseSettings):
     llm_temperature_tools: float = 0.2  # con i tool serve precisione, non creatività
     llm_max_tokens: int = 1500  # tetto per risposta: protegge la quota gratuita
     stt_model: str = "auto"  # trascrizione dei vocali (FreeLLMAPI /v1/audio/transcriptions)
+    tts_neural: bool = True  # voce neurale del server (Edge) quando il PC è spento
+    tts_voice: str = "isabella"
+    tts_rate: str = "+4%"
+    tts_pitch: str = "+0Hz"
     history_chars: int = 7000  # budget della cronologia inviata al modello (le conversazioni lunghe si accorciano dalle più vecchie)
     github_repo: str = "xX-VyrnCore-Xx/jarvis-assistant"  # da dove le app scaricano gli aggiornamenti
     github_webhook_secret: str = ""  # facoltativo: notifica istantanea alla pubblicazione di una Release

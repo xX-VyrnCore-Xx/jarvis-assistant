@@ -83,13 +83,13 @@ export class Jarvis {
   health() { return this.#req("/health", { auth: false, timeout: 70_000 }); }
   chat(message, session) { return this.#req("/chat", { method: "POST", body: { message, session_id: session }, timeout: 120_000 }).then((r) => r.reply); }
   /** Risposta in streaming: onStatus(testo) durante i tool, onDelta(testo) mentre scrive. Restituisce la risposta intera. Se il server è vecchio ripiega su /chat. */
-  async chatStream(message, session, { model = "", skill = "", onStatus = () => {}, onDelta = () => {}, signal } = {}) {
+  async chatStream(message, session, { model = "", skill = "", voice = false, onStatus = () => {}, onDelta = () => {}, signal } = {}) {
     let res;
     try {
       res = await fetch(`${this.cfg.url()}/chat/stream`, {
         method: "POST",
         headers: { Authorization: `Bearer ${this.cfg.token()}`, "Content-Type": "application/json", Accept: "text/event-stream", "X-Device-Id": deviceId },
-        body: JSON.stringify({ message, session_id: session, model: model || undefined, skill: skill || undefined }),
+        body: JSON.stringify({ message, session_id: session, model: model || undefined, skill: skill || undefined, voice: voice || undefined }),
         signal,
       });
     } catch (e) {
@@ -161,6 +161,10 @@ export class Jarvis {
   deleteReminder(id) { return this.#req(`/api/reminders/${id}`, { method: "DELETE" }); }
   pending() { return this.#get("/api/pending"); }
   decide(id, approve) { return this.#req(`/api/pending/${encodeURIComponent(id)}/${approve ? "approve" : "reject"}`, { method: "POST" }); }
+  voiceConfig() { return this.#req("/api/voice"); }
+  setVoice(voice) { return this.#req("/api/voice", { method: "POST", body: { voice } }); }
+  toolsHealth() { return this.#req("/api/tools/health"); }
+  checkTools() { return this.#req("/api/tools/health", { method: "POST", timeout: 130_000 }); }
   tts(text) { return this.#req("/api/tts", { method: "POST", body: { text }, timeout: 150_000, raw: true }); }
   notifications(limit = 50) { return this.#get(`/api/notifications?limit=${limit}`); }
   markRead(ids = null) { return this.#req("/api/notifications/read", { method: "POST", body: { ids } }); }

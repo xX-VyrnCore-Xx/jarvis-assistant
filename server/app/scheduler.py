@@ -257,3 +257,18 @@ async def heartbeat_loop(app) -> None:
             warned = now_bad
         except Exception:
             log.exception("battito del server non riuscito")
+
+
+async def toolwatch_loop(watch, every_hours: float = 6) -> None:
+    """Prova gli strumenti esterni ogni poche ore (primo giro dopo 10 minuti dall'avvio): quelli rotti escono dall'elenco, quelli riparati rientrano."""
+    await asyncio.sleep(600)
+    while True:
+        beat("strumenti", every_hours * 3600)
+        try:
+            res = await watch.run()
+            bad = [n for n, ok in res.items() if not ok]
+            if bad:
+                log.info("controllo strumenti: non rispondono %s", ", ".join(bad))
+        except Exception:
+            log.exception("errore nel controllo degli strumenti")
+        await asyncio.sleep(every_hours * 3600)

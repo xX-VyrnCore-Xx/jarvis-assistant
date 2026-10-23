@@ -62,6 +62,7 @@ class ToolRegistry:
         self._tools: dict[str, tuple[dict[str, Any], ToolFn, Availability | None, float, float]] = {}
         self._cache: OrderedDict[str, tuple[float, str]] = OrderedDict()  # solo in RAM, mai su disco
         self._inflight: dict[str, asyncio.Future] = {}
+        self.down: dict[str, str] = {}  # strumenti messi da parte dal controllo automatico (nome → motivo): il modello non li vede finché non tornano a funzionare
 
     def register(
         self,
@@ -83,15 +84,17 @@ class ToolRegistry:
 
     @property
     def specs(self) -> list[dict[str, Any]]:
-        return [spec for spec, _, available, _, _ in self._tools.values() if available is None or available()]
+        return [spec for n, (spec, _, available, _, _) in self._tools.items() if n not in self.down and (available is None or available())]
 
     @property
     def names(self) -> list[str]:
-        return [n for n, (_, _, available, _, _) in self._tools.items() if available is None or available()]
+        return [n for n, (_, _, available, _, _) in self._tools.items() if n not in self.down and (available is None or available())]
 
     async def call(self, name: str, raw_args: str) -> str:
         if name not in self._tools:
             return f"Errore: tool '{name}' inesistente. Disponibili: {', '.join(self.names)}"
+        if name in self.down:
+            return f"Errore: {name} è momentaneamente fuori servizio ({self.down[name]}). Usa un'altra strada o riprova più tardi."
         spec, fn, available, timeout, ttl = self._tools[name]
         if available is not None and not available():
             return f"Errore: il tool '{name}' al momento non è disponibile."
