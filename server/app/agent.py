@@ -148,7 +148,10 @@ class Agent:
         if red.mode != "off":
             system += ("\n\nPer privacy alcuni dati sensibili compaiono come segnaposto tra parentesi quadre (es. [IBAN_1], [CARTA_1], [EMAIL_1]): "
                        "usali tali e quali nelle risposte e negli argomenti dei tool, il sistema li sostituisce con i valori veri.")
-        return [{"role": "system", "content": system}, *history, {"role": "user", "content": red.mask(user_text)}], red, active
+        # blocchi che si possono togliere se il contesto è troppo lungo, dal meno importante al più (vedi ctx.fit)
+        optional = [b for b in (brain_ctx, profile and "Chi è l'utente (profilo compilato dai suoi ricordi):\n" + profile, situation and "Situazione adesso:\n" + situation,
+                                ("Ricordi rilevanti:\n" + "\n".join(f"- {m}" for m in memories)) if not brain_ctx and memories else "", skill_ctx) if b]
+        return [{"role": "system", "content": system, "_opt": optional}, *history, {"role": "user", "content": red.mask(user_text)}], red, active
 
     def _rounds(self) -> int:
         return self.s.max_tool_rounds + (12 if self.coding and self.coding.session else 0)

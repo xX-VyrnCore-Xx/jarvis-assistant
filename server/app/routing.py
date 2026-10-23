@@ -13,6 +13,7 @@ BAD_AFTER, BAD_FOR_S, WINDOW_S = 3, 300, 600
 
 CODE = re.compile(r"```|^\s*(def|class|import|from|function|const|let|var|public|private|fn|SELECT|CREATE|INSERT)\b|Traceback|\bat \S+\(\S+:\d+|\b\w+\.(py|js|ts|tsx|rs|go|java|kt|cpp|c|sql|yml|yaml|json|html|css)\b(:\d+)?|"
                   r"\b(codice|script|funzione|bug|errore di compilazione|compila|refactor|repository|repo|commit|pull request|branch|merge|api|endpoint|database|query|deploy|docker|test unitari|sandbox|programma|implementa)\b", re.I | re.M)
+SIMPLE = re.compile(r"\b(traduci|traduzione|riassumi|riassunto|correggi|riformula|elenca|sinonimi|che ore|quanto fa|converti|definizione di|significa)\b", re.I)
 THINK = re.compile(r"\b(analizza|analisi|confronta|strategia|dimostra|ragiona|pro e contro|spiega in dettaglio|approfondisci|progetta|architettura|pianifica|valuta|ottimizza|perché|motiva|passo per passo|business plan)\b", re.I)
 
 
@@ -46,17 +47,24 @@ class Router:
         system = _last(messages[:1], "system")
         coding = bool(CODE.search(text)) or "Sessione di coding attiva" in system
         deep = bool(THINK.search(text)) or len(text) > 450 or text.count("?") >= 3
+        spoken = "LETTA AD ALTA VOCE" in system  # risposta parlata: la latenza conta più della finezza
+        big = sum(len(str(m.get("content") or "")) for m in messages) // 4 > 4500  # i profili veloci hanno i limiti di token più stretti
+        followup = bool(messages) and messages[-1].get("role") == "tool"  # si sta proseguendo un giro di strumenti: affidabilità prima di tutto
         if coding:
             return SMART, "code", "codice"
         if tools and deep:
             return SMART, "auto", "ragionamento con strumenti"
         if tools:
-            return RELIABLE, "auto", "chiamata di strumenti"
+            return RELIABLE, "auto", "continuazione dei strumenti" if followup else "chiamata di strumenti"
         if deep:
             return SMART, "chat", "ragionamento"
-        if len(text) <= 120:
+        if spoken and not big:
+            return FAST, "chat", "risposta parlata"
+        if SIMPLE.search(text) and len(text) <= 600 and not big:
+            return FAST, "chat", "compito semplice"
+        if len(text) <= 120 and not big:
             return FAST, "chat", "richiesta breve"
-        return BALANCED, "chat", "richiesta normale"
+        return BALANCED, "chat", "contesto ampio" if big else "richiesta normale"
 
     def usable(self, profile: str, now: float | None = None) -> bool:
         return self.stats.get(profile, {}).get("bad_until", 0) <= (now or time.monotonic())
@@ -89,5 +97,11 @@ class Router:
         if len(s["recent_fail"]) >= BAD_AFTER:
             s["bad_until"], s["recent_fail"] = now + BAD_FOR_S, []
 
+    def report_error(self, profile: str, category: str) -> None:
+        """Errori di categoria nota (richiesta troppo grande, strumenti rifiutati…): si contano a parte, senza mettere il profilo in castigo."""
+        s = self.stats.setdefault(profile, {"ok": 0, "fail": 0, "ms": 0.0, "recent_fail": [], "bad_until": 0.0})
+        s.setdefault("errors", {})
+        s["errors"][category] = s["errors"].get(category, 0) + 1
+
     def summary(self) -> dict:
-        return {p: {"ok": s["ok"], "fail": s["fail"], "avg_ms": int(s["ms"])} for p, s in self.stats.items()}
+        return {p: {"ok": s["ok"], "fail": s["fail"], "avg_ms": int(s["ms"]), **({"errors": s["errors"]} if s.get("errors") else {})} for p, s in self.stats.items()}
