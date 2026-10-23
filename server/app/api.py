@@ -152,6 +152,30 @@ async def delete_reminder(reminder_id: int, request: Request) -> dict:
     return {"ok": True}
 
 
+class CallsIn(BaseModel):
+    mode: str = Field(max_length=10)  # off | allowed | all
+    numbers: list[dict] = Field(default_factory=list, max_length=50)
+    greeting: str = Field("", max_length=300)
+
+
+@router.get("/calls/config")
+async def calls_config(request: Request) -> dict:
+    """Segreteria telefonica con voce (Twilio): impostazioni e indirizzi da dare a Twilio."""
+    from .voiceline import public_url
+
+    line = request.app.state.voiceline
+    base = public_url(request.app.state.settings, request)
+    return {"enabled": line.enabled, "voice_url": base + "/twilio/voice", "status_url": base + "/twilio/status", **await line.config()}
+
+
+@router.post("/calls/config")
+async def calls_config_set(body: CallsIn, request: Request) -> dict:
+    try:
+        return {"ok": True, **await request.app.state.voiceline.save(body.mode, body.numbers, body.greeting)}
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from e
+
+
 @router.post("/backup/run")
 async def backup_run(request: Request) -> dict:
     """Esegue subito il backup su Hugging Face (di solito è notturno) e dice com'è andata, con il motivo se fallisce."""

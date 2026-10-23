@@ -47,6 +47,10 @@ grep -q 'networkSecurityConfig' "$MANIFEST" || sed -i 's/<application/<applicati
 grep -q 'networkSecurityConfig' "$MANIFEST" || { echo "manifest: configurazione di rete non applicata"; exit 1; }
 grep -q 'allowBackup="false"' "$MANIFEST" || { echo "manifest: allowBackup non disattivato"; exit 1; }
 
+# solo in verticale: l'app non ruota (niente barra laterale né layout orizzontale)
+grep -q 'screenOrientation' "$MANIFEST" || sed -i 's#<activity#<activity android:screenOrientation="portrait"#' "$MANIFEST"
+grep -q 'screenOrientation="portrait"' "$MANIFEST" || { echo "manifest: blocco dell'orientamento non applicato"; exit 1; }
+
 # telefono e WhatsApp: plugin nativo (chiamare, contatti, risposta automatica solo per i numeri autorizzati dall'utente)
 JAVA_DIR=android/app/src/main/java/it/vyrncore/jarvis
 [ -d "$JAVA_DIR" ] || { echo "cartella Java di Capacitor non trovata: $JAVA_DIR"; exit 1; }

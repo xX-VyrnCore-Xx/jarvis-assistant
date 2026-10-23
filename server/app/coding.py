@@ -23,6 +23,7 @@ from pathlib import Path
 
 import httpx
 
+from .codegraph import CodeGraph
 from .config import Settings
 from .privacy import STANDARD, Redactor
 
@@ -144,6 +145,7 @@ class CodingService:
         self.root = root or Path("/tmp/jarvis-sandbox")
         self.session: Session | None = None
         self._lock = asyncio.Lock()
+        self._graph: tuple[str, CodeGraph] | None = None
 
     @property
     def enabled(self) -> bool:
@@ -169,7 +171,7 @@ class CodingService:
         return (f"Sessione di coding attiva: repository privato {s.repo} (ramo principale {s.default_branch}, ramo di lavoro {s.branch or 'non ancora creato'}"
                 f"{', PR #%d aperta' % s.pr if s.pr else ''}). Lavori nella sandbox con code_*: scrivi i file, committa spesso con messaggi chiari, apri la PR, controlla la CI (code_checks), "
                 "correggi dai log, poi unisci (code_merge). Il codice NON si esegue sul server: i test girano nella CI di GitHub (code_add_ci se manca; code_wait_checks per attendere). Non inventare file che non hai letto. "
-                "Prima di modificare guarda code_tree/code_diff; per scheletri pronti code_scaffold. Eliminare un repository (code_repo_delete) richiede la conferma esplicita dell'utente: spiega quale e perché, poi attendi.")
+                "Per orientarti usa la mappa a grafo (code_graph, code_symbol, code_deps, code_path) invece di leggere interi file: costa molti meno token. Prima di modificare guarda code_tree/code_diff; per scheletri pronti code_scaffold. Eliminare un repository (code_repo_delete) richiede la conferma esplicita dell'utente: spiega quale e perché, poi attendi.")
 
     # ------------------------------------------------------------------ sandbox: file
     def _path(self, rel: str) -> Path:
@@ -762,6 +764,29 @@ class CodingService:
             self.write(target, content.replace("{pkg}", pkg).replace("{name}", name))
             made.append(target)
         return f"Scheletro «{k}» creato ({len(made)} file: {', '.join(made)})" + (f"; già presenti e lasciati: {', '.join(skipped)}" if skipped else "") + ". Committa e apri la PR: la CI lo prova."
+
+    # ------------------------------------------------------------------ mappa del codice (a grafo): orientarsi senza rileggere i file
+    def graph(self) -> CodeGraph:
+        """Grafo di simboli e collegamenti della sandbox, ricostruito solo quando i file cambiano."""
+        self._need()
+        files = self._files()
+        digest = hashlib.sha1("".join(f"{k}:{len(v)}:{hashlib.md5(v).hexdigest()}" for k, v in sorted(files.items())).encode()).hexdigest()
+        if not self._graph or self._graph[0] != digest:
+            self._graph = (digest, CodeGraph.build(files))
+        return self._graph[1]
+
+    def code_map(self, query: str = "") -> str:
+        g = self.graph()
+        return g.symbol(query) if query.strip() else g.overview()
+
+    def code_symbol(self, name: str) -> str:
+        return self.graph().symbol(name)
+
+    def code_deps(self, path: str) -> str:
+        return self.graph().deps(path)
+
+    def code_path(self, a: str, b: str) -> str:
+        return self.graph().path(a, b)
 
     # ------------------------------------------------------------------ rami, cronologia, PR, issue, rilasci, CI
     async def branches(self) -> str:

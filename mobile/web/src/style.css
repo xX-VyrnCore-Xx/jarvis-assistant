@@ -244,47 +244,15 @@ button { transition: transform .16s var(--spring), opacity .16s; } button:active
 /* ===================================================================================
    Layout adattivo
    =================================================================================== */
-/* tablet, pieghevoli aperti, finestre larghe: la barra diventa una colonna laterale (come su iPad) */
-@media (min-width: 720px) {
-  #m-app { flex-direction: row; }
-  .m-tabs { order: 0; flex: none; width: calc(96px + var(--sl)); display: flex; flex-direction: column; align-items: stretch; justify-content: flex-start; gap: 6px;
-    padding: calc(20px + var(--top)) 10px calc(14px + var(--bot)) calc(10px + var(--sl)); border-top: 0; border-right: var(--hair) solid var(--line); }
-  .m-tab { height: 66px; justify-content: center; padding: 0; font-size: 11px; }
-  .m-lens { left: calc(10px + var(--sl)); right: 10px; width: auto; top: calc(20px + var(--top)); height: 66px; padding: 0; transform: translateY(calc(var(--i, 0) * 72px)); }
-  .m-lens i { border-radius: 20px; }
-  .m-tab .dot { right: calc(50% - 26px); top: 6px; }
-  .m-page, .m-log, .m-chips { max-width: 880px; width: 100%; margin-left: auto; margin-right: auto; padding-left: 20px; padding-right: 20px; }
-  .m-composer { width: min(880px, calc(100% - 40px)); margin-left: auto; margin-right: auto; }
-  .m-fab { right: max(22px, calc((100% - 880px) / 2 + 22px)); }
-  .m-top { padding-left: 24px; padding-right: 24px; } .m-offline, .m-update { margin-left: 24px; margin-right: 24px; }
-  .m-head h2 { font-size: 34px; } .m-hello .orb { width: 112px; height: 112px; } .m-hello h2 { font-size: 32px; }
-  .m-quick { grid-template-columns: repeat(4, 1fr); } .m-msg { max-width: 76%; }
-  .m-sheet-bg { align-items: center; justify-content: center; } .m-sheet { width: min(560px, 92vw); max-height: 84dvh; border-radius: 30px; padding-bottom: 24px; transform: translateY(40px) scale(.96); opacity: 0; transition: transform .46s var(--spring), opacity .3s; }
-  .m-sheet-bg.up .m-sheet { transform: none; opacity: 1; } .grab { display: none; }
-  #m-toast { left: 50%; right: auto; width: min(520px, calc(100% - 140px)); margin-left: 48px; transform-origin: center; translate: -50% 0; bottom: 28px; }
-}
+/* l'app è solo verticale (bloccata nel manifest): su schermi larghi il contenuto resta in una colonna centrale, senza barra laterale */
+@media (min-width: 720px) { #m-app { max-width: 720px; margin-left: auto; margin-right: auto; } }
 /* molto larghi: due colonne per Token e Altro */
-@media (min-width: 1100px) {
-  .m-page, .m-log, .m-chips { max-width: 1000px; } .m-composer { width: min(1000px, calc(100% - 40px)); }
-  .tab-more .m-page, .tab-tokens .m-page { display: grid; grid-template-columns: 1fr 1fr; gap: 0 20px; align-content: start; } .tab-more .m-head, .tab-tokens .m-head, .tab-tokens .hero, .tab-tokens .m-sub, .tab-more .m-sub, .tab-tokens .m-note { grid-column: 1 / -1; }
-}
 /* telefono in orizzontale: tutto più compatto, barra bassa sottile con sole icone */
-@media (orientation: landscape) and (max-height: 520px) and (max-width: 719px) {
-  .m-top { padding-top: calc(4px + var(--top)); padding-bottom: 2px; } .m-title p { display: none; } .m-title .orb { width: 30px; height: 30px; }
-  .m-hello .orb { width: 52px; height: 52px; margin-bottom: 6px; } .m-hello h2 { font-size: 20px; } .m-hello p { margin: 2px 0 8px; } .m-quick { grid-template-columns: repeat(4, 1fr); } .m-quick button { flex-direction: row; align-items: center; padding: 8px 10px; }
-  .m-tabs { padding-top: 2px; } .m-tab small { display: none; } .m-tab { padding: 3px 0; } .m-lens { height: 34px; top: 3px; } .m-chips { padding-top: 2px; padding-bottom: 2px; }
-  .m-head h2 { font-size: 22px; } .m-composer { margin-bottom: 4px; } #m-toast { bottom: calc(60px + var(--bot)); }
-}
 /* schermi piccoli o testo molto grande */
 @media (max-width: 340px) { .m-tab { font-size: 9.5px; } .m-quick { grid-template-columns: 1fr; } .m-head h2 { font-size: 24px; } }
 @media (prefers-reduced-motion: reduce) { #m-app::before { animation: none !important; } .m-lens { transition: none !important; } }
 
 /* tablet/telefono in orizzontale con poca altezza: la colonna laterale si stringe e resta allineata alla lente */
-@media (min-width: 720px) and (max-height: 560px) {
-  .m-tabs { padding-top: calc(8px + var(--top)); padding-bottom: calc(8px + var(--bot)); gap: 4px; } .m-tab { flex: none; height: 56px; } .m-tab small { font-size: 10px; }
-  .m-lens { top: calc(8px + var(--top)); height: 56px; transform: translateY(calc(var(--i, 0) * 60px)); }
-}
-@media (min-width: 720px) { .m-tab { flex: none; } }
 
 /* =====================================================================================
    v0.7 — stile macOS: Dock fluttuante sul telefono, barra laterale con vetro su schermi larghi,
@@ -319,26 +287,8 @@ button { transition: transform .16s var(--spring), opacity .16s; } button:active
 @keyframes dotIn { from { transform: scale(0); } }
 .m-tab small { font-weight: 600; }
 
-/* ---- barra laterale (tablet, pieghevoli, finestre): vetro, righe con icona + testo, selezione a pillola */
-@media (min-width: 720px) {
-  .m-tabs { order: -1; margin: 0; border-radius: 0; border: 0; border-right: var(--hair) solid var(--line); box-shadow: none; width: calc(212px + var(--sl)); gap: 3px; background: color-mix(in srgb, var(--surf) 55%, transparent);
-    padding: calc(16px + var(--top)) 10px calc(14px + var(--bot)) calc(10px + var(--sl)); }
-  .m-tab { flex-direction: row; justify-content: flex-start; gap: 11px; height: 40px; padding: 0 12px; font-size: 14px; font-weight: 600; border-radius: 9px; }
-  .m-tab small { font-size: 14px; } .m-tab .m-tab-ic { height: auto; } .m-tab .m-tab-ic svg { width: 20px; height: 20px; }
-  .m-tab.on .m-tab-ic { transform: none; } .m-tab.on::after { display: none; }
-  .m-lens { left: calc(10px + var(--sl)); right: 10px; width: auto; top: calc(16px + var(--top)); height: 40px; padding: 0; transform: translateY(calc(var(--i, 0) * 43px)); }
-  .m-lens i { border-radius: 9px; background: var(--accent-sel); box-shadow: inset 0 0 0 .5px var(--line); }
-  .m-tab .dot { position: absolute; right: 10px; top: 11px; }
-  .m-sheet { border-radius: 14px; box-shadow: 0 30px 80px rgba(0, 0, 0, .45), 0 0 0 .5px var(--line); }
-}
-@media (min-width: 720px) and (max-height: 560px) {
-  .m-tabs { padding-top: calc(10px + var(--top)); gap: 2px; }
-  .m-tab { height: 36px; } .m-lens { top: calc(10px + var(--top)); height: 36px; transform: translateY(calc(var(--i, 0) * 38px)); }
-}
+
 /* telefono in orizzontale: Dock sottile */
-@media (orientation: landscape) and (max-height: 520px) and (max-width: 719px) {
-  .m-tabs { margin-bottom: calc(4px + var(--bot)); padding: 3px 6px; border-radius: 18px; } .m-lens { height: 34px; top: 3px; } .m-lens i { border-radius: 14px; }
-}
 
 /* ---- avvisi di stato (es. Calendario non sincronizzato) */
 .m-warn { display: flex; align-items: center; gap: 12px; margin: 0 0 12px; padding: 12px 14px; border-radius: var(--r-card); background: rgba(255, 193, 94, .13); border: var(--hair) solid rgba(255, 193, 94, .4); color: var(--warn); animation: rise .4s var(--spring) both; }

@@ -42,6 +42,7 @@ from .brain.mirror import BrainMirror
 from .reminders import ReminderService
 from .coding import CodingService
 from .tools.coding_tools import register_coding_tools
+from .voiceline import VoiceLine, router as voiceline_router
 from .tools.phone_tools import register_phone_tools
 from . import tgwatch
 from .live import LiveFeeds, register_live_tools
@@ -94,7 +95,7 @@ async def lifespan(app: FastAPI):
         bstore = MemoryBrainStore()
         bstore.vault = vault
     usage = app.state.usage = UsageTracker()
-    llm = LLMClient(settings, usage=usage)
+    llm = app.state.llm = LLMClient(settings, usage=usage)
     brain = app.state.brain = Brain(settings, bstore, Embedder(settings, usage=usage), vault, llm)
     brain.knowledge = Knowledge(settings, brain, store)
     reminders = app.state.reminders = ReminderService(settings, store)  # promemoria ↔ Calendario (google si collega dopo)
@@ -147,6 +148,7 @@ async def lifespan(app: FastAPI):
     app.state.voice = VoiceService(pc)
     notifier = app.state.notifier = Notifier(settings, store, tg)
     reminders.on_change = lambda: notifier.sync("reminders")
+    app.state.voiceline = VoiceLine(settings, store, llm, notifier)  # segreteria telefonica con voce (Twilio), spenta finché non si imposta TWILIO_AUTH_TOKEN
     mirror = app.state.mirror = BrainMirror(brain, store)  # il cervello segue promemoria, ricordi e attività
     reminders.mirror = mirror
     prev = pending.on_create
@@ -216,6 +218,7 @@ logging.getLogger("uvicorn.access").addFilter(_RedactQuery())
 app = FastAPI(title="JARVIS", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)  # niente schema pubblico delle API
 app.include_router(gateway_router)
 app.include_router(api_router)
+app.include_router(voiceline_router)
 
 # La finestra web delle app (Tauri/Capacitor) è un'origine diversa dal server: senza CORS il browser blocca /chat.
 # L'autenticazione è un Bearer token (niente cookie), quindi nessuna credenziale cross-site.

@@ -19,6 +19,8 @@ class Settings(BaseSettings):
     llm_timeout_s: float = 90.0
     llm_attempt_timeout_s: float = 35.0
     llm_routing: bool = True  # profili auto:fast/smart/reliable/balanced scelti per tipo di richiesta (solo con modello «auto»)
+    llm_context_tokens: int = 9000  # tetto di token inviati a un modello (0 = nessun limite); i profili veloci hanno un tetto più basso e tutti si restringono se un provider rifiuta per dimensione
+    llm_repair: bool = True  # ripara da solo richieste troppo grandi, strumenti rifiutati, modelli non più disponibili e risposte vuote
     web_search_engines: bool = True  # ricerca web dai motori di FreeLLMAPI (Parallel); DuckDuckGo come ripiego  # primo tentativo: se il provider non risponde in tempo si ripiega su un altro modello (invece di aspettare 60 s)
     llm_temperature: float = 0.6
     llm_temperature_tools: float = 0.2  # con i tool serve precisione, non creatività
@@ -39,6 +41,8 @@ class Settings(BaseSettings):
     public_url: str = ""  # su Render viene da RENDER_EXTERNAL_URL
     render_external_url: str = ""
     reminder_poll_s: float = 30.0
+    twilio_auth_token: str = ""  # attiva la linea telefonica di JARVIS (segreteria con voce e intelligenza artificiale); serve a verificare la firma di Twilio
+    twilio_voice: str = "Polly.Bianca"  # voce italiana letta da Twilio
 
     google_client_id: str = ""
     google_client_secret: str = ""

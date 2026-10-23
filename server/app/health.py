@@ -30,6 +30,15 @@ def container_mb() -> float:
     return 0.0
 
 
+def _models_health(st) -> dict:
+    """Smistamento e riparazioni dei modelli: profili usati, tetti di contesto appresi, token risparmiati, modelli esclusi."""
+    llm = getattr(st, "llm", None)
+    if llm is None:
+        return {}
+    return {"routing": llm.router.summary(), "context_saved_tokens": llm.ctx.saved, "context_scale": {k: round(v, 2) for k, v in llm.ctx.scale.items() if v < 1.0},
+            "excluded_models": list(llm._dead())}
+
+
 async def deep_health(app) -> dict:
     st = app.state
     t0 = time.monotonic()
@@ -49,6 +58,7 @@ async def deep_health(app) -> dict:
         "freellm_ready": await st.admin.ready() if st.budget.enabled else None,
         "brain": {"indexed": len(st.brain.index), "enabled": st.brain.enabled},
         "usage_today": st.usage.today(),
+        "models": _models_health(st),
         "backup": backup,
         "update": {"last_error": st.updates.last_error, "checked_at": st.updates.last_check},
         "realtime_listeners": st.notifier.listeners,
