@@ -145,6 +145,8 @@ export class Jarvis {
   syncReminders() { return this.#req("/api/reminders/sync", { method: "POST", timeout: 60_000 }); }
   addReminder(text, when, repeat = "") { return this.#req("/api/reminders", { method: "POST", body: { text, when, repeat } }); }
   /** Esegue subito il backup su Hugging Face: risponde con l'esito e, se fallisce, il motivo. */
+  /** Risposta dell'app a un ordine del server (es. ricerca in rubrica): arriva solo a chi la stava aspettando. */
+  phoneResult(id, ok, data = null, error = "") { return this.#req("/api/phone/result", { method: "POST", body: { id, ok, data, error } }); }
   callsConfig() { return this.#req("/api/calls/config"); }
   setCallsConfig(mode, numbers, greeting = "") { return this.#req("/api/calls/config", { method: "POST", body: { mode, numbers, greeting } }); }
   runBackup() { return this.#req("/api/backup/run", { method: "POST", timeout: 150_000 }); }

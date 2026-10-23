@@ -28,7 +28,7 @@ GROUPS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     "cervello": (("brain_*",), ("cervello", "nota", "appunto", "appunti", "salva", "studia", "impara", "profilo", "cosa so", "ripasso", "collegat", "dossier", "archivio", "quello che ti ho detto")),
     "competenze": (("list_skills", "use_skill", "skill_save", "skill_delete"), ("competenza", "competenze", "skill", "playbook")),
     "pc": (("pc_*",), ("pc", "computer", "volume", "luminosità", "spegni", "riavvia", "blocca", "apri", "schermo", "musica", "riproduci", "pausa", "app", "programma", "file", "sposta", "cartella", "windows")),
-    "telefono": (("phone_call",), ("chiama", "chiamami", "telefona", "telefonata", "chiamata", "videochiamata", "whatsapp", "whats app", "videochiama", "chiamare", "telefonare", "numero di")),
+    "telefono": (("phone_call",), ("chiama", "chiamami", "contatto", "contatti", "rubrica", "telefona", "telefonata", "chiamata", "videochiamata", "whatsapp", "whats app", "videochiama", "chiamare", "telefonare", "numero di")),
     "notifiche": (("send_notification",), ("notifica", "notifiche", "manda un avviso", "avviso")),
     "token": (("get_token_budget",), ("token", "quota", "consumo", "budget", "limite")),
 }

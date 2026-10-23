@@ -152,6 +152,19 @@ async def delete_reminder(reminder_id: int, request: Request) -> dict:
     return {"ok": True}
 
 
+class PhoneResultIn(BaseModel):
+    id: str = Field(min_length=4, max_length=40)
+    ok: bool
+    data: dict | list | None = None
+    error: str = Field("", max_length=200)
+
+
+@router.post("/phone/result")
+async def phone_result(body: PhoneResultIn, request: Request) -> dict:
+    """L'app risponde a un ordine del server (es. ricerca in rubrica). Nessun dato resta sul server: va solo a chi lo aspettava."""
+    return {"ok": request.app.state.phone.resolve(body.id, body.ok, body.data, body.error)}
+
+
 class CallsIn(BaseModel):
     mode: str = Field(max_length=10)  # off | allowed | all
     numbers: list[dict] = Field(default_factory=list, max_length=50)

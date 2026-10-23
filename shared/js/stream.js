@@ -9,7 +9,7 @@ const IDLE_MS = 55_000;
  * @param {{onNotification: (n: object) => void, onSync?: (m: {scope: string, origin: string}) => void, onState?: (s: "on"|"connecting"|"off"|"auth") => void}} h
  * @returns {(() => void) & {poke: () => void}} chiude il flusso; `.poke()` riprova subito (al ritorno della rete)
  */
-export function openStream(cfg, { onNotification, onRead = () => {}, onSync = () => {}, onState = () => {} }) {
+export function openStream(cfg, { onNotification, onRead = () => {}, onSync = () => {}, onCommand = () => {}, onState = () => {} }) {
   let stopped = false;
   let ctrl;
   let retry = 0;
@@ -29,6 +29,7 @@ export function openStream(cfg, { onNotification, onRead = () => {}, onSync = ()
       if (event === "notification") onNotification(msg);
       else if (event === "read") onRead(msg.ids);
       else if (event === "sync") onSync(msg);
+      else if (event === "command") onCommand(msg);  // ordine del server al dispositivo (es. cercare in rubrica)
     } catch { /* messaggio malformato: ignorato */ }
   };
 

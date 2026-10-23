@@ -801,6 +801,11 @@ function phoneCard() {
   return el("div", { class: "m-card" },
     row("Permessi", !ph ? "…" : phoneOk() ? "concessi" : `mancano ${missingPerms()}`, !ph ? undefined : phoneOk()),
     !phoneOk() ? el("div", { class: "m-row" }, el("span", {}, "Servono per chiamare, leggere i contatti e rispondere"), el("button", { class: "m-ghost", onclick: async () => { try { S.phone = await phone.requestPermissions(); } catch (e) { toast(errText(e), true); } rerenderMore(); } }, "Concedi")) : null,
+    el("label", { class: "m-row" }, el("span", {}, "JARVIS può cercare nei contatti (vede i nomi, mai i numeri)"), el("input", { type: "checkbox", class: "m-switch", "aria-label": "Ricerca nei contatti per JARVIS", checked: contactShare(),
+      onchange: async (e) => {
+        store.set("jarvis.contacts.share", e.target.checked ? "1" : "0"); haptic();
+        if (e.target.checked && !S.phone?.perms?.contacts) { try { S.phone = await phone.requestPermissions(); } catch (er) { toast(errText(er), true); } rerenderMore(); }  // chiede subito il permesso Contatti
+      } })),
     el("div", { class: "m-row" }, el("span", {}, "Chiama con Telefono o WhatsApp"), el("button", { class: "m-ghost", onclick: () => openCallSheet() }, icon("phone", 16), "Chiama")),
     el("label", { class: "m-row" }, el("span", {}, "Rispondi da solo ai numeri autorizzati"), sw),
     el("div", { class: "m-row" }, el("span", {}, allowed.length ? `Numeri autorizzati: ${allowed.length}` : "Nessun numero autorizzato"), el("button", { class: "m-ghost", onclick: openAllowSheet }, icon("sliders", 16), "Gestisci")),
@@ -1040,6 +1045,33 @@ function headsUp(n) {
   headsTimer = setTimeout(() => { box.classList.add("gone"); setTimeout(() => box.remove(), 300); }, n.kind === "alert" || n.kind === "pending" ? 9000 : n.kind === "reminder" ? 12000 : 5500);
 }
 
+// ---------------------------------------------------------------- rubrica privata
+// JARVIS non vede mai la rubrica né i numeri: per cercare una persona il server chiede all'app (aperta), l'app cerca QUI e risponde con nomi e codici
+// temporanei; per chiamare, il codice torna al telefono, che lo trasforma nel numero. Si può spegnere in Altro → Telefono.
+const contactShare = () => store.get("jarvis.contacts.share", "0") === "1";
+const contactMap = new Map();  // codice → {name, numbers, t}
+const newCode = () => "k" + Math.random().toString(36).slice(2, 8);
+function rememberContacts(found) {
+  const now = Date.now();
+  for (const [k, v] of contactMap) if (now - v.t > 15 * 60_000) contactMap.delete(k);
+  return found.slice(0, 8).map((c) => {
+    const id = newCode();
+    contactMap.set(id, { name: c.name, numbers: c.numbers, t: now });
+    if (contactMap.size > 80) contactMap.delete(contactMap.keys().next().value);
+    return { id, name: c.name, numbers: c.numbers.length };
+  });
+}
+async function handleCommand({ id, cmd, args = {} }) {
+  if (!phoneAvailable || !id) return;  // solo il telefono Android risponde
+  const reply = (ok, data, error = "") => api.phoneResult(id, ok, data, error).catch(() => {});
+  if (cmd !== "contacts.search") return reply(false, null, "Comando sconosciuto");
+  if (!contactShare()) return reply(false, null, "La ricerca nei contatti è disattivata dall'utente (Altro → Telefono).");
+  try {
+    const found = await phone.findContacts(String(args.query || "").slice(0, 60));
+    reply(true, { contacts: rememberContacts(found) });
+  } catch (e) { reply(false, null, /permesso/i.test(e?.message || "") ? "Manca il permesso Contatti sul telefono." : "Ricerca non riuscita sul telefono."); }
+}
+
 // ---------------------------------------------------------------- chiamate
 const callDone = () => store.get("jarvis.call.done");
 /** Esegue un ordine di chiamata approvato dall'utente (chiesto a JARVIS in chat o su Telegram). I contatti si cercano sul telefono. */
@@ -1049,9 +1081,12 @@ async function runCall(meta, id) {
   const who = String(meta.contact || "").trim();
   if (!who) return;
   const direct = NUMBER_RE.test(who);
+  const known = meta.contact_id ? contactMap.get(meta.contact_id) : null;  // scelto da JARVIS nella ricerca: il numero lo conosce solo il telefono
   try {
     let number = direct ? who : "", name = direct ? "" : who;
-    if (!direct) {
+    if (known && known.numbers.length === 1) { number = known.numbers[0]; name = known.name; }
+    else if (known) return openCallSheet(known.name, meta);
+    else if (!direct) {
       let found = [];
       try { found = await phone.findContacts(who); } catch { /* senza permesso Contatti si apre la scelta a mano */ }
       const numbers = found.flatMap((c) => c.numbers.map((n) => ({ name: c.name, number: n })));
@@ -1168,6 +1203,7 @@ function start() {
   closeStream = openStream({ url: () => cfg.url, token: () => cfg.token }, {
     onNotification: onNote,
     onRead: (ids) => { S.notes.forEach((n) => { if (!ids || ids.includes(n.id)) n.read = true; }); renderTop(); if (notesSheet) fillNotes(); },
+    onCommand: handleCommand,
     onSync: ({ scope, origin }) => {  // un altro dispositivo (o il server) ha cambiato qualcosa: ci si aggiorna subito
       if (scope === "reminders") loadReminders();
       else if (scope === "brain") { S.brain.docs = null; S.brain.stats = null; if (S.tab === "brain") loadBrain(); }
