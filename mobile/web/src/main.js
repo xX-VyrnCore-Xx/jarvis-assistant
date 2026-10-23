@@ -246,7 +246,9 @@ function bubble(role, text, { fresh = true } = {}) {
       el("button", { "aria-label": "Ascolta", onclick: () => { haptic(); speaker.speaking ? speaker.stop() : speaker.speak(text); } }, icon("volume", 16)),
     ] : null);
   const node = el("div", { class: `m-msg ${role}${same ? " same" : ""}` }, el("div", { class: "m-bubble" }, role === "bot" ? markdown(text) : el("p", {}, text)), meta);
+  if (!fresh) node.classList.add("old");
   log.append(node);
+  while (log.childElementCount > 160) log.firstElementChild.remove();  // il DOM non cresce senza limite: la chat resta fluida
   if (stick || role === "user") log.scrollTop = log.scrollHeight;
   return node;
 }
@@ -471,7 +473,9 @@ async function loadHistory() {
 }
 
 /** Un altro dispositivo ha scritto: aggiorna solo la conversazione (senza toccare ciò che stai scrivendo) se è cambiata. */
-async function syncHistory() {
+let syncTimer = 0;
+function syncHistory() { clearTimeout(syncTimer); syncTimer = setTimeout(syncHistoryNow, 350); }  // raggruppa più avvisi ravvicinati in un solo aggiornamento
+async function syncHistoryNow() {
   if (S.busy || !log) return;
   try {
     const rows = await api.history(SESSION, 30);
@@ -1360,13 +1364,11 @@ async function runCall(meta, id) {
   } catch (e) { toast(e?.message || "Chiamata non riuscita", true); }
 }
 /** L'ordine è arrivato mentre l'app era chiusa: lo si mostra e si parte solo con un tocco (Android non permette di chiamare da sfondo). */
+/** Un ordine di chiamata arrivato mentre l'app era in secondo piano: all'apertura (entro 2 minuti) parte da solo, senza chiedere conferma. */
 function offerPendingCall() {
   const n = S.notes.find((x) => x.kind === "call" && !x.read && String(x.id) !== callDone() && Date.now() - new Date(x.created_at) < 120_000);
-  if (!n || S.sheets.length) return;
-  store.set("jarvis.call.done", String(n.id));
-  const m = n.meta || {};
-  const s = openSheet("Chiamata richiesta", el("div", { class: "ask" }, icon("phone", 30)), el("p", { class: "ask-t" }, n.body || `Chiamare ${m.contact}`),
-    el("div", { class: "m-btns" }, el("button", { class: "m-ghost", onclick: () => s.close() }, "Annulla"), el("button", { class: "m-primary", onclick: () => { s.close(); runCall(m, n.id); } }, "Chiama")));
+  if (!n) return;
+  runCall(n.meta || {}, n.id);
 }
 
 function onNote(n) {
@@ -1478,7 +1480,7 @@ function start() {
   });
   initPush(api, (route) => { if (ROUTE_TAB[route]) setTab(ROUTE_TAB[route]); }).catch(() => {});
   checkUpdate();
-  timers = [setInterval(refreshStatus, 30_000), setInterval(pollPending, 5_000), setInterval(checkUpdate, 3600_000)];
+  timers = [setInterval(() => { if (!document.hidden) refreshStatus(); }, 30_000), setInterval(() => { if (!document.hidden) pollPending(); }, 8_000), setInterval(checkUpdate, 3600_000)];
 }
 function stop() { closeStream?.(); closeStream = null; timers.forEach(clearInterval); timers = []; S.status = null; S.checked = false; S.online = false; S.pending = []; renderTop(); renderPending(); }
 
