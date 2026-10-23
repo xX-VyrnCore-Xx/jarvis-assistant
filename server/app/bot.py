@@ -168,7 +168,7 @@ class TelegramBot:
         try:
             mid = await self.tg.send_id(chat_id, "💭 Ci sto pensando…", silent=True)
             model = await self.app.state.store.get_setting("tg_model") or None
-            async for kind, data in self.app.state.agent.reply_stream(text, f"tg-{chat_id}", model=model, skills=[skill] if skill else None):
+            async for kind, data in self.app.state.agent.reply_stream(text, "main", model=model, skills=[skill] if skill else None):
                 if kind == "status":
                     status = data
                 elif kind == "delta":
@@ -191,6 +191,7 @@ class TelegramBot:
             if user_mid:
                 asyncio.create_task(self.tg.react(chat_id, user_mid, None))
         final = final or buf or "…"
+        self._sync("chat")  # lo scambio appare subito anche nell'app
         from .telegram import split_text
 
         parts = split_text(final)
@@ -317,12 +318,17 @@ class TelegramBot:
             keys = [[{"text": f"✔ {t['text'][:28]}", "callback_data": f"td:{t['id']}"}] for t in rows[:10]]
             return await self.tg.send(chat_id, "\n\n".join(f"<b>{name.capitalize()}</b>\n" + "\n".join(items) for name, items in out.items()), {"inline_keyboard": keys})
         if cmd == "nuova":
-            await st.store.clear_messages(f"tg-{chat_id}")
-            return await self.tg.send(chat_id, "Conversazione azzerata. I ricordi a lungo termine restano, signore.")
+            await st.store.clear_messages("main")
+            self._sync("chat")
+            return await self.tg.send(chat_id, "Conversazione azzerata (anche nelle app, che condividono la stessa chat). I ricordi a lungo termine restano, signore.")
         import difflib
 
         near = difflib.get_close_matches(cmd, [c for c, _ in COMMANDS], n=1, cutoff=0.6)
         await self.tg.send(chat_id, f"Comando sconosciuto, signore. Intendeva /{near[0]}?" if near else "Comando sconosciuto. /aiuto elenca ciò che so fare.")
+
+    def _sync(self, scope: str) -> None:
+        if n := getattr(self.app.state, "notifier", None):
+            n.sync(scope)
 
     async def _daily(self, chat_id: int, cmd: str) -> None:
         """Agenda, email e punto del giorno: testo composto dai dati (nessuna chiamata al modello, quindi istantaneo e gratis)."""

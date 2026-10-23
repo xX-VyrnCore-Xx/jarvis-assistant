@@ -165,9 +165,9 @@ async def test_bot_owner_only_dedup_commands_and_buttons():
 
     await bot.handle_update(msg(42, "/ricordi", 4))
     assert "caffè" in st.tg.out[-1][0]
-    await st.store.add_message("tg-42", "user", "a")
+    await st.store.add_message("main", "user", "a")
     await bot.handle_update(msg(42, "/nuova", 5))
-    assert await st.store.recent_messages("tg-42", 10) == []
+    assert await st.store.recent_messages("main", 10) == []
     await bot.handle_update({"update_id": 6, "message": {"from": {"id": 42}, "chat": {"id": 42}, "voice": {}}})
     assert "vocale" in st.tg.out[-1][0]
 

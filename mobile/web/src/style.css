@@ -424,3 +424,11 @@ body.privacy::after { content: "JARVIS"; position: fixed; inset: 0; z-index: 99;
 button.pick-row:active { border-color: var(--amber); }
 .pick-row small { display: block; color: var(--muted); font-size: 12.5px; margin-top: 2px; }
 .pick-act { display: flex; gap: 6px; flex: none; } .pick-act .m-ghost { min-height: 34px; padding: 0 10px; font-size: 13px; }
+
+/* attività */
+.m-card.task { display: flex; align-items: center; gap: 12px; }
+.m-card.task > div { flex: 1; min-width: 0; }
+.m-check { width: 28px; height: 28px; border-radius: 50%; border: 2px solid var(--muted); display: grid; place-items: center; color: transparent; flex: none; }
+.m-check:active { background: var(--ok, #3ddc97); border-color: var(--ok, #3ddc97); color: #04120b; }
+.m-addrow { display: flex; gap: 8px; margin: 0 0 10px; }
+.m-addrow input { flex: 1; min-width: 0; }

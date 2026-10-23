@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
-import { Jarvis, ApiError } from "@shared/api.js";
+import { Jarvis, ApiError, deviceId } from "@shared/api.js";
 import { el, fmtDate, fmtTokens, fmtUptime, markdown, nowLocalInput, pct } from "@shared/format.js";
 import { icon } from "@shared/icons.js";
 import { Speaker } from "@shared/speech.js";
@@ -37,7 +37,7 @@ const cfg = { url: (localStorage.getItem("jarvis.url") || DEFAULT_URL).replace(/
 const api = new Jarvis({ url: () => cfg.url, token: () => cfg.token });
 const speaker = new Speaker({ tts: (t) => synth(t) });
 const voiceOn = () => localStorage.getItem("jarvis.speak") !== "0";
-const S = { update: null, view: "chat", status: null, tokens: null, tokensErr: "", pending: [], reminders: [], notes: [], brain: { q: "", results: null, docs: null, stats: null, doc: null }, live: "off", online: false, ws: false, pcLog: [], busy: false };
+const S = { update: null, view: "chat", status: null, tokens: null, tokensErr: "", pending: [], reminders: [], tasks: [], notes: [], brain: { q: "", results: null, docs: null, stats: null, doc: null }, live: "off", online: false, ws: false, pcLog: [], busy: false };
 
 const $app = document.getElementById("app");
 let rail, viewBox, side, chatLog, chatInput, chatView;
@@ -85,7 +85,7 @@ function setView(v) {
   renderRail();
   renderView();
   if (v === "tokens") loadTokens();
-  if (v === "reminders") loadReminders();
+  if (v === "reminders") { loadReminders(); loadTasks(); }
   if (v === "notifications") loadNotes();
   if (v === "brain") loadBrain();
 }
@@ -204,9 +204,13 @@ async function send(text) {
   }
 }
 
-async function loadHistory() {
+async function loadHistory(quiet = false) {
+  if (quiet && S.busy) return;
   try {
     const rows = await api.history(SESSION, 30);
+    const sig = `${rows.length}|${rows.at(-1)?.content?.length ?? 0}|${rows.at(-1)?.role ?? ""}`;
+    if (quiet && sig === S.histSig) return;
+    S.histSig = sig;
     buildChat();
     chatLog.replaceChildren();
     if (rows.length) addMessage("sys", "Conversazione precedente");
@@ -358,6 +362,30 @@ async function loadReminders() {
   if (S.view === "reminders") renderView();
 }
 
+async function loadTasks() {
+  if (!cfg.token) return;
+  try { S.tasks = await api.tasks(); } catch (e) { toast(errText(e), true); }
+  if (S.view === "reminders") renderView();
+}
+
+function tasksPanel() {
+  const input = el("input", { type: "text", placeholder: "Nuova attività…", maxlength: 300, "aria-label": "Nuova attività" });
+  const add = async () => {
+    const text = input.value.trim(); if (!text) return;
+    input.value = "";
+    try { await api.addTask(text); loadTasks(); } catch (e) { toast(errText(e), true); }
+  };
+  input.addEventListener("keydown", (e) => { if (e.key === "Enter") add(); });
+  const act = (fn) => async () => { try { await fn(); } catch (e) { toast(errText(e), true); } loadTasks(); };
+  return el("div", {}, panelHead("Attività", "Le stesse di Telegram e dell'app Android, sempre aggiornate."),
+    el("div", { class: "form-row" }, input, el("button", { class: "btn primary", onclick: add }, icon("plus", 16), "Aggiungi")),
+    S.tasks.length
+      ? el("div", { class: "list" }, S.tasks.map((t) => el("div", { class: "item" }, el("div", {}, el("b", {}, t.text), t.list && t.list !== "attività" ? el("small", {}, t.list) : null),
+        el("button", { class: "icon-btn", title: "Completa", "aria-label": "Completa", onclick: act(() => api.setTaskDone(t.id, true)) }, icon("check", 18)),
+        el("button", { class: "icon-btn", title: "Elimina", "aria-label": "Elimina", onclick: act(() => api.deleteTask(t.id)) }, icon("trash", 18)))))
+      : el("div", { class: "empty" }, "Nessuna attività aperta."));
+}
+
 function buildReminders() {
   const text = el("input", { type: "text", placeholder: "Cosa devo ricordarti?", maxlength: 500, "aria-label": "Testo" });
   const when = el("input", { type: "datetime-local", value: nowLocalInput(60), "aria-label": "Quando" });
@@ -373,6 +401,7 @@ function buildReminders() {
         el("div", {}, el("b", {}, r.text), el("small", {}, fmtDate(r.due_at))),
         el("button", { class: "icon-btn", title: "Elimina", "aria-label": "Elimina", onclick: async () => { try { await api.deleteReminder(r.id); loadReminders(); } catch (e) { toast(errText(e), true); } } }, icon("trash", 18)))))
       : el("div", { class: "empty" }, "Nessun promemoria attivo."),
+    tasksPanel(),
   );
 }
 
@@ -554,7 +583,13 @@ function start() {
   closeStream = openStream({ url: () => cfg.url, token: () => cfg.token }, {
     onNotification: onNote,
     onRead: (ids) => { S.notes.forEach((n) => { if (!ids || ids.includes(n.id)) n.read = true; }); renderRail(); if (S.view === "notifications") renderView(); },
-    onState: (st) => { const was = S.live; S.live = st; if (st === "on" && was !== "on") loadNotes(); else if (S.view === "notifications") renderView(); },
+    onSync: ({ scope, origin }) => {  // Telegram, app Android o server hanno cambiato qualcosa: ci si aggiorna subito
+      if (scope === "reminders") loadReminders();
+      else if (scope === "tasks") loadTasks();
+      else if (scope === "brain" || scope === "memories") loadBrain();
+      else if (scope === "chat" && origin !== deviceId) loadHistory(true);
+    },
+    onState: (st) => { const was = S.live; S.live = st; if (st === "on" && was !== "on") { loadNotes(); loadReminders(); loadTasks(); loadHistory(true); } else if (S.view === "notifications") renderView(); },
   });
   timers = [setInterval(refreshStatus, 20_000), setInterval(pollPending, 4_000)];
 }

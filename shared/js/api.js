@@ -150,6 +150,10 @@ export class Jarvis {
   callsConfig() { return this.#req("/api/calls/config"); }
   setCallsConfig(mode, numbers, greeting = "") { return this.#req("/api/calls/config", { method: "POST", body: { mode, numbers, greeting } }); }
   runBackup() { return this.#req("/api/backup/run", { method: "POST", timeout: 150_000 }); }
+  tasks() { return this.#get("/api/tasks"); }
+  addTask(text, list = "attività") { return this.#req("/api/tasks", { method: "POST", body: { text, list } }); }
+  setTaskDone(id, done) { return this.#req(`/api/tasks/${id}`, { method: "PATCH", body: { done } }); }
+  deleteTask(id) { return this.#req(`/api/tasks/${id}`, { method: "DELETE" }); }
   deleteReminder(id) { return this.#req(`/api/reminders/${id}`, { method: "DELETE" }); }
   pending() { return this.#get("/api/pending"); }
   decide(id, approve) { return this.#req(`/api/pending/${encodeURIComponent(id)}/${approve ? "approve" : "reject"}`, { method: "POST" }); }
