@@ -8,7 +8,7 @@ from .config import Settings
 from .llm import LLMClient
 from .memory import Store
 from .privacy import Redactor, StreamUnmasker
-from .tools import ToolRegistry
+from .tools import USER_TEXT, ToolRegistry
 from .tools.select import ToolSelector
 
 log = logging.getLogger("jarvis.agent")
@@ -32,7 +32,7 @@ Come usare i tool:
 - `remember`/`recall`/`list_memories`/`forget` per i ricordi brevi; `brain_*` per il secondo cervello: `brain_add_note` per note, idee, riunioni, decisioni; `brain_search` per ritrovare qualcosa di passato (cita gli id [#n], usa since/until per periodi come "la settimana scorsa"); `brain_deep_search` per domande difficili o vaghe (prova più formulazioni); `brain_about` per «cosa so di Luca / del progetto X»; `brain_learn` per studiare un argomento da Wikipedia e tenerlo (cultura generale); `brain_profile` per il profilo; `brain_save_url` per conservare una pagina; `brain_related` per i collegamenti. Il contesto pertinente del secondo cervello è già nel prompt: usalo senza ripeterlo. Salva solo ciò che è duraturo.
 - `add_reminder`/`remind_in`/`reminder_snooze`/`list_reminders`/`delete_reminder` per i promemoria; `task_*` per liste (da fare, spesa); `crypto_price`, `world_time`, `unit_convert` per prezzi, orari nel mondo e conversioni; calcola "when" da data e ora qui sopra.
 - `send_notification` per mandare un avviso alle app dell'utente.
-- `contacts_search` per cercare nella rubrica del telefono (nomi e id, mai i numeri), poi `phone_call` per chiamare con Telefono o WhatsApp (anche in video): serve la conferma dell'utente e non puoi parlare al posto suo durante la chiamata. Se il telefono non risponde, di' di aprire l'app JARVIS.
+- `contacts_search` per cercare nella rubrica del telefono (nomi e id, mai i numeri), poi `phone_call` per chiamare con Telefono o WhatsApp (anche in video): la chiamata PARTE SUBITO, senza chiedere conferma (l'utente l'ha già chiesta dicendo «chiama…»): non scrivere «vuoi che proceda?», chiama e basta con una riga di conferma. Non puoi parlare al posto suo durante la chiamata. Se il telefono non risponde, di' di aprire l'app JARVIS.
 - Con i tool `pc_*` agisci sul PC Windows dell'utente (app, siti, file, volume, luminosità, blocco/spegnimento).
 - Con `gmail_*`, `calendar_*`, `drive_*` accedi ai servizi Google: puoi leggere, creare, modificare (`calendar_update_event`) ed eliminare eventi (serve la conferma dell'utente), trovare fasce libere e preparare risposte alle email. Prima di modificare o eliminare un evento cerca il suo id con `calendar_list_events`; `get_token_budget` per i token rimasti.
 Se un tool restituisce un errore, correggi i parametri e riprova una volta; poi spiega il problema in modo chiaro.
@@ -144,6 +144,7 @@ class Agent:
     async def _prepare(self, user_text: str, session_id: str, voice: bool, forced: list[str] | None = None, mode: str = "") -> tuple[list[dict], Redactor, set[str]]:
         # privacy: ciò che va ai provider passa da un filtro che sostituisce dati sensibili con segnaposto (reversibili alla fine)
         red = Redactor(self.s.privacy_mode)
+        USER_TEXT.set(user_text)  # per gli strumenti che agiscono senza conferma (chiamate)
         code = mode == "code"
         # cronologia, secondo cervello (con la ricerca per significato), profilo e situazione si leggono insieme, non uno dopo l'altro
         rows_raw, brain_raw, profile_raw, situation_raw = await asyncio.gather(

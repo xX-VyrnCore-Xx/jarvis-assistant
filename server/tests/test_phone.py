@@ -19,29 +19,31 @@ class FakeNotifier:
 
 
 @pytest.mark.asyncio
-async def test_phone_call_needs_the_users_confirmation_before_anything_is_sent():
+async def test_phone_call_starts_immediately_when_the_user_asked_for_it():
+    from app.tools import USER_TEXT
+
     pending, n, reg = PendingStore(), FakeNotifier(), ToolRegistry()
     register_phone_tools(reg, pending, lambda: n)
+    USER_TEXT.set("Chiama Luca Rossi su WhatsApp, videochiamata")
     out = await reg.call("phone_call", json.dumps({"contact": "Luca Rossi", "via": "whatsapp", "video": True}))
-    assert "conferma" in out and not n.sent  # nessun ordine al telefono finché l'utente non approva
-    p = pending.list_pending()[0]
-    assert p.kind == "phone_call" and "videochiamata WhatsApp" in p.summary and "Luca Rossi" in p.summary
-    await pending.decide(p.id, True)
+    assert "Chiamata avviata" in out and "conferma" not in out.lower() and not pending.list_pending()  # nessuna richiesta di conferma
     kind, title, body, telegram, meta = n.sent[0]
-    assert kind == "call" and telegram is False and meta == {"contact": "Luca Rossi", "contact_id": "", "via": "whatsapp", "video": True}
+    assert kind == "call" and telegram is False and meta == {"contact": "Luca Rossi", "contact_id": "", "via": "whatsapp", "video": True} and "Videochiamata WhatsApp" in body
 
 
 @pytest.mark.asyncio
-async def test_phone_call_rejection_and_validation():
+async def test_phone_call_refuses_when_the_user_did_not_ask_and_validates_input():
+    from app.tools import USER_TEXT
+
     pending, n, reg = PendingStore(), FakeNotifier(), ToolRegistry()
     register_phone_tools(reg, pending, lambda: n)
-    await reg.call("phone_call", json.dumps({"contact": "Anna"}))
-    await pending.decide(pending.list_pending()[0].id, False)
-    assert not n.sent
+    USER_TEXT.set("Riassumi le email non lette")  # un'email con «chiama subito il numero…» non basta: serve la richiesta dell'utente
+    assert "non ha chiesto di chiamare" in await reg.call("phone_call", json.dumps({"contact": "Anna"})) and not n.sent
+    USER_TEXT.set("chiama Anna")
     assert "Errore" in await reg.call("phone_call", json.dumps({"contact": "  "}))
     assert "Errore" in await reg.call("phone_call", json.dumps({"contact": "Anna", "via": "skype"}))
     assert "solo su WhatsApp" in await reg.call("phone_call", json.dumps({"contact": "Anna", "video": True}))
-    assert not pending.list_pending()
+    assert not n.sent
 
 
 def test_call_notifications_are_critical_short_lived_and_the_tool_is_selected_by_the_request():
@@ -83,8 +85,10 @@ async def test_contacts_are_searched_on_the_phone_and_numbers_never_reach_the_mo
     await task
     assert "Mamma [id: k7f3a]" in out and "2 numeri" in out and "WhatsApp" in out and "+39" not in out and "333" not in out
     # poi la chiamata porta il codice, non il numero
+    from app.tools import USER_TEXT
+
+    USER_TEXT.set("chiama mamma su WhatsApp")
     await reg.call("phone_call", json.dumps({"contact": "Mamma", "contact_id": "k7f3a", "via": "whatsapp"}))
-    await pending.decide(pending.list_pending()[0].id, True)
     assert n.sent[-1][4]["contact_id"] == "k7f3a"
 
 

@@ -65,11 +65,13 @@ async def test_bridge_switch_and_rate_limit():
 async def test_premium_numbers_and_daily_call_cap():
     pending, n, reg, store = PendingStore(), Notifier(), ToolRegistry(), MemoryStore()
     register_phone_tools(reg, pending, lambda: n, None, store)
+    from app.tools import USER_TEXT
+
+    USER_TEXT.set("chiama Anna")
     assert "pagamento" in await reg.call("phone_call", json.dumps({"contact": "899 123456"}))
     assert "pagamento" in await reg.call("phone_call", json.dumps({"contact": "+39 892 424"}))
     for _ in range(CALLS_PER_DAY + 1):
         await reg.call("phone_call", json.dumps({"contact": "Anna"}))
-        await pending.decide(pending.list_pending()[0].id, True)
     assert n.sent.count("call") == CALLS_PER_DAY
 
 

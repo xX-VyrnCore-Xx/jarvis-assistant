@@ -1360,13 +1360,11 @@ async function runCall(meta, id) {
   } catch (e) { toast(e?.message || "Chiamata non riuscita", true); }
 }
 /** L'ordine è arrivato mentre l'app era chiusa: lo si mostra e si parte solo con un tocco (Android non permette di chiamare da sfondo). */
+/** Un ordine di chiamata arrivato mentre l'app era in secondo piano: all'apertura (entro 2 minuti) parte da solo, senza chiedere conferma. */
 function offerPendingCall() {
   const n = S.notes.find((x) => x.kind === "call" && !x.read && String(x.id) !== callDone() && Date.now() - new Date(x.created_at) < 120_000);
-  if (!n || S.sheets.length) return;
-  store.set("jarvis.call.done", String(n.id));
-  const m = n.meta || {};
-  const s = openSheet("Chiamata richiesta", el("div", { class: "ask" }, icon("phone", 30)), el("p", { class: "ask-t" }, n.body || `Chiamare ${m.contact}`),
-    el("div", { class: "m-btns" }, el("button", { class: "m-ghost", onclick: () => s.close() }, "Annulla"), el("button", { class: "m-primary", onclick: () => { s.close(); runCall(m, n.id); } }, "Chiama")));
+  if (!n) return;
+  runCall(n.meta || {}, n.id);
 }
 
 function onNote(n) {
