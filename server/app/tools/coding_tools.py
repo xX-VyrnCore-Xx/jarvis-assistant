@@ -63,6 +63,9 @@ def register_coding_tools(reg: ToolRegistry, coding: CodingService, pending) -> 
     async def search(pattern: str, glob: str = "*", context: int = 0, limit: int = 40) -> str:
         return UNTRUSTED + coding.search(pattern, glob, context, limit)
 
+    async def graph_tool(fn, *args) -> str:
+        return UNTRUSTED + fn(*args)
+
     async def issues(state: str = "open") -> str:
         return UNTRUSTED + await coding.issues(state)
 
@@ -126,3 +129,13 @@ def register_coding_tools(reg: ToolRegistry, coding: CodingService, pending) -> 
     reg.register("code_ci_run", "Avvia a mano un workflow di CI (workflow_dispatch).", obj({"workflow": s, "ref": s}), guarded(coding.ci_run), available=on)
     reg.register("code_ci_runs", "Ultime esecuzioni della CI.", obj({"n": i}), guarded(coding.ci_runs), available=on)
     reg.register("code_wait_checks", "Attende (fino a timeout secondi, max 110) che la CI finisca e riporta l'esito.", obj({"timeout": i}), guarded(coding.wait_checks), available=on, timeout=125)
+    # ---- mappa a grafo del codice (stile Graphify): orientarsi con poche centinaia di token
+    reg.register("code_graph", "Mappa a grafo del codice della sandbox: file, simboli (classi/funzioni con riga e firma), chiamate e importazioni, i simboli più collegati e i punti d'ingresso. "
+                 "Usala PRIMA di leggere i file: poi code_read solo sulle righe indicate. Con 'query' cerca un simbolo.",
+                 obj({"query": s}), guarded(lambda query="": graph_tool(coding.code_map, query)), available=on)
+    reg.register("code_symbol", "Dove è definito un simbolo (classe/funzione/metodo), la sua firma, chi lo usa e cosa usa.", obj({"name": s}, ["name"]),
+                 guarded(lambda name: graph_tool(coding.code_symbol, name)), available=on)
+    reg.register("code_deps", "Dipendenze di un file: cosa importa, da chi è importato, cosa definisce.", obj({"path": s}, ["path"]),
+                 guarded(lambda path: graph_tool(coding.code_deps, path)), available=on)
+    reg.register("code_path", "Il percorso di chiamate/importazioni che collega due simboli o file del codice.", obj({"a": s, "b": s}, ["a", "b"]),
+                 guarded(lambda a, b: graph_tool(coding.code_path, a, b)), available=on)

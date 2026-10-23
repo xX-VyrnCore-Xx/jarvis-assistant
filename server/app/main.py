@@ -94,7 +94,7 @@ async def lifespan(app: FastAPI):
         bstore = MemoryBrainStore()
         bstore.vault = vault
     usage = app.state.usage = UsageTracker()
-    llm = LLMClient(settings, usage=usage)
+    llm = app.state.llm = LLMClient(settings, usage=usage)
     brain = app.state.brain = Brain(settings, bstore, Embedder(settings, usage=usage), vault, llm)
     brain.knowledge = Knowledge(settings, brain, store)
     reminders = app.state.reminders = ReminderService(settings, store)  # promemoria ↔ Calendario (google si collega dopo)

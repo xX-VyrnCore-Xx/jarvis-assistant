@@ -355,3 +355,25 @@ async def test_branches_issues_ci_run(env):
     assert "avviato" in await svc.ci_run("ci.yml") and gh.repos["mario/rami"]["dispatched"]
     with pytest.raises(CodingError, match="workflow"):
         await svc.ci_run("../evil.yml")
+
+
+@pytest.mark.asyncio
+async def test_code_graph_tools_map_symbols_callers_and_paths_cheaply(env):
+    gh, svc = env
+    await svc.create_repo("mappa", "", True, "mit")
+    svc.write("app/main.py", "from app.util import helper\n\ndef run():\n    '''Avvia tutto'''\n    return helper(1)\n")
+    svc.write("app/util.py", "def helper(x):\n    return fmt(x)\n\ndef fmt(x):\n    return str(x)\n")
+    svc.write("web/app.js", "import { api } from './api.js';\nexport function load() { return api.get(); }\n")
+    svc.write("web/api.js", "export const api = { get() {} };\n")
+    pending, reg = PendingStore(), ToolRegistry()
+    register_coding_tools(reg, svc, pending)
+    out = await reg.call("code_graph", "{}")
+    assert out.startswith("[") and "Grafo del codice" in out and "helper" in out and len(out) < 2700  # poche centinaia di token
+    sym = await reg.call("code_symbol", json.dumps({"name": "helper"}))
+    assert "app/util.py:1" in sym and "usato da: run" in sym and "usa: fmt" in sym
+    assert "importa: app/util.py" in await reg.call("code_deps", json.dumps({"path": "app/main.py"}))
+    assert "run" in (p := await reg.call("code_path", json.dumps({"a": "run", "b": "fmt"}))) and "helper" in p
+    assert "importa: web/api.js" in await reg.call("code_deps", json.dumps({"path": "web/app.js"}))
+    svc.write("app/util.py", "def helper(x):\n    return x\n")  # il grafo si aggiorna da solo quando i file cambiano
+    assert "usa: fmt" not in await reg.call("code_symbol", json.dumps({"name": "helper"}))
+    assert "Nessun simbolo" in await reg.call("code_symbol", json.dumps({"name": "inesistente_xyz"}))
