@@ -2,6 +2,7 @@
 Creare, rimandare o eliminare un promemoria nell'app lo fa anche sul Calendario; spostare o cancellare l'evento sul Calendario
 aggiorna o toglie il promemoria dell'app (sincronizzazione ogni 5 minuti); un evento «Promemoria: …» scritto a mano sul Calendario
 diventa un promemoria dell'app. Senza Google collegato funziona tutto solo nell'app."""
+import calendar
 import json
 import logging
 from datetime import datetime, timedelta
@@ -66,6 +67,47 @@ def explain(e: Exception) -> str:
     return f"Errore inatteso ({type(e).__name__})."
 
 
+REPEATS = {"daily": "ogni giorno", "weekdays": "nei giorni feriali", "weekly": "ogni settimana", "monthly": "ogni mese", "yearly": "ogni anno"}
+ALIASES = {"giornaliero": "daily", "ogni giorno": "daily", "feriali": "weekdays", "lavorativi": "weekdays", "settimanale": "weekly", "ogni settimana": "weekly",
+           "mensile": "monthly", "ogni mese": "monthly", "annuale": "yearly", "ogni anno": "yearly", "none": "", "nessuna": "", "no": ""}
+
+
+def norm_repeat(value: str | None) -> str:
+    v = (value or "").strip().lower()
+    v = ALIASES.get(v, v)
+    if v and v not in REPEATS:
+        raise ValueError("Ripetizione non valida: " + ", ".join(REPEATS) + " oppure vuota.")
+    return v
+
+
+def _add_months(d: datetime, n: int) -> datetime:
+    m = d.month - 1 + n
+    y, m = d.year + m // 12, m % 12 + 1
+    return d.replace(year=y, month=m, day=min(d.day, calendar.monthrange(y, m)[1]))
+
+
+def next_due(due: datetime, repeat: str, now: datetime) -> datetime:
+    """Prossima occorrenza dopo `now`, mantenendo l'ora del giorno (anche se il server era spento per più cicli)."""
+    nxt, i = due, 0
+    while nxt <= now and i < 4000:
+        i += 1
+        if repeat == "daily":
+            nxt = nxt + timedelta(days=1)
+        elif repeat == "weekdays":
+            nxt = nxt + timedelta(days=1)
+            while nxt.weekday() >= 5:
+                nxt = nxt + timedelta(days=1)
+        elif repeat == "weekly":
+            nxt = nxt + timedelta(weeks=1)
+        elif repeat == "monthly":
+            nxt = _add_months(due, i)
+        elif repeat == "yearly":
+            nxt = _add_months(due, 12 * i)
+        else:
+            raise ValueError(repeat)
+    return nxt
+
+
 class ReminderService:
     def __init__(self, settings: Settings, store, google=None):
         self.s, self.store, self.google = settings, store, google
@@ -73,6 +115,7 @@ class ReminderService:
         self.on_change = None  # callable(): avvisa gli altri dispositivi che i promemoria sono cambiati
         self.status: dict = {"ok": None, "at": "", "detail": "", "counts": {}, "failures": 0}
         self._last_logged = ""
+        self.mirror = None  # BrainMirror: tiene il secondo cervello allineato ai promemoria
 
     def _changed(self) -> None:
         if self.on_change:
@@ -96,17 +139,18 @@ class ReminderService:
         return bool(self.google and self.google.enabled)
 
     # ------------------------------------------------------------------ Calendario
-    def _body(self, text: str, due: datetime) -> dict:
+    def _body(self, text: str, due: datetime, repeat: str = "") -> dict:
         end = due + timedelta(minutes=15)
-        body = {"summary": PREFIX + text, "description": "Promemoria di JARVIS (si aggiorna da solo con l'app).",
+        again = f" Si ripete {REPEATS[repeat]}: il prossimo evento compare dopo questo." if repeat in REPEATS else ""
+        body = {"summary": PREFIX + text, "description": "Promemoria di JARVIS (si aggiorna da solo con l'app)." + again,
                 "start": {"dateTime": due.isoformat(), "timeZone": self.s.timezone}, "end": {"dateTime": end.isoformat(), "timeZone": self.s.timezone},
                 "transparency": "transparent",  # non occupa l'agenda come una riunione
                 "extendedProperties": {"private": TAG}}
         body["reminders"] = ({"useDefault": False, "overrides": [{"method": "popup", "minutes": 0}]} if self.s.reminder_calendar_popup else {"useDefault": False, "overrides": []})
         return body
 
-    async def _create_event(self, text: str, due: datetime) -> str:
-        r = await self.google.request("POST", f"{CAL}/events", params={"sendUpdates": "none"}, json=self._body(text, due))
+    async def _create_event(self, text: str, due: datetime, repeat: str = "") -> str:
+        r = await self.google.request("POST", f"{CAL}/events", params={"sendUpdates": "none"}, json=self._body(text, due, repeat))
         return r.json()["id"]
 
     async def _delete_event(self, event_id: str) -> None:
@@ -123,15 +167,18 @@ class ReminderService:
         await self.google.request("PATCH", f"{CAL}/events/{event_id}", params={"sendUpdates": "none"}, json=body)
 
     # ------------------------------------------------------------------ operazioni usate da tool, API e bot
-    async def create(self, text: str, due: datetime) -> dict:
+    async def create(self, text: str, due: datetime, repeat: str = "") -> dict:
+        repeat = norm_repeat(repeat)
         event_id, error = "", ""
         if self.linked:
             try:
-                event_id = await self._create_event(text, due)
+                event_id = await self._create_event(text, due, repeat)
             except Exception as e:  # il Calendario non risponde: il promemoria c'è comunque e la sincronizzazione lo collega più tardi
                 error = explain(e)
                 self._record(False, error)
-        rid = await self.store.add_reminder(text, due, event_id)
+        rid = await self.store.add_reminder(text, due, event_id, repeat)
+        if self.mirror:
+            await self.mirror.reminder_put(rid, text, due)
         self._changed()
         return {"id": rid, "event_id": event_id, "calendar": bool(event_id), "error": error}
 
@@ -154,6 +201,8 @@ class ReminderService:
                 self._record(False, explain(e))
                 await self._set_orphans(await self._orphans() + [eid])
         await self.store.delete_reminder(reminder_id)
+        if self.mirror:  # sparisce anche dal cervello, con i fatti appresi dalla stessa richiesta
+            await self.mirror.reminder_drop(reminder_id, (row or {}).get("text", ""))
         self._changed()
         return row is not None
 
@@ -163,6 +212,8 @@ class ReminderService:
             return None
         due = datetime.now(self.tz) + timedelta(minutes=max(1, minutes))
         await self.store.update_reminder(reminder_id, due_at=due)
+        if self.mirror:
+            await self.mirror.reminder_put(reminder_id, row["text"], due)
         if self.linked:
             try:
                 if row.get("event_id"):
@@ -173,6 +224,17 @@ class ReminderService:
                 self._record(False, explain(e))
         self._changed()
         return due
+
+    async def renew(self, row: dict, now: datetime | None = None) -> dict | None:
+        """Promemoria ricorrente appena scattato: crea il successivo (con il suo evento nel Calendario). Nessuna ripetizione: niente."""
+        repeat = row.get("repeat") or ""
+        if repeat not in REPEATS:
+            return None
+        now = now or datetime.now(self.tz)
+        due = datetime.fromisoformat(str(row["due_at"]))
+        if due.tzinfo is None:
+            due = due.replace(tzinfo=self.tz)
+        return await self.create(row["text"], next_due(due.astimezone(self.tz), repeat, now), repeat)
 
     async def snooze_delivered(self, text: str, minutes: int, event_id: str = "") -> dict:
         """Dal promemoria già scattato (pulsante «+10 min»): ne crea uno nuovo (e il suo evento) tra N minuti."""
@@ -271,8 +333,10 @@ class ReminderService:
                     else:
                         res["error"] = explain(e)
                         continue
-            if ev.get("status") == "cancelled":  # eliminato sul Calendario → sparisce anche dall'app
+            if ev.get("status") == "cancelled":  # eliminato sul Calendario → sparisce anche dall'app e dal cervello
                 await self.store.delete_reminder(r["id"])
+                if self.mirror:
+                    await self.mirror.reminder_drop(r["id"], r["text"])
                 res["removed"] += 1
                 continue
             start = (ev.get("start") or {}).get("dateTime")
@@ -286,6 +350,8 @@ class ReminderService:
                 fields["text"] = text
             if fields:
                 await self.store.update_reminder(r["id"], **fields)
+                if self.mirror:
+                    await self.mirror.reminder_put(r["id"], fields.get("text", r["text"]), fields.get("due_at", r["due_at"]))
                 res["updated"] += 1
         await self._cleanup(res, now, events)
         known = {r.get("event_id") for r in await self.store.list_reminders()}
@@ -296,7 +362,9 @@ class ReminderService:
             due = datetime.fromisoformat(start.replace("Z", "+00:00")).astimezone(self.tz)
             if due <= now:
                 continue
-            await self.store.add_reminder(_clean(e.get("summary", "")), due, e["id"])
+            rid = await self.store.add_reminder(_clean(e.get("summary", "")), due, e["id"])
+            if self.mirror:
+                await self.mirror.reminder_put(rid, _clean(e.get("summary", "")), due)
             try:
                 await self.google.request("PATCH", f"{CAL}/events/{e['id']}", params={"sendUpdates": "none"}, json={"extendedProperties": {"private": TAG}})
             except Exception as ex:

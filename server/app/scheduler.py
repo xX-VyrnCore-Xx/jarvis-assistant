@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 
 from .budget import fmt_tokens
 from .health import beat, heartbeat_line, stale_loops
+from .backup import BackupError
 from .config import Settings
 from .memory import Store
 from .notify import Notifier
@@ -14,13 +15,21 @@ from .notify import Notifier
 log = logging.getLogger("jarvis.scheduler")
 PRUNE_EVERY_S = 24 * 3600
 BUDGET_EVERY_S = 30 * 60
+RETRY_AFTER_S = 3600
 
 
-async def deliver_due_reminders(store: Store, notifier: Notifier, now: datetime) -> int:
+async def deliver_due_reminders(store: Store, notifier: Notifier, now: datetime, mirror=None, reminders=None) -> int:
     sent = 0
     for r in await store.due_reminders(now):
         await notifier.push("reminder", "⏰ Promemoria, signore", r["text"], telegram=True)
         await store.mark_reminder_done(r["id"])  # solo dopo l'invio riuscito: al massimo duplica, non perde
+        if mirror:  # scattato: non è più qualcosa da ricordare
+            await mirror.reminder_drop(r["id"], r["text"])
+        if reminders is not None and r.get("repeat"):  # ricorrente: prepara subito la prossima occorrenza
+            try:
+                await reminders.renew(r, now)
+            except Exception:
+                log.exception("rinnovo del promemoria ricorrente fallito")
         sent += 1
     return sent
 
@@ -37,7 +46,7 @@ async def check_budget(settings: Settings, budget, notifier: Notifier, alerted: 
     return low
 
 
-async def background_loop(settings: Settings, store: Store, notifier: Notifier, budget, backup=None) -> None:
+async def background_loop(settings: Settings, store: Store, notifier: Notifier, budget, backup=None, mirror=None, reminders=None) -> None:
     tz = ZoneInfo(settings.timezone)
     last_prune = 0.0
     last_budget = 0.0
@@ -45,10 +54,11 @@ async def background_loop(settings: Settings, store: Store, notifier: Notifier, 
     started = time.monotonic()
     encrypted = not hasattr(store, "encrypt_existing")
     last_backup = None
+    failures = 0
     while True:
         beat("promemoria", settings.reminder_poll_s)
         try:
-            await deliver_due_reminders(store, notifier, datetime.now(tz))
+            await deliver_due_reminders(store, notifier, datetime.now(tz), mirror, reminders)
         except Exception:
             log.exception("errore nel ciclo promemoria")
         now = time.monotonic()
@@ -72,21 +82,27 @@ async def background_loop(settings: Settings, store: Store, notifier: Notifier, 
                 await store.prune()
             except Exception:
                 log.exception("pulizia dati vecchi fallita")
-        # il primo backup parte 10 minuti dopo l'avvio, per non appesantire il risveglio del servizio
-        if backup and backup.enabled and (now - started > 600 if last_backup is None else now - last_backup >= PRUNE_EVERY_S):
+        # il primo backup parte 10 minuti dopo l'avvio, per non appesantire il risveglio del servizio; se fallisce si riprova dopo un'ora (al massimo 3 volte al giorno)
+        if backup and backup.enabled and (now - started > 600 if last_backup is None else now - last_backup >= (RETRY_AFTER_S if failures else PRUNE_EVERY_S)):
             try:
                 detail = await backup.run()
                 log.info("backup Supabase: %s", detail)
+                failures = 0
                 await store.set_setting("backup_status", json.dumps({"ok": True, "at": datetime.now(tz).isoformat(), "detail": detail}))
             except Exception as e:
-                log.warning("backup Supabase fallito: %s", type(e).__name__)
-                await store.set_setting("backup_status", json.dumps({"ok": False, "at": datetime.now(tz).isoformat(), "detail": type(e).__name__}))
-                await notifier.push("alert", "Backup non riuscito", "Il backup notturno su Hugging Face è fallito.")
+                failures += 1
+                reason = str(e)[:240] if isinstance(e, BackupError) else type(e).__name__
+                log.warning("backup Supabase fallito (tentativo %d): %s", failures, reason)
+                await store.set_setting("backup_status", json.dumps({"ok": False, "at": datetime.now(tz).isoformat(), "detail": reason, "attempts": failures}))
+                if failures in (1, 3):
+                    await notifier.push("alert", "Backup non riuscito", f"Il backup su Hugging Face è fallito: {reason}"[:300])
+                if failures >= 3:
+                    failures = 0  # basta per oggi: riprova domani
             last_backup = time.monotonic()
         await asyncio.sleep(settings.reminder_poll_s)
 
 
-async def brain_cycle(settings: Settings, store: Store, brain, state: dict) -> None:
+async def brain_cycle(settings: Settings, store: Store, brain, state: dict, mirror=None) -> None:
     """Manutenzione del secondo cervello: indice, ricordi vecchi, vettori mancanti, arricchimento."""
     if not state.get("loaded"):
         log.info("secondo cervello: indice caricato (%d frammenti)", await brain.load())
@@ -98,6 +114,8 @@ async def brain_cycle(settings: Settings, store: Store, brain, state: dict) -> N
             await store.set_setting("brain_memories_imported", "1")
             log.info("secondo cervello: importati %d ricordi", n)
         state["imported"] = True
+    if mirror:  # promemoria, ricordi e attività: il cervello non deve ricordare ciò che non esiste più
+        await mirror.sync_all()
     n = await brain.reindex_vectors(32)
     if n:
         log.info("secondo cervello: %d vettori aggiunti", n)
@@ -127,7 +145,13 @@ async def morning_briefing(settings: Settings, brain, agent, notifier) -> None:
     await notifier.push("info", "Buongiorno, signore", text[:600], telegram=True)
 
 
-async def brain_loop(settings: Settings, store: Store, brain, agent, notifier) -> None:
+async def evening_briefing(settings: Settings, brain, agent, notifier) -> None:
+    text = await agent.reply("Prepara il riepilogo della sera: cosa resta da fare (attività aperte e promemoria di domani), l'agenda di domani e, in una riga, una cosa utile da preparare stasera. "
+                             "Se non c'è niente, dillo in una riga. Massimo 8 righe, tono da JARVIS, niente notizie.", "briefing")
+    await notifier.push("info", "Buonasera, signore", text[:600], telegram=True)
+
+
+async def brain_loop(settings: Settings, store: Store, brain, agent, notifier, mirror=None) -> None:
     """Primo ciclo dopo 45 s (il risveglio di Render non va appesantito), poi ogni 5 minuti; diario alle 03:30 e buongiorno all'ora scelta."""
     tz = ZoneInfo(settings.timezone)
     state: dict = {}
@@ -136,7 +160,7 @@ async def brain_loop(settings: Settings, store: Store, brain, agent, notifier) -
         beat("cervello", 300)
         try:
             if brain.enabled:
-                await brain_cycle(settings, store, brain, state)
+                await brain_cycle(settings, store, brain, state, mirror)
                 now = datetime.now(tz)
                 today = now.date().isoformat()
                 if now.hour >= 3 and await store.get_setting("last_journal") != today:
@@ -145,6 +169,9 @@ async def brain_loop(settings: Settings, store: Store, brain, agent, notifier) -
                 if settings.briefing_hour and settings.briefing_hour <= now.hour < settings.briefing_hour + 4 and await store.get_setting("last_briefing") != today:
                     await store.set_setting("last_briefing", today)
                     await morning_briefing(settings, brain, agent, notifier)
+                if settings.evening_hour and settings.evening_hour <= now.hour < settings.evening_hour + 2 and await store.get_setting("last_evening") != today:
+                    await store.set_setting("last_evening", today)
+                    await evening_briefing(settings, brain, agent, notifier)
         except Exception:
             log.exception("errore nel ciclo del secondo cervello")
         await asyncio.sleep(300)

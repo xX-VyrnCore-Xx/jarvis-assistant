@@ -43,7 +43,7 @@ async function saveToken(t) {
 const api = new Jarvis({ url: () => cfg.url, token: () => cfg.token });
 const speaker = new Speaker({ tts: (t) => api.tts(t) });
 const voiceOn = () => store.get("jarvis.speak") !== "0";
-const S = { skill: null, update: null, prefs: null, models: null, usage: null, appVer: "", brain: { q: "", results: null, docs: null, stats: null, busy: false }, tab: "chat", status: null, checked: false, tokens: null, tokensErr: "", tokensAt: null, reminders: [], remindersLoaded: false, notes: [], pending: [], online: false, busy: false, mic: false, canMic: false, sheets: [] };
+const S = { skill: null, update: null, prefs: null, models: null, usage: null, appVer: "", brain: { q: "", results: null, docs: null, stats: null, busy: false }, tab: "chat", status: null, checked: false, tokens: null, tokensErr: "", tokensAt: null, reminders: [], remindersLoaded: false, notes: [], pending: [], online: false, live: "off", backup: null, busy: false, mic: false, canMic: false, sheets: [] };
 
 const $app = document.getElementById("m-app");
 let top, content, tabs, log, input, sendBtn, micBtn, downBtn, chatView, hello, chips;
@@ -56,7 +56,7 @@ const clock = (d = new Date()) => d.toLocaleTimeString("it-IT", { hour: "2-digit
 
 function toast(text, bad = false, action = null) {
   const t = document.getElementById("m-toast");
-  t.replaceChildren(el("span", {}, text), action ? el("button", { onclick: () => { t.className = ""; action.fn(); } }, action.label) : null);
+  t.replaceChildren(...[el("span", {}, text), action ? el("button", { onclick: () => { t.className = ""; action.fn(); } }, action.label) : null].filter(Boolean));  // replaceChildren(null) scriverebbe «null»
   t.className = `show${bad ? " bad" : ""}${action ? " act" : ""}`;
   clearTimeout(toast.t); toast.t = setTimeout(() => (t.className = ""), action ? 5200 : 3800);
 }
@@ -124,12 +124,16 @@ function shell() {
 
 const unread = () => S.notes.filter((n) => !n.read).length;
 
+const LINK_TEXT = { live: "Collegato in tempo reale", connecting: "Mi collego…", off: "Senza collegamento" };
+/** live = flusso aperto; connecting = sta provando; off = server o rete non raggiungibili. */
+const linkState = () => (S.live === "on" ? "live" : S.checked && !S.online ? "off" : S.live === "connecting" || !S.checked ? "connecting" : "off");
+
 function renderTop() {
   const t = S.status?.tokens;
   const low = t && t.documented_monthly_tokens && t.remaining_tokens / t.documented_monthly_tokens < 0.15;
   const offline = cfg.token && S.checked && !S.online;
   top.replaceChildren(
-    el("div", { class: "m-title" }, orb(), el("div", {}, el("h1", {}, "JARVIS"), el("p", {}, `${greeting()}, signore`))),
+    el("div", { class: "m-title" }, orb(), el("div", {}, el("h1", {}, "JARVIS", cfg.token ? el("i", { class: `m-link ${linkState()}`, role: "img", "aria-label": LINK_TEXT[linkState()] }) : null), el("p", {}, `${greeting()}, signore`))),
     el("div", { class: "m-right" },
       t ? el("button", { class: `m-pill${low ? " low" : ""}`, onclick: () => setTab("tokens"), "aria-label": "Token disponibili" }, icon("gauge", 15), fmtTokens(t.remaining_tokens)) : null,
       el("button", { class: "m-bell", onclick: openNotes, "aria-label": "Notifiche" }, icon("bell", 21), unread() ? el("i", {}, unread() > 9 ? "9+" : String(unread())) : null)),
@@ -142,10 +146,33 @@ function renderTop() {
       el("button", { class: "m-x", "aria-label": "Nascondi per un giorno", onclick: (e) => { e.stopPropagation(); store.set("jarvis.updhide", JSON.stringify({ v: S.update.latest, t: Date.now() })); renderTop(); haptic(); } }, icon("x", 15))));
   }
   if (offline) {
+    const msg = el("span", { class: "off-msg" });
     top.insertAdjacentElement("afterend", el("div", { id: "m-offline", class: "m-offline", role: "status" }, icon("offline", 17),
-      "Server non raggiungibile: si sta svegliando o manca la rete.", el("button", { class: "m-ghost", style: "margin-left:auto;min-height:30px;padding:0 10px", onclick: () => { refreshStatus(); toast("Controllo il server…"); } }, "Riprova")));
-  }
+      el("div", { class: "off-text" }, msg), el("button", { class: "m-ghost", style: "margin-left:auto;min-height:30px;padding:0 10px", onclick: () => { retryNow(); toast("Controllo il server…"); } }, "Riprova")));
+    paintOffline(msg);
+  } else stopOfflineTicker();
 }
+
+// il server gratuito si addormenta: dopo un'assenza ci mette fino a un minuto a svegliarsi. L'app riprova da sola, con un conto alla rovescia.
+let offlineTicker = 0, offlineSince = 0, nextTry = 0;
+const RETRY_STEPS = [6, 10, 15, 20, 30];
+let retries = 0;
+function stopOfflineTicker() { clearInterval(offlineTicker); offlineTicker = 0; offlineSince = 0; retries = 0; }
+function paintOffline(msg) {
+  if (!offlineTicker) {
+    offlineSince = Date.now(); nextTry = Date.now() + RETRY_STEPS[0] * 1000;
+    offlineTicker = setInterval(() => {
+      if (document.hidden) return;
+      if (Date.now() >= nextTry) { retries++; nextTry = Date.now() + RETRY_STEPS[Math.min(retries, RETRY_STEPS.length - 1)] * 1000; refreshStatus(); }
+      const m = document.querySelector("#m-offline .off-msg"); if (m) paintOffline(m);
+    }, 1000);
+  }
+  const waking = Date.now() - offlineSince < 90_000;
+  const left = Math.max(0, Math.ceil((nextTry - Date.now()) / 1000));
+  msg.textContent = (waking ? "Il server si sta svegliando (può volerci un minuto) o manca la rete." : "Server non raggiungibile.") + ` Riprovo tra ${left} s.`;
+}
+function retryNow() { retries = 0; nextTry = Date.now() + RETRY_STEPS[0] * 1000; refreshStatus(); closeStream?.poke?.(); }
+window.addEventListener("online", () => { if (cfg.token && !S.locked && !document.hidden) retryNow(); });
 
 function renderTabs() {
   const badge = { reminders: S.reminders.filter((r) => new Date(r.due_at) - Date.now() < 86_400_000).length };
@@ -176,6 +203,7 @@ function setTab(id) {
   if (id === "brain") loadBrain();
   if (id === "tokens") loadTokens();
   if (id === "reminders") loadReminders();
+  if (id === "more") loadBackup();
 }
 
 function renderTab() {
@@ -534,16 +562,21 @@ function openSheet(title, ...body) {
 const localInput = (d) => { const x = new Date(d.getTime() - d.getTimezoneOffset() * 60_000); return x.toISOString().slice(0, 16); };
 const atHour = (h, plusDays = 0) => { const d = new Date(); d.setDate(d.getDate() + plusDays); d.setHours(h, 0, 0, 0); return d; };
 
+const REPEAT_OPTIONS = [["", "Una volta sola"], ["daily", "Ogni giorno"], ["weekdays", "Nei giorni feriali"], ["weekly", "Ogni settimana"], ["monthly", "Ogni mese"], ["yearly", "Ogni anno"]];
+const repeatLabel = (v) => (REPEAT_OPTIONS.find(([k]) => k === v) || [])[1] || "";
+
 function newReminder() {
   const text = el("input", { type: "text", placeholder: "Cosa devo ricordarti?", maxlength: 500, "aria-label": "Testo" });
   const when = el("input", { type: "datetime-local", value: localInput(new Date(Date.now() + 3_600_000)), "aria-label": "Quando" });
   const presets = [["Tra 15 min", () => new Date(Date.now() + 900_000)], ["Tra 1 ora", () => new Date(Date.now() + 3_600_000)],
     ["Stasera 21:00", () => (atHour(21) > new Date() ? atHour(21) : atHour(21, 1))], ["Domani 9:00", () => atHour(9, 1)]];
+  const repeat = el("select", { class: "m-select", "aria-label": "Ripetizione" }, REPEAT_OPTIONS.map(([v, l]) => el("option", { value: v }, l)));
   const s = openSheet("Nuovo promemoria", text,
     el("div", { class: "m-presets" }, presets.map(([l, f]) => el("button", { onclick: () => { when.value = localInput(f()); haptic(); } }, l))), when,
+    el("label", { class: "m-inline" }, el("span", {}, icon("refresh", 16), "Ripeti"), repeat),
     el("button", { class: "m-primary", style: "width:100%", onclick: async () => {
       if (!text.value.trim()) return toast("Scrivi cosa ricordare", true);
-      try { await api.addReminder(text.value.trim(), when.value); s.close(); haptic("medium"); toast("Promemoria creato"); loadReminders(); } catch (e) { toast(errText(e), true); }
+      try { await api.addReminder(text.value.trim(), when.value, repeat.value); s.close(); haptic("medium"); toast("Promemoria creato"); loadReminders(); } catch (e) { toast(errText(e), true); }
     } }, "Crea"));
   setTimeout(() => text.focus(), 280);
 }
@@ -564,13 +597,13 @@ async function removeReminder(r) {
     await api.deleteReminder(r.id);
     S.reminders = S.reminders.filter((x) => x.id !== r.id);
     renderTabs(); renderTab(); haptic("medium");
-    toast("Promemoria eliminato", false, { label: "Annulla", fn: async () => { try { await api.addReminder(r.text, localInput(new Date(r.due_at))); loadReminders(); } catch (e) { toast(errText(e), true); } } });
+    toast("Promemoria eliminato", false, { label: "Annulla", fn: async () => { try { await api.addReminder(r.text, localInput(new Date(r.due_at)), r.repeat || ""); loadReminders(); } catch (e) { toast(errText(e), true); } } });
   } catch (e) { toast(errText(e), true); renderTab(); }
 }
 
 function reminderCard(r) {
   const due = relDue(r.due_at);
-  const card = el("div", { class: `m-card rem${new Date(r.due_at) < Date.now() ? " late" : due.soon ? " soon" : ""}` }, el("div", {}, el("b", {}, r.text), el("small", { class: due.soon ? "soon" : "" }, due.label), r.event_id ? el("small", { class: "cal" }, "📅 Calendario") : null),
+  const card = el("div", { class: `m-card rem${new Date(r.due_at) < Date.now() ? " late" : due.soon ? " soon" : ""}` }, el("div", {}, el("b", {}, r.text), el("small", { class: due.soon ? "soon" : "" }, due.label), r.repeat ? el("small", { class: "rep" }, `🔁 ${repeatLabel(r.repeat)}`) : null, r.event_id ? el("small", { class: "cal" }, "📅 Calendario") : null),
     el("button", { class: "m-icon", "aria-label": "Elimina", onclick: () => removeReminder(r) }, icon("trash", 19)));
   let x0 = null, dx = 0;
   card.addEventListener("touchstart", (e) => { x0 = e.touches[0].clientX; dx = 0; card.classList.add("drag"); }, { passive: true });
@@ -607,10 +640,10 @@ function buildReminders() {
 // ---------------------------------------------------------------- aggiornamenti dell'app
 // ---------------------------------------------------------------- aggiornamenti dell'app
 const WHATS_NEW = [
-  ["lock", "Blocco con PIN", "Sei cifre, schermata di blocco con scossa e attese crescenti; il token è cifrato sul telefono."],
-  ["bell", "Notifiche più chiare", "Raggruppate per giorno, con filtri, avviso in cima allo schermo e colori per tipo."],
-  ["down", "Aggiornamenti più sicuri", "Note di rilascio leggibili, controllo dell'indirizzo di download, «salta questa versione»."],
-  ["sparkle", "Gesti e animazioni", "Scorri a sinistra e a destra per cambiare sezione; transizioni e rimbalzi rifiniti."],
+  ["refresh", "Promemoria ricorrenti", "Ogni giorno, nei feriali, ogni settimana, mese o anno: il prossimo compare da solo."],
+  ["bell", "Avvisi con azioni", "«+10 min», «+1 ora» o «Fatto» direttamente dall'avviso in cima allo schermo."],
+  ["sparkle", "Collegamento più solido", "Un pallino accanto al nome mostra lo stato; riconnessione automatica con conto alla rovescia."],
+  ["down", "Salvataggi sotto controllo", "Stato del backup e «Esegui ora» nella scheda Altro, con il motivo se qualcosa va storto."],
 ];
 const skipped = () => store.get("jarvis.skipver");
 function hiddenToday(v) { try { const h = JSON.parse(store.get("jarvis.updhide", "{}")); return h.v === v && Date.now() - h.t < 864e5; } catch { return false; } }
@@ -750,6 +783,35 @@ function securityCard() {
     el("p", { class: "m-note" }, cryptoOk() ? "🔐 Il token personale è cifrato sul telefono con una chiave che l'app non può esportare." : "Cifratura del token non disponibile in questo browser."));
 }
 
+async function loadBackup() {
+  if (!cfg.token) return;
+  try { S.backup = (await api.serverHealth()).backup || {}; } catch { return; }
+  rerenderMore();
+}
+/** Ridisegna «Altro» senza far tornare in cima la pagina. */
+function rerenderMore() {
+  if (S.tab !== "more") return;
+  const y = content.querySelector(".m-page")?.scrollTop || 0;
+  renderTab();
+  const page = content.querySelector(".m-page"); if (page) page.scrollTop = y;
+}
+function backupCard() {
+  const b = S.backup;
+  const when = b?.at ? new Date(b.at).toLocaleString("it-IT", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "";
+  const btn = el("button", { class: "m-ghost", onclick: async (e) => {
+    const me = e.currentTarget; me.disabled = true; me.textContent = "Salvo…";
+    try {
+      const r = await api.runBackup(); S.backup = { ok: r.ok, at: new Date().toISOString(), detail: r.detail };
+      toast(r.ok ? "Backup completato" : r.detail, !r.ok); haptic(r.ok ? "medium" : "heavy");
+    } catch (er) { toast(errText(er), true); }
+    rerenderMore();
+  } }, icon("down", 16), "Esegui ora");
+  return el("div", { class: "m-card" },
+    row("Backup su Hugging Face", !b || !b.at ? "—" : b.ok ? `ok · ${when}` : `non riuscito · ${when}`, !b || !b.at ? undefined : b.ok),
+    b && b.at && b.detail ? el("p", { class: `m-note ${b.ok ? "" : "bad"}` }, b.detail) : null,
+    el("div", { class: "m-row" }, el("span", {}, "Cifrato · ogni notte"), btn));
+}
+
 function buildMore() {
   const st = S.status;
   const url = el("input", { type: "text", value: cfg.url, spellcheck: "false", autocapitalize: "off", "aria-label": "Indirizzo del server" });
@@ -794,6 +856,8 @@ function buildMore() {
       el("div", { class: "m-row" }, el("span", {}, "Prova la voce"), el("button", { class: "m-ghost", onclick: () => speaker.speak("Buongiorno, signore. Tutti i sistemi sono operativi.") }, icon("volume", 16), "Ascolta")),
       el("div", { class: "m-row" }, el("span", {}, "Canali e ore silenziose"), el("button", { class: "m-ghost", onclick: openNotifySettings }, icon("sliders", 16), "Imposta")),
       el("div", { class: "m-row" }, el("span", {}, "Notifica di prova"), el("button", { class: "m-ghost", onclick: async () => { try { await api.testNotification(); toast("Inviata"); } catch (e) { toast(errText(e), true); } } }, icon("bell", 16), "Invia"))),
+    el("h3", { class: "m-sub" }, "Salvataggi"),
+    backupCard(),
     el("h3", { class: "m-sub" }, "Stato"),
     el("div", { class: "m-card" },
       row("Server", S.online ? "online" : "non raggiungibile", S.online),
@@ -827,9 +891,14 @@ let headsTimer = 0;
 function headsUp(n) {
   document.getElementById("m-heads")?.remove(); clearTimeout(headsTimer);
   const go = () => { box.remove(); const tab = ROUTE_TAB[n.meta?.route]; if (n.kind === "update") openUpdate(); else if (tab) setTab(tab); else openNotes(); };
+  const act = (m) => async (e) => {
+    e.stopPropagation();
+    try { await api.snooze(n.id, m); n.read = true; box.classList.add("gone"); setTimeout(() => box.remove(), 250); haptic(); toast(m ? `Te lo ricordo tra ${m >= 60 ? `${m / 60} h` : `${m} min`}` : "Fatto"); renderTop(); } catch (er) { toast(errText(er), true); }
+  };
   const box = el("div", { id: "m-heads", class: `heads k-${n.kind}`, role: "alert", onclick: go },
     el("span", { class: "m-note-ic" }, icon(KIND[n.kind] || "bell", 20)),
-    el("div", {}, el("b", {}, n.title), n.body ? el("p", {}, n.body) : null),
+    el("div", {}, el("b", {}, n.title), n.body ? el("p", {}, n.body) : null,
+      n.kind === "reminder" ? el("div", { class: "heads-act" }, el("button", { onclick: act(10) }, "+10 min"), el("button", { onclick: act(60) }, "+1 ora"), el("button", { class: "ok", onclick: act(0) }, "Fatto")) : null),
     el("small", {}, "adesso"));
   let y0 = null, dy = 0;
   box.addEventListener("touchstart", (e) => { y0 = e.touches[0].clientY; dy = 0; }, { passive: true });
@@ -837,7 +906,7 @@ function headsUp(n) {
   box.addEventListener("touchend", () => { if (dy < -40) { box.classList.add("gone"); setTimeout(() => box.remove(), 250); } else { box.style.transform = ""; box.style.opacity = ""; } y0 = null; });
   document.body.append(box);
   requestAnimationFrame(() => box.classList.add("in"));
-  headsTimer = setTimeout(() => { box.classList.add("gone"); setTimeout(() => box.remove(), 300); }, n.kind === "alert" || n.kind === "pending" ? 9000 : 5500);
+  headsTimer = setTimeout(() => { box.classList.add("gone"); setTimeout(() => box.remove(), 300); }, n.kind === "alert" || n.kind === "pending" ? 9000 : n.kind === "reminder" ? 12000 : 5500);
 }
 
 function onNote(n) {
@@ -936,7 +1005,11 @@ function start() {
       else if (scope === "brain") { S.brain.docs = null; S.brain.stats = null; if (S.tab === "brain") loadBrain(); }
       else if (scope === "chat" && origin !== deviceId) syncHistory();
     },
-    onState: (st) => { if (st === "on") { loadNotes(); loadReminders(); syncHistory(); } },
+    onState: (st) => {
+      const was = S.live; S.live = st; renderTop();
+      if (st === "on") { if (was !== "on") { S.online = true; S.checked = true; renderTop(); loadNotes(); loadReminders(); syncHistory(); } }
+      else if (st === "auth") toast("Token non valido: controllalo in Altro.", true);
+    },
   });
   initPush(api, (route) => { if (ROUTE_TAB[route]) setTab(ROUTE_TAB[route]); }).catch(() => {});
   checkUpdate();

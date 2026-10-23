@@ -1,17 +1,20 @@
 // Notifiche in tempo reale: flusso SSE dal server, con riconnessione automatica.
 // Si usa fetch (non EventSource) perché serve l'intestazione Authorization.
+// Il server manda un battito ogni 20 s: se per 55 s non arriva nulla la connessione è morta in silenzio (succede sulle reti mobili) e si riapre da sola.
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const IDLE_MS = 55_000;
 
 /**
  * @param {{url: () => string, token: () => string}} cfg
- * @param {{onNotification: (n: object) => void, onSync?: (m: {scope: string, origin: string}) => void, onState?: (s: "on"|"off"|"auth") => void}} h
- * @returns {() => void} funzione che chiude il flusso
+ * @param {{onNotification: (n: object) => void, onSync?: (m: {scope: string, origin: string}) => void, onState?: (s: "on"|"connecting"|"off"|"auth") => void}} h
+ * @returns {(() => void) & {poke: () => void}} chiude il flusso; `.poke()` riprova subito (al ritorno della rete)
  */
 export function openStream(cfg, { onNotification, onRead = () => {}, onSync = () => {}, onState = () => {} }) {
   let stopped = false;
   let ctrl;
   let retry = 0;
+  let last = 0;
+  let wake = null; // interrompe l'attesa tra un tentativo e l'altro
 
   const dispatch = (block) => {
     let event = "message";
@@ -29,9 +32,14 @@ export function openStream(cfg, { onNotification, onRead = () => {}, onSync = ()
     } catch { /* messaggio malformato: ignorato */ }
   };
 
+  const pause = (ms) => new Promise((resolve) => { const t = setTimeout(resolve, ms); wake = () => { clearTimeout(t); resolve(); }; });
+  const watchdog = setInterval(() => { if (ctrl && last && Date.now() - last > IDLE_MS) ctrl.abort(); }, 10_000);
+
   (async () => {
     while (!stopped) {
       ctrl = new AbortController();
+      last = Date.now();
+      onState("connecting");
       try {
         const res = await fetch(`${cfg.url()}/api/stream`, { headers: { Authorization: `Bearer ${cfg.token()}` }, signal: ctrl.signal });
         if (res.status === 401) return onState("auth");
@@ -43,16 +51,20 @@ export function openStream(cfg, { onNotification, onRead = () => {}, onSync = ()
         for (;;) {
           const { value, done } = await reader.read();
           if (done) break;
+          last = Date.now();
           buf += value;
           let i;
           while ((i = buf.indexOf("\n\n")) >= 0) { dispatch(buf.slice(0, i)); buf = buf.slice(i + 2); }
         }
-      } catch { /* rete assente o server in avvio: si riprova */ }
+      } catch { /* rete assente, server in avvio o battito mancato: si riprova */ }
+      last = 0;
       if (stopped) return;
       onState("off");
-      await sleep(Math.min(30_000, 1000 * 2 ** retry++));
+      await pause(Math.min(30_000, 1000 * 2 ** retry++) * (0.75 + Math.random() * 0.5)); // piccola variazione: tanti dispositivi non si ripresentano tutti insieme
     }
   })();
 
-  return () => { stopped = true; ctrl?.abort(); };
+  const close = () => { stopped = true; clearInterval(watchdog); ctrl?.abort(); wake?.(); };
+  close.poke = () => { retry = 0; if (!ctrl || ctrl.signal.aborted || !last) wake?.(); };
+  return close;
 }
