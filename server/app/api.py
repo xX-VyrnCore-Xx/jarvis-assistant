@@ -118,6 +118,7 @@ async def status(request: Request) -> dict:
         "pending_actions": len(st.pending.list_pending()),
         "calendar_sync": {**st.reminders.status, "linked": st.reminders.linked},
         "tokens": None,
+        "tools_down": sorted(getattr(st, "toolwatch", None).tools.down) if getattr(st, "toolwatch", None) else [],
     }
     if st.budget.enabled:
         try:
@@ -444,9 +445,47 @@ async def tts(body: SpeakIn, request: Request) -> Response:
     if not voice.enabled:
         raise HTTPException(404, "La voce non è disponibile: il PC con JARVIS non è collegato")
     try:
-        return Response(await voice.speak(body.text.strip()), media_type="audio/wav", headers={"Cache-Control": "no-store"})
+        audio, mime = await voice.speak_any(body.text.strip())
+        return Response(audio, media_type=mime, headers={"Cache-Control": "no-store"})
     except TTSError as e:
         raise HTTPException(503, str(e)) from e
+
+
+@router.get("/tools/health")
+async def tools_health(request: Request) -> dict:
+    """Stato degli strumenti esterni (meteo, notizie, cambi, Wikipedia…): ultima prova, esito e quali sono fuori servizio."""
+    w = request.app.state.toolwatch
+    return {"down": w.tools.down, "checks": w.status, "last_run": w.last_run, "tools": len(w.tools.names)}
+
+
+@router.post("/tools/health")
+async def tools_health_run(request: Request) -> dict:
+    """Prova subito gli strumenti esterni."""
+    w = request.app.state.toolwatch
+    return {"ok": True, "results": await asyncio.wait_for(w.run(), 120), "down": w.tools.down}
+
+
+class VoiceIn(BaseModel):
+    voice: str = Field(max_length=20)
+
+
+@router.get("/voice")
+async def voice_config(request: Request) -> dict:
+    """Voce neurale del server: quale è in uso e quali sono disponibili."""
+    from .edgetts import VOICES
+
+    e = request.app.state.voice.edge
+    return {"active": e.voice if e else "", "options": [{"id": k, "label": v[1]} for k, v in VOICES.items()], "available": bool(e and e.enabled),
+            "pc": request.app.state.voice.pc_enabled, "error": e.last_error if e else ""}
+
+
+@router.post("/voice")
+async def set_voice(body: VoiceIn, request: Request) -> dict:
+    e = request.app.state.voice.edge
+    if not e or not e.set_voice(body.voice):
+        raise HTTPException(422, "Voce sconosciuta")
+    await request.app.state.store.set_setting("tts_voice", body.voice)
+    return {"ok": True, "active": body.voice}
 
 
 # ---------------------------------------------------------------- secondo cervello

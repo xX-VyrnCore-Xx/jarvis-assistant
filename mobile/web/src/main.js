@@ -3,7 +3,7 @@ import { el, fmtDate, fmtTokens, fmtUptime, markdown, pct } from "@shared/format
 import { icon } from "@shared/icons.js";
 import { Speaker } from "@shared/speech.js";
 import { openStream } from "@shared/stream.js";
-import { appVersion, dictationAvailable, haptic, hideSplash, onBack, openExternal, paintSystemBars, platform, startDictation, stopDictation } from "./native.js";
+import { appVersion, dictationAvailable, haptic, hideSplash, onBack, openExternal, paintSystemBars, platform, startDictation, stopDictation, trackViewport } from "./native.js";
 import { initPush, teardownPush } from "./push.js";
 import { checkPin, cryptoOk, makePin, open as openSealed, seal } from "./secure.js";
 import { showLock } from "./lock.js";
@@ -95,9 +95,9 @@ function orb() {
   return svg;
 }
 function setOrb(state) {
-  document.querySelectorAll(".orb").forEach((o) => { o.classList.toggle("thinking", state === "thinking"); o.classList.toggle("speaking", state === "speaking"); });
+  document.querySelectorAll(".orb").forEach((o) => { o.classList.toggle("thinking", state === "thinking"); o.classList.toggle("speaking", state === "speaking"); o.classList.toggle("listening", state === "listening"); });
 }
-speaker.onState = (on) => setOrb(on ? "speaking" : S.busy ? "thinking" : "");
+speaker.onState = (on) => setOrb(on ? "speaking" : S.busy ? "thinking" : S.mic ? "listening" : "");
 
 // ---------------------------------------------------------------- struttura
 function shell() {
@@ -200,6 +200,7 @@ function setTab(id) {
     content.dataset.dir = to > from ? "r" : "l";
     clearTimeout(setTab.t); setTab.t = setTimeout(() => delete content.dataset.dir, 520);
   }
+  if (id !== "chat" && S.voiceMode) endVoice();
   S.tab = id;
   renderTabs(); renderTab(); renderTop();
   if (id === "brain") loadBrain();
@@ -292,23 +293,64 @@ function renderSkillChip() {
     el("button", { "aria-label": "Rimuovi la competenza", onclick: () => { S.skill = null; renderSkillChip(); } }, "✕"))] : []));
 }
 
+/** Conversazione a voce: tocchi il microfono, parli, alla fine della frase JARVIS risponde da solo (senza premere Invio) a voce, poi torna in ascolto.
+ *  Si ferma toccando di nuovo il microfono, dopo due ascolti senza parole o a un errore. */
 async function toggleMic() {
   haptic("medium");
-  if (S.mic) { await stopDictation(); S.mic = false; micBtn.classList.remove("on"); return; }
-  try {
-    S.mic = true; micBtn.classList.add("on");
-    await startDictation((t) => { input.value = t; input.dispatchEvent(new Event("input")); }, () => { S.mic = false; micBtn.classList.remove("on"); input.focus(); });
-  } catch (e) { S.mic = false; micBtn.classList.remove("on"); toast(errText(e), true); }
+  if (S.voiceMode) return endVoice();
+  if (!cfg.token) return setTab("more");
+  S.voiceMode = true; S.silent = 0;
+  showVoiceBar();
+  listen();
 }
 
-async function send(text) {
+function showVoiceBar() {
+  document.getElementById("m-voicebar")?.remove();
+  if (!S.voiceMode) return;
+  const bar = el("div", { id: "m-voicebar", class: "m-voicebar", role: "status" }, icon("mic", 16), el("span", {}, el("b", {}, "Conversazione a voce"), " · parla, rispondo senza che tu prema Invio"),
+    el("button", { class: "m-ghost", style: "margin-left:auto;min-height:30px;padding:0 10px", onclick: endVoice }, "Fine"));
+  chips?.insertAdjacentElement("beforebegin", bar);
+}
+
+async function endVoice() {
+  S.voiceMode = false; S.mic = false;
+  micBtn?.classList.remove("on");
+  if (input) input.placeholder = "Scrivi a JARVIS…";
+  document.getElementById("m-voicebar")?.remove();
+  speaker.stop();
+  await stopDictation();
+  setOrb(S.busy ? "thinking" : "");
+}
+
+async function listen() {
+  if (!S.voiceMode || S.busy) return;
+  speaker.stop();
+  let heard = "", closed = false;
+  const done = () => {
+    if (closed) return;
+    closed = true;
+    S.mic = false; micBtn.classList.remove("on"); input.placeholder = "Scrivi a JARVIS…";
+    if (!S.voiceMode) return;
+    const text = heard.trim();
+    if (!text) { if (++S.silent >= 2) { endVoice(); toast("Non ti sento più: conversazione a voce finita"); } else listen(); return; }
+    S.silent = 0;
+    send(text, { spoken: true });
+  };
+  try {
+    S.mic = true; micBtn.classList.add("on"); input.placeholder = "Ti ascolto…"; setOrb("listening");
+    await startDictation((t) => { heard = t; input.value = t; input.dispatchEvent(new Event("input")); }, done);
+  } catch (e) { endVoice(); toast(errText(e), true); }
+}
+
+async function send(text, { spoken = false } = {}) {
   const msg = (text ?? input.value).trim();
   if (!msg || S.busy) return;
   if (!cfg.token) return setTab("more");
   haptic();
   if (S.tab !== "chat") setTab("chat");
-  if (text === undefined) { input.value = ""; input.style.height = "auto"; sendBtn.disabled = true; }
-  if (S.mic) { await stopDictation(); S.mic = false; micBtn.classList.remove("on"); }
+  if (text === undefined || spoken) { input.value = ""; input.style.height = "auto"; sendBtn.disabled = true; }
+  if (S.mic) { await stopDictation(); S.mic = false; if (!S.voiceMode) micBtn.classList.remove("on"); }
+  const talk = spoken || S.voiceMode;  // a voce si risponde a voce, anche se la lettura delle risposte è spenta
   bubble("user", msg);
   S.busy = true; setOrb("thinking");
   const label = el("span", { class: "m-status" });
@@ -320,7 +362,7 @@ async function send(text) {
   const paint = () => { raf = 0; const stick = nearBottom(); live.firstChild.replaceChildren(markdown(acc)); if (stick) log.scrollTop = log.scrollHeight; };
   try {
     const reply = await api.chatStream(msg, SESSION, {
-      model: store.get("jarvis.model"), skill,
+      model: store.get("jarvis.model"), skill, voice: talk,
       onStatus: (t) => { label.textContent = t; },
       onDelta: (t) => {
         if (!live) { typing.remove(); live = el("div", { class: "m-msg bot" }, el("div", { class: "m-bubble" })); log.append(live); }
@@ -331,10 +373,12 @@ async function send(text) {
     cancelAnimationFrame(raf); typing.remove(); live?.remove();
     bubble("bot", reply);
     haptic("light");
-    if (voiceOn() && S.status?.voice) speaker.speak(reply);
     refreshStatus();
-  } catch (e) { cancelAnimationFrame(raf); typing.remove(); live?.remove(); bubble("sys", errText(e)); }
-  finally { S.busy = false; if (!speaker.speaking) setOrb(""); }
+    S.busy = false;
+    if (talk || (voiceOn() && S.status?.voice)) await speaker.speak(reply);
+    if (S.voiceMode) { S.busy = false; return listen(); }  // conversazione a voce: finito di parlare, si riascolta
+  } catch (e) { cancelAnimationFrame(raf); typing.remove(); live?.remove(); bubble("sys", errText(e)); if (S.voiceMode) endVoice(); }
+  finally { S.busy = false; if (!speaker.speaking) setOrb(S.mic ? "listening" : ""); }
 }
 
 async function loadHistory() {
@@ -685,6 +729,9 @@ function buildReminders() {
 // ---------------------------------------------------------------- aggiornamenti dell'app
 // ---------------------------------------------------------------- aggiornamenti dell'app
 const WHATS_NEW = [
+  ["mic", "Conversazione a voce", "Tocca il microfono, parla: JARVIS risponde a voce da solo e ti riascolta, senza Invio. Tocca di nuovo per fermare."],
+  ["volume", "Voce nuova", "Voce neurale italiana sempre disponibile, anche a PC spento: scegli Isabella, Elsa o Diego in Altro."],
+  ["shield", "Strumenti sempre in forma", "Ogni poche ore JARVIS prova meteo, notizie, cambi e Wikipedia: quelli rotti escono dall'elenco e rientrano da soli."],
   ["plus", "Nuova chat", "Il + in alto cancella la conversazione e ne comincia una nuova, ovunque."],
   ["shield", "Rubrica più protetta", "Ogni ricerca si vede, c'è un limite di richieste e al modello arrivano solo nomi e codici."],
   ["refresh", "Tutto in tempo reale", "Attività, promemoria, ricordi e chat sono gli stessi su Telegram, Android e Windows e si aggiornano all'istante."],
@@ -995,7 +1042,13 @@ function backupCard() {
     el("div", { class: "m-row" }, el("span", {}, "Cifrato · ogni notte"), btn));
 }
 
+async function loadVoiceCfg() {
+  if (!cfg.token || S.voiceCfg) return;
+  try { S.voiceCfg = await api.voiceConfig(); if (S.tab === "more") renderTab(); } catch { /* server non pronto: si riprova alla prossima apertura */ }
+}
+
 function buildMore() {
+  loadVoiceCfg();
   const st = S.status;
   const url = el("input", { type: "text", value: cfg.url, spellcheck: "false", autocapitalize: "off", "aria-label": "Indirizzo del server" });
   const token = el("input", { type: "password", value: cfg.token, autocomplete: "off", "aria-label": "Token personale" });
@@ -1035,7 +1088,10 @@ function buildMore() {
       el("div", { class: "m-row" }, el("span", {}, "Competenze (codice, finanza, marketing…)"), el("button", { class: "m-ghost", onclick: openSkills }, icon("sparkle", 16), "Sfoglia"))),
     el("h3", { class: "m-sub" }, "Voce e notifiche"),
     el("div", { class: "m-card" },
-      el("label", { class: "m-row" }, el("span", {}, st?.voice ? "Leggi le risposte (voce di JARVIS)" : "Leggi le risposte (serve il PC acceso)"), speakSwitch),
+      el("label", { class: "m-row" }, el("span", {}, st?.voice ? "Leggi le risposte (voce di JARVIS)" : "Leggi le risposte (voce non disponibile)"), speakSwitch),
+      S.voiceCfg?.options?.length ? el("label", { class: "m-row" }, el("span", {}, "Voce di JARVIS"), el("select", { class: "m-select", "aria-label": "Voce di JARVIS",
+        onchange: async (e) => { try { await api.setVoice(e.target.value); S.voiceCfg.active = e.target.value; haptic(); speaker.speak("Ecco la mia nuova voce, signore."); } catch (er) { toast(errText(er), true); } } },
+        S.voiceCfg.options.map((o) => el("option", { value: o.id, selected: o.id === S.voiceCfg.active }, o.label)))) : null,
       el("div", { class: "m-row" }, el("span", {}, "Prova la voce"), el("button", { class: "m-ghost", onclick: () => speaker.speak("Buongiorno, signore. Tutti i sistemi sono operativi.") }, icon("volume", 16), "Ascolta")),
       el("div", { class: "m-row" }, el("span", {}, "Canali e ore silenziose"), el("button", { class: "m-ghost", onclick: openNotifySettings }, icon("sliders", 16), "Imposta")),
       el("div", { class: "m-row" }, el("span", {}, "Notifica di prova"), el("button", { class: "m-ghost", onclick: async () => { try { await api.testNotification(); toast("Inviata"); } catch (e) { toast(errText(e), true); } } }, icon("bell", 16), "Invia"))),
@@ -1047,6 +1103,7 @@ function buildMore() {
       row("Server", S.online ? "online" : "non raggiungibile", S.online),
       row("Intelligenza", st ? (st.freellm.ready ? "pronta" : "non pronta") : "—", st ? st.freellm.ready : undefined),
       row("PC Windows", st ? (st.pc_connected ? "collegato" : "scollegato") : "—", st ? st.pc_connected : undefined),
+      row("Strumenti", st ? (st.tools_down?.length ? `fuori servizio: ${st.tools_down.join(", ")}` : "tutti attivi") : "—", st ? !st.tools_down?.length : undefined),
       row("Telegram", st ? (st.telegram ? "attivo" : "spento") : "—", st ? st.telegram : undefined),
       row("Google", st ? (st.google ? "collegato" : "non collegato") : "—", st ? st.google : undefined),
       row("Memoria", st ? (st.memory === "supabase" ? "permanente" : "temporanea") : "—", st ? st.memory === "supabase" : undefined),
@@ -1287,6 +1344,7 @@ document.addEventListener("visibilitychange", async () => {
   if (document.hidden) {
     hiddenAt = Date.now();
     document.body.classList.toggle("privacy", privacyOn());  // copre il contenuto nella schermata delle app recenti
+    if (S.voiceMode) endVoice();
     speaker.stop(); closeStream?.(); closeStream = null; timers.forEach(clearInterval); timers = [];
   } else {
     document.body.classList.remove("privacy");
@@ -1305,6 +1363,7 @@ onBack(() => {
 });
 
 applyTheme();
+trackViewport();
 shell();
 renderTabs(); renderTab();
 (async () => {

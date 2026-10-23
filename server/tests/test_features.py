@@ -286,6 +286,7 @@ async def test_voice_is_relayed_to_the_pc_and_cached():
 
 
 def test_tts_endpoint_without_pc(client):
+    client.app.state.voice.edge.on = False  # senza PC e senza voce neurale
     assert client.post("/api/tts", json={"text": "ciao"}, headers=AUTH).status_code == 404
     assert client.post("/api/tts", json={"text": "ciao"}).status_code == 401
 

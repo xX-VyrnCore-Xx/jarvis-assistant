@@ -31,6 +31,7 @@ from .config import Settings, get_settings
 from .llm import LLMClient, LLMError
 from .gateway import make_client
 from .gateway import router as gateway_router
+from .edgetts import EdgeTTS
 from .livesync import Live, LiveStore
 from .memory import build_store
 from .pc import PCBridge
@@ -48,7 +49,8 @@ from .phonebridge import PhoneBridge
 from .tools.phone_tools import register_phone_tools
 from . import tgwatch
 from .live import LiveFeeds, register_live_tools
-from .scheduler import background_loop, brain_loop, heartbeat_loop, live_loop, maintenance_loop, proactive_loop
+from .scheduler import background_loop, brain_loop, heartbeat_loop, live_loop, maintenance_loop, proactive_loop, toolwatch_loop
+from .toolwatch import ToolWatch
 from .updates import UpdateService
 from .usage import UsageTracker
 from .telegram import Telegram
@@ -152,7 +154,12 @@ async def lifespan(app: FastAPI):
                    {"type": "object", "properties": {"title": {"type": "string"}, "body": {"type": "string"}}, "required": ["title"]},
                    send_notification)
     app.state.backup = HFBackup(settings)
-    app.state.voice = VoiceService(pc)
+    edge = EdgeTTS(settings.tts_neural, settings.tts_rate, settings.tts_pitch)
+    try:
+        edge.set_voice(await store.get_setting("tts_voice") or settings.tts_voice)
+    except Exception:
+        pass
+    app.state.voice = VoiceService(pc, edge)
     notifier = app.state.notifier = Notifier(settings, store, tg)
     reminders.on_change = lambda: notifier.sync("reminders")
     app.state.voiceline = VoiceLine(settings, store, llm, notifier)  # segreteria telefonica con voce (Twilio), spenta finché non si imposta TWILIO_AUTH_TOKEN
@@ -182,6 +189,8 @@ async def lifespan(app: FastAPI):
     proactive = app.state.proactive = Proactive(settings, store, notifier, google, brain, budget)
     proactive_task = asyncio.create_task(proactive_loop(settings, proactive))
     heartbeat_task = asyncio.create_task(heartbeat_loop(app))
+    watch = app.state.toolwatch = ToolWatch(tools, notifier)
+    toolwatch_task = asyncio.create_task(toolwatch_loop(watch))  # strumenti esterni rotti escono dall'elenco, riparati rientrano
     if tg.enabled:
         guard = asyncio.create_task(_telegram_run(app, settings))
     vault = getattr(store, "vault", None)
@@ -198,6 +207,7 @@ async def lifespan(app: FastAPI):
     maint_task.cancel()
     proactive_task.cancel()
     heartbeat_task.cancel()
+    toolwatch_task.cancel()
     await usage.flush(store)  # non perde i consumi dell'ultima ora allo spegnimento
     if guard:
         guard.cancel()
