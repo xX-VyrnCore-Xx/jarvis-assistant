@@ -1,5 +1,5 @@
 /* Sezione Codice (condivisa da app Android e Windows). I colori arrivano dalle variabili dell'app che la ospita. */
-.cs { --cs-bg: var(--surf, var(--panel)); --cs-bg2: var(--surf2, var(--panel2)); --cs-acc: var(--amber, var(--cy)); --cs-line: var(--line);
+.cs, .cs-sheet-bg { --cs-bg: var(--surf, var(--panel)); --cs-bg2: var(--surf2, var(--panel2)); --cs-acc: var(--amber, var(--cy)); --cs-line: var(--line);
   --cs-mono: var(--mono, ui-monospace, "Cascadia Mono", Consolas, monospace); display: flex; flex-direction: column; min-height: 0; height: 100%; gap: 8px; }
 .cs button { cursor: pointer; }
 .cs-proj { flex: none; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 10px; border: 1px solid var(--cs-line); border-radius: 14px; background: var(--cs-bg); }
@@ -44,3 +44,24 @@
 .cs-code { margin: 0; padding: 10px; background: #0b0a10; color: #e8e4f4; border-radius: 10px; overflow: auto; font: 12.5px/1.5 var(--cs-mono); white-space: pre; }
 .cs-code .add { color: #6ee7a8; } .cs-code .del { color: #ff7b93; } .cs-code .hdr { color: #ffc15e; font-weight: 600; }
 .cs-list { display: flex; flex-direction: column; gap: 6px; } .cs-list button { text-align: left; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--cs-line); background: var(--cs-bg); color: var(--text); }
+
+/* comandi «/», lavori in background */
+.cs-sheet-bg { --cs-mono: var(--mono, ui-monospace, "Cascadia Mono", Consolas, monospace); }
+.cs-sheet > .cs-proj > .grow { flex: 1 1 0; }
+.cs-sheet .cs-msg { max-width: 100%; }
+.cs-bg { flex: none; padding: 0 10px; } .cs-bg.on { background: var(--cs-acc); color: #1b1207; border-color: transparent; }
+.cs-palette { flex: none; display: flex; flex-direction: column; border: 1px solid var(--cs-line); border-radius: 14px; background: var(--cs-bg); overflow: hidden; max-height: 40vh; overflow-y: auto; }
+.cs-palette[hidden] { display: none; }
+.cs-palette button, .cs-cmd { display: flex; gap: 10px; align-items: baseline; text-align: left; padding: 9px 12px; border: 0; border-bottom: 1px solid var(--cs-line); background: transparent; color: var(--text); font-size: 13.5px; }
+.cs-palette button:last-child { border-bottom: 0; } .cs-palette b, .cs-cmd b { font-family: var(--cs-mono); color: var(--cs-acc); flex: none; } .cs-palette small, .cs-cmd small { color: var(--muted); font-size: 12px; }
+.cs-cmd { flex-direction: column; gap: 2px; border: 1px solid var(--cs-line); border-radius: 12px; }
+.cs-jobsbar { flex: none; } .cs-jobsbar:empty { display: none; }
+.cs-job-now { width: 100%; display: flex; gap: 10px; align-items: center; text-align: left; padding: 8px 12px; border: 1px solid var(--cs-acc); border-radius: 14px; background: var(--cs-bg); color: var(--text); }
+.cs-job-now .grow, .cs-job .grow { flex: 1; min-width: 0; display: flex; flex-direction: column; } .cs-job-now b, .cs-job b { font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cs-job-now small, .cs-job small { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cs-spin svg { animation: cs-rot 1.4s linear infinite; color: var(--cs-acc); } @keyframes cs-rot { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .cs-spin svg { animation: none; } }
+.cs-count { margin-left: 2px; min-width: 18px; padding: 0 5px; border-radius: 99px; background: var(--cs-acc); color: #1b1207; font-size: 11px; font-weight: 700; text-align: center; }
+.cs-job { display: flex; gap: 10px; align-items: center; } .cs-job .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); flex: none; }
+.cs-job.running .dot { background: var(--cs-acc); } .cs-job.done .dot { background: var(--ok); } .cs-job.failed .dot, .cs-job.interrupted .dot { background: var(--bad); }
+.cs-steps { margin: 0; padding-left: 20px; font-size: 12.5px; color: var(--muted); } .cs-steps li { margin: 2px 0; }

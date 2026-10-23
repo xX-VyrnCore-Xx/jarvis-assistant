@@ -23,16 +23,21 @@ const QUICK = [
 
 /** @param {{api: any, toast: Function, errText: (e: any) => string, haptic?: Function}} deps */
 export function createCodeStudio({ api, toast, errText, haptic = () => {} }) {
-  const S = { ov: null, skill: null, busy: false, loaded: false };
+  const S = { ov: null, skill: null, busy: false, loaded: false, bg: false, jobs: [], jobsSeen: null, cmds: null };
   const header = el("div", { class: "cs-head" });
   const planBox = el("div");
   const skillsBox = el("div", { class: "cs-skills" });
+  const jobsBox = el("div", { class: "cs-jobsbar" });
+  const palette = el("div", { class: "cs-palette", hidden: true, role: "listbox", "aria-label": "Comandi" });
   const log = el("div", { class: "cs-log", "aria-live": "polite" });
   const status = el("div", { class: "cs-status", role: "status" });
   const input = el("textarea", { rows: 1, placeholder: "Cosa costruiamo o correggiamo?", "aria-label": "Messaggio di coding", spellcheck: "false", autocapitalize: "off" });
   const sendBtn = el("button", { class: "cs-btn pri", "aria-label": "Invia", onclick: () => send() }, icon("send", 18));
-  const root = el("div", { class: "cs" }, header, planBox, skillsBox, log, status, el("div", { class: "cs-comp" }, input, sendBtn));
-  input.addEventListener("input", () => { input.style.height = "auto"; input.style.height = `${Math.min(input.scrollHeight, 160)}px`; });
+  const bgBtn = el("button", { class: "cs-btn cs-bg", "aria-label": "Esegui in background", title: "In background: JARVIS lavora da solo sul server, anche con l'app chiusa, e ti avvisa quando finisce", "aria-pressed": "false",
+    onclick: () => { S.bg = !S.bg; haptic(); drawBg(); toast(S.bg ? "In background: lavora anche ad app chiusa e ti avviso a fine lavoro" : "Risposta qui, in diretta"); } }, icon("cloud", 18));
+  const root = el("div", { class: "cs" }, header, planBox, skillsBox, jobsBox, log, status, palette, el("div", { class: "cs-comp" }, bgBtn, input, sendBtn));
+  function drawBg() { bgBtn.classList.toggle("on", S.bg); bgBtn.setAttribute("aria-pressed", String(S.bg)); input.placeholder = S.bg ? "Cosa faccio in background?" : "Cosa costruiamo? («/» comandi)"; }
+  input.addEventListener("input", () => { input.style.height = "auto"; input.style.height = `${Math.min(input.scrollHeight, 160)}px`; drawPalette(); });
   input.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing && matchMedia("(hover: hover)").matches) { e.preventDefault(); send(); } });
 
   const stick = () => log.scrollHeight - log.scrollTop - log.clientHeight < 80;
@@ -65,6 +70,7 @@ export function createCodeStudio({ api, toast, errText, haptic = () => {} }) {
       n ? el("span", { class: "cs-pill warn" }, `${n} modifiche`) : null,
       ses?.active ? el("button", { class: "cs-btn", onclick: openProject }, icon("file", 15), "Progetto") : el("button", { class: "cs-btn", onclick: pickRepo }, "Riprendi"),
       el("button", { class: "cs-btn pri", title: "Crea un nuovo repository privato su GitHub", onclick: createRepo }, icon("plus", 15), "Nuovo repo"),
+      el("button", { class: "cs-btn", title: "Lavori in background", onclick: openJobs }, icon("cloud", 15), "Lavori", S.jobs.some(activeJob) ? el("span", { class: "cs-count" }, String(S.jobs.filter(activeJob).length)) : null),
       el("button", { class: "cs-btn", title: "Cancella la conversazione di coding (il progetto resta)", onclick: newChat }, icon("branch", 15), "Azzera chat")));
   }
 
@@ -182,6 +188,120 @@ export function createCodeStudio({ api, toast, errText, haptic = () => {} }) {
     draw();
   }
 
+
+  // ---------------------------------------------------------------- comandi rapidi («/»)
+  const LOCAL_HELP = "Comandi: scrivi «/» per l'elenco. «/bg …» o l'icona nuvola lavorano in background e ti avvisano a fine lavoro.";
+  async function loadCmds() {
+    if (S.cmds) return S.cmds;
+    try { S.cmds = await api.codeCommands(); } catch { S.cmds = []; }
+    return S.cmds;
+  }
+  function drawPalette() {
+    const v = input.value;
+    if (!v.startsWith("/") || /\s/.test(v)) { palette.hidden = true; return; }
+    loadCmds().then((cmds) => {
+      if (!input.value.startsWith("/") || /\s/.test(input.value)) return;
+      const q = input.value.slice(1).toLowerCase();
+      const rows = cmds.filter((c) => c.name.startsWith(q)).slice(0, 8);
+      palette.replaceChildren(...rows.map((c) => el("button", { role: "option", onclick: () => { haptic(); if (c.args) { input.value = `/${c.name} `; input.focus(); drawPalette(); } else { input.value = ""; send(`/${c.name}`); } } },
+        el("b", {}, `/${c.name}`), el("small", {}, c.desc))));
+      palette.hidden = !rows.length;
+    });
+  }
+  /** «/review app.py» → il prompt completo del comando; null se non è un comando (o è locale). */
+  async function expand(text) {
+    const m = /^\/([a-z-]+)(?:\s+([\s\S]*))?$/i.exec(text);
+    if (!m) return null;
+    const name = m[1].toLowerCase(), args = (m[2] || "").trim();
+    const cmds = await loadCmds();
+    const c = cmds.find((x) => x.name === name);
+    if (!c) return { error: `Comando «/${name}» sconosciuto. ${LOCAL_HELP}` };
+    if (c.local) return { local: name, args };
+    let bg = false, a = args;
+    if (/(^|\s)(bg|background)$/i.test(a)) { bg = true; a = a.replace(/\s*(bg|background)$/i, "").trim(); }
+    const filled = c.prompt.replaceAll("{args}", a ? ` ${a}` : "");
+    return { prompt: (a ? filled : filled.replace(/\s+([.,:;])/g, "$1").replace(/:\s*$/, ".")).trim(), bg };
+  }
+
+  // ---------------------------------------------------------------- lavori in background
+  const activeJob = (j) => j.status === "queued" || j.status === "running";
+  const JOB_LABEL = { queued: "In coda", running: "In corso", done: "Finito", failed: "Non riuscito", cancelled: "Annullato", interrupted: "Interrotto" };
+  const ago = (t) => { const m = Math.max(0, Math.round((Date.now() / 1000 - t) / 60)); return m < 1 ? "ora" : m < 60 ? `${m} min fa` : m < 1440 ? `${Math.round(m / 60)} h fa` : `${Math.round(m / 1440)} g fa`; };
+  let jobsTimer = 0, jobsSheet = null;
+
+  async function refreshJobs() {
+    try {
+      const r = await api.codeJobs();
+      const prev = S.jobsSeen;
+      S.jobs = r.jobs || [];
+      if (prev) for (const j of S.jobs) if (prev[j.id] && activeJob({ status: prev[j.id] }) && !activeJob(j)) toast(j.status === "done" ? `Lavoro finito: ${j.title}` : `Lavoro ${JOB_LABEL[j.status].toLowerCase()}: ${j.title}`, j.status === "failed");
+      S.jobsSeen = Object.fromEntries(S.jobs.map((j) => [j.id, j.status]));
+    } catch { return; }
+    drawJobs();
+    clearInterval(jobsTimer);
+    jobsTimer = S.jobs.some(activeJob) ? setInterval(() => (root.isConnected ? refreshJobs() : clearInterval(jobsTimer)), 6000) : 0;  // rete di sicurezza se un avviso in tempo reale si perde
+  }
+  function drawJobs() {
+    const act = S.jobs.filter(activeJob);
+    jobsBox.replaceChildren();
+    if (act.length) {
+      const j = act.find((x) => x.status === "running") || act[0];
+      jobsBox.append(el("button", { class: "cs-job-now", onclick: openJobs }, el("span", { class: "cs-spin" }, icon("refresh", 15)),
+        el("span", { class: "grow" }, el("b", {}, j.title), el("small", {}, j.status === "queued" ? "In coda…" : j.now || "Lavoro…")), act.length > 1 ? el("span", { class: "cs-pill" }, `+${act.length - 1}`) : null));
+    }
+    drawHeader();
+    if (jobsSheet?.isConnected) fillJobs();
+  }
+  async function startJob(task, shown) {
+    if (log.querySelector(".cs-quick")) log.replaceChildren();
+    bubble("user", shown || task);
+    try {
+      const j = await api.codeJobStart(task, "");
+      haptic("medium");
+      bubble("sys", "☁ In background: continuo da solo sul server, anche con l'app chiusa. Ti avviso quando ho finito.");
+      toast("Lavoro avviato in background");
+      S.jobs = [j, ...S.jobs.filter((x) => x.id !== j.id)]; drawJobs(); refreshJobs();
+    } catch (e) { bubble("sys", errText(e)); }
+    down();
+  }
+  function jobRow(j) {
+    return el("button", { class: `cs-job ${j.status}`, onclick: () => openJob(j.id) },
+      el("span", { class: "dot" }), el("span", { class: "grow" }, el("b", {}, j.title), el("small", {}, `${JOB_LABEL[j.status] || j.status} · ${ago(j.created)}${j.status === "running" && j.now ? ` · ${j.now}` : ""}`)),
+      j.pr ? el("span", { class: "cs-pill ok" }, `PR #${j.pr}`) : null);
+  }
+  let jobsList = null;
+  function fillJobs() {
+    jobsList.replaceChildren(...(S.jobs.length ? S.jobs.map(jobRow) : [el("div", { class: "cs-status" }, "Nessun lavoro. Attiva la nuvola accanto al messaggio, oppure scrivi «/bg» seguito da cosa fare.")]));
+  }
+  function openJobs() {
+    jobsList = el("div", { class: "cs-list cs-body" });
+    const sh = sheet("Lavori in background", el("div", { class: "cs-status" }, "JARVIS lavora sul server anche con l'app chiusa e ti avvisa a fine lavoro (notifica, push, Telegram)."), jobsList);
+    jobsSheet = sh.root; fillJobs(); refreshJobs();
+  }
+  async function openJob(id) {
+    let j;
+    try { j = await api.codeJob(id); } catch (e) { return toast(errText(e), true); }
+    const body = el("div", { class: "cs-body" });
+    const draw = (j) => {
+      const link = j.pr && j.repo ? el("a", { class: "cs-btn", href: `https://github.com/${j.repo}/pull/${j.pr}`, target: "_blank", rel: "noopener" }, "Apri PR") : null;
+      body.replaceChildren(
+        el("div", { class: "cs-proj" }, el("span", { class: `cs-pill ${j.status === "done" ? "ok" : j.status === "failed" || j.status === "interrupted" ? "bad" : "warn"}` }, JOB_LABEL[j.status] || j.status), el("small", {}, `${j.repo || ""} · ${ago(j.created)}`),
+          activeJob(j) ? el("button", { class: "cs-btn", onclick: async () => { try { await api.codeJobCancel(j.id); toast("Lavoro annullato"); sh.close(); refreshJobs(); } catch (e) { toast(errText(e), true); } } }, "Annulla")
+            : el("button", { class: "cs-btn", onclick: async () => { try { await api.codeJobStart(j.prompt || j.title); toast("Rilanciato in background"); sh.close(); refreshJobs(); } catch (e) { toast(errText(e), true); } } }, "Rilancia"), link),
+        el("div", { class: "cs-msg user" }, j.prompt || j.title),
+        j.steps?.length ? el("ol", { class: "cs-steps" }, j.steps.map((t) => el("li", {}, t))) : null,
+        j.result ? el("div", { class: "cs-msg" }, decorate(markdown(j.result))) : el("div", { class: "cs-status" }, "In attesa del risultato…"));
+    };
+    const sh = sheet(j.title, body);
+    draw(j);
+    if (activeJob(j)) {
+      const t = setInterval(async () => { if (!body.isConnected) return clearInterval(t); try { draw(await api.codeJob(id)); } catch { /* si riprova */ } }, 4000);
+    }
+  }
+
+  /** Avviso leggero dal server: un lavoro in background ha fatto un passo o è finito. */
+  function onJobs() { refreshJobs(); }
+
   // ---------------------------------------------------------------- conversazione
   function drawEmpty() {
     log.replaceChildren(el("div", { class: "cs-quick" }, QUICK.map(([t, d, prompt]) => el("button", { onclick: () => { haptic(); if (prompt === "@create") createRepo(); else if (prompt) send(prompt); else pickRepo(); } }, el("b", {}, t), el("small", {}, d)))));
@@ -214,11 +334,25 @@ export function createCodeStudio({ api, toast, errText, haptic = () => {} }) {
   }
 
   async function send(text) {
-    const msg = (text ?? input.value).trim();
+    let msg = (text ?? input.value).trim();
     if (!msg || S.busy) return;
-    if (text === undefined) { input.value = ""; input.style.height = "auto"; }
+    if (text === undefined) { input.value = ""; input.style.height = "auto"; palette.hidden = true; }
+    const shown = msg;
+    let bg = S.bg;
+    if (msg.startsWith("/")) {
+      const x = await expand(msg);
+      if (x?.error) { if (log.querySelector(".cs-quick")) log.replaceChildren(); bubble("user", shown); bubble("sys", x.error); return down(); }
+      if (x?.local) {
+        if (x.local === "jobs") return openJobs();
+        if (x.local === "new") return newChat();
+        if (x.local === "help") { const cmds = await loadCmds(); return sheet("Comandi", el("div", { class: "cs-list cs-body" }, cmds.map((c) => el("div", { class: "cs-cmd" }, el("b", {}, `/${c.name}`), el("small", {}, c.desc))))); }
+        if (!x.args) { toast("Scrivi cosa deve fare: «/bg aggiungi i test al parser»"); input.value = "/bg "; input.focus(); return; }
+        msg = x.args; bg = true;
+      } else if (x) { msg = x.prompt; bg = bg || x.bg; }
+    }
+    if (bg) return startJob(msg, shown);
     if (log.querySelector(".cs-quick")) log.replaceChildren();
-    bubble("user", msg);
+    bubble("user", shown);
     S.busy = true; sendBtn.disabled = true; status.textContent = "JARVIS sta lavorando…";
     const skill = S.skill?.name || "";
     S.skill = null; drawSkills();
@@ -241,13 +375,13 @@ export function createCodeStudio({ api, toast, errText, haptic = () => {} }) {
 
   async function refresh(withHistory = !S.loaded) {
     try { S.ov = await api.codeOverview(); } catch (e) { if (!S.ov) { header.replaceChildren(el("div", { class: "cs-warn" }, errText(e))); } }
-    drawHeader(); drawPlan(); drawSkills();
+    drawHeader(); drawPlan(); drawSkills(); refreshJobs();
     if (withHistory) { S.loaded = true; await loadHistory(); }
   }
 
   /** Un altro dispositivo (o il server) ha lavorato nella sezione Codice: ci si rimette in pari senza disturbare uno scambio in corso. */
   function onSync() { if (!S.busy) refresh(true); }
 
-  drawEmpty();
-  return { root, refresh, onSync, focus: () => input.focus() };
+  drawEmpty(); drawBg();
+  return { root, refresh, onSync, onJobs, focus: () => input.focus() };
 }

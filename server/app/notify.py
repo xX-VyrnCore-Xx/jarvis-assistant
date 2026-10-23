@@ -15,11 +15,11 @@ from .memory import Store
 log = logging.getLogger("jarvis.notify")
 SCOPE = "https://www.googleapis.com/auth/firebase.messaging"
 # canali Android (creati dall'app): importanza e suono dipendono dal tipo
-CHANNELS = {"reminder": "reminders", "alert": "alerts", "pending": "alerts", "update": "updates", "brain": "general", "proactive": "general", "info": "general", "call": "alerts"}
-ROUTES = {"reminder": "reminders", "alert": "tokens", "pending": "chat", "update": "more", "brain": "brain", "proactive": "chat", "info": "chat", "call": "chat"}
-TTL = {"reminder": 3600, "pending": 600, "alert": 21600, "update": 259200, "brain": 43200, "proactive": 21600, "info": 21600, "call": 120}  # secondi di validità della consegna push
+CHANNELS = {"reminder": "reminders", "alert": "alerts", "pending": "alerts", "update": "updates", "brain": "general", "proactive": "general", "info": "general", "call": "alerts", "code": "general"}
+ROUTES = {"reminder": "reminders", "alert": "tokens", "pending": "chat", "update": "more", "brain": "brain", "proactive": "chat", "info": "chat", "call": "chat", "code": "code"}
+TTL = {"reminder": 3600, "pending": 600, "alert": 21600, "update": 259200, "brain": 43200, "proactive": 21600, "info": 21600, "call": 120, "code": 86400}  # secondi di validità della consegna push
 CRITICAL = {"reminder", "alert", "pending", "call"}  # arrivano anche nelle ore silenziose
-DEFAULT_PREFS = {"kinds": {k: {"inapp": True, "push": True, "telegram": k in ("reminder", "alert", "update", "proactive")} for k in ("reminder", "alert", "pending", "update", "brain", "proactive", "info")},
+DEFAULT_PREFS = {"kinds": {k: {"inapp": True, "push": True, "telegram": k in ("reminder", "alert", "update", "proactive", "code")} for k in ("reminder", "alert", "pending", "update", "brain", "proactive", "info", "code")},
                  "quiet": {"enabled": True, "from": "23:00", "to": "07:30"}}
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 

@@ -821,6 +821,7 @@ function buildReminders() {
 // ---------------------------------------------------------------- aggiornamenti dell'app
 // ---------------------------------------------------------------- aggiornamenti dell'app
 const WHATS_NEW = [
+  ["cloud", "Coding in background", "Nella sezione Codice attiva la nuvola (o scrivi «/bg …»): JARVIS lavora da solo sul server, anche con l'app chiusa, e ti avvisa quando ha finito. Scrivi «/» per i comandi: /review, /test, /fix, /pr, /ship…"],
   ["shield", "Privacy sotto controllo", "In Altro vedi cosa è cifrato e cosa esce dal server, puoi spegnere la voce neurale e cancellare chat e cache con un tocco."],
   ["plus", "Nuovo repository dal Codice", "Crea un repository privato con README, licenza e scheletro con test e CI direttamente dalla sezione Codice."],
   ["mic", "Microfono molto più preciso", "Ora registra la voce e la trascrive con Whisper: capisce meglio le parole, non taglia le pause e mette punteggiatura e accenti. Tocca il microfono mentre parli per chiudere la frase."],
@@ -921,7 +922,7 @@ async function openSkills() {
 }
 
 // ---------------------------------------------------------------- impostazioni delle notifiche e del modello
-const KIND_LABEL = { reminder: "Promemoria", alert: "Avvisi (token, sicurezza)", pending: "Conferme richieste", update: "Aggiornamenti app", brain: "Secondo cervello", proactive: "Suggerimenti di JARVIS (eventi, email, riepiloghi)", info: "Informazioni" };
+const KIND_LABEL = { reminder: "Promemoria", alert: "Avvisi (token, sicurezza)", pending: "Conferme richieste", update: "Aggiornamenti app", brain: "Secondo cervello", proactive: "Suggerimenti di JARVIS (eventi, email, riepiloghi)", info: "Informazioni", code: "Coding (lavori in background finiti)" };
 
 async function openNotifySettings() {
   let p;
@@ -1270,7 +1271,7 @@ function buildMore() {
 
 // ---------------------------------------------------------------- notifiche
 const KIND = { call: "phone", reminder: "clock", alert: "shield", pending: "shield", update: "down", brain: "sparkle", proactive: "sparkle", info: "bell" };
-const ROUTE_TAB = { chat: "chat", brain: "brain", tokens: "tokens", reminders: "reminders", more: "more" };
+const ROUTE_TAB = { chat: "chat", code: "code", brain: "brain", tokens: "tokens", reminders: "reminders", more: "more" };
 let notesSheet = null;
 
 async function loadNotes() {
@@ -1383,7 +1384,7 @@ function onNote(n) {
   if (notesSheet) fillNotes(); else headsUp(n);
 }
 
-const NOTE_FILTERS = [["all", "Tutte"], ["unread", "Non lette"], ["reminder", "Promemoria"], ["alert", "Avvisi"], ["proactive", "Suggerimenti"], ["update", "Aggiornamenti"]];
+const NOTE_FILTERS = [["all", "Tutte"], ["unread", "Non lette"], ["reminder", "Promemoria"], ["alert", "Avvisi"], ["proactive", "Suggerimenti"], ["update", "Aggiornamenti"], ["code", "Coding"]];
 const dayLabel = (iso) => {
   const d = new Date(iso), now = new Date();
   return d.toDateString() === now.toDateString() ? "Oggi" : d.toDateString() === new Date(Date.now() - 864e5).toDateString() ? "Ieri" : d.toLocaleDateString("it-IT", { weekday: "long", day: "numeric", month: "long" });
@@ -1465,7 +1466,8 @@ function start() {
     onRead: (ids) => { S.notes.forEach((n) => { if (!ids || ids.includes(n.id)) n.read = true; }); renderTop(); if (notesSheet) fillNotes(); },
     onCommand: handleCommand,
     onSync: ({ scope, origin }) => {  // un altro dispositivo (o il server) ha cambiato qualcosa: ci si aggiorna subito
-      if (scope === "code") { if (origin !== deviceId) codeStudio?.onSync(); }
+      if (scope === "code_jobs") codeStudio?.onJobs();
+      else if (scope === "code") { if (origin !== deviceId) codeStudio?.onSync(); }
       else if (scope === "reminders") loadReminders();
       else if (scope === "tasks") loadTasks();
       else if (scope === "memories") { S.brain.stats = null; if (S.tab === "brain") loadBrain(); }

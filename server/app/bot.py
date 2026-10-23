@@ -510,7 +510,7 @@ class TelegramBot:
     async def _settings(self, chat_id: int, message_id: int = 0) -> None:
         prefs = await self.app.state.notifier.prefs()
         names = {"reminder": "Promemoria", "alert": "Avvisi", "pending": "Conferme", "update": "Aggiornamenti", "brain": "Cervello",
-                 "proactive": "Suggerimenti", "info": "Informazioni"}
+                 "proactive": "Suggerimenti", "info": "Informazioni", "code": "Coding"}
         keys = [[{"text": f"{'✅' if v['telegram'] else '⬜'} {names.get(k, k)} su Telegram", "callback_data": f"np:{k}"}] for k, v in prefs["kinds"].items()]
         q = prefs["quiet"]
         keys.append([{"text": f"{'🌙 Ore silenziose: ' + q['from'] + '–' + q['to'] if q['enabled'] else '🔔 Ore silenziose: spente'}", "callback_data": "nq"}])

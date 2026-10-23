@@ -3,7 +3,7 @@ from ..coding import CodingError, CodingService
 from . import UNTRUSTED, ToolRegistry
 
 
-def register_coding_tools(reg: ToolRegistry, coding: CodingService, pending) -> None:
+def register_coding_tools(reg: ToolRegistry, coding: CodingService, pending, jobs=None) -> None:
     on = lambda: coding.enabled  # noqa: E731
     s = {"type": "string"}
     b = {"type": "boolean"}
@@ -144,3 +144,34 @@ def register_coding_tools(reg: ToolRegistry, coding: CodingService, pending) -> 
                  guarded(lambda path: graph_tool(coding.code_deps, path)), available=on)
     reg.register("code_path", "Il percorso di chiamate/importazioni che collega due simboli o file del codice.", obj({"a": s, "b": s}, ["a", "b"]),
                  guarded(lambda a, b: graph_tool(coding.code_path, a, b)), available=on)
+
+    # ---- come Claude Code: annulla, ripristino, modifiche multiple, sintassi, TODO, revisione PR
+    arr = {"type": "array", "items": {"type": "object", "properties": {"path": s, "old": s, "new": s, "replace_all": b}, "required": ["path", "old", "new"]}}
+    reg.register("code_undo", "Annulla le ultime n modifiche alla sandbox (scritture, modifiche, eliminazioni, spostamenti), dalla più recente. Per un singolo file non committato usa anche code_discard.", obj({"n": i}), guarded(coding.undo), available=on)
+    reg.register("code_checkpoint", "Salva lo stato attuale della sandbox con un nome (al massimo 5): fallo PRIMA di un refactor o di un cambiamento rischioso.", obj({"name": s}), guarded(coding.checkpoint), available=on)
+    reg.register("code_rollback", "Riporta la sandbox a un punto di ripristino salvato con code_checkpoint (l'ultimo se non dai il nome).", obj({"name": s}), guarded(coding.rollback), available=on)
+    reg.register("code_multi_edit", "Più modifiche (anche su file diversi) in un colpo solo e ATOMICO: se una non combacia non cambia nulla. Ogni modifica: path, old (testo esatto), new, replace_all.",
+                 obj({"edits": arr}, ["edits"]), guarded(coding.multi_edit), available=on)
+    reg.register("code_lint", "Controlla la SINTASSI senza eseguire nulla: Python, JSON, TOML, YAML, parentesi in JS/TS/CSS. Senza path controlla i file modificati; path=all tutti. Chiamala dopo aver scritto codice.", obj({"path": s}), guarded(coding.lint), available=on)
+    reg.register("code_todos", "Elenca i TODO/FIXME/HACK del progetto con file e riga.", obj({"limit": i}), guarded(coding.todos), available=on)
+
+    async def pr_diff(number: int = 0) -> str:
+        return UNTRUSTED + await coding.pr_diff(number)
+
+    reg.register("code_pr_diff", "Le modifiche di una Pull Request (file e patch) per rivederla; senza numero usa quella della sessione. Poi commenta con code_pr_comment.", obj({"number": i}), guarded(pr_diff), available=on)
+
+    # ---- lavori in background (anche con l'app chiusa) con notifica a fine lavoro
+    if jobs is not None:
+        async def bg(task: str, repo: str = "") -> str:
+            j = await jobs().start(task, repo=repo)
+            return (f"Lavoro in background avviato (id {j['id']}): ci lavoro da solo sul server, anche con l'app chiusa, e avviso l'utente quando finisco. "
+                    "Non aspettare il risultato in questa conversazione: dì all'utente che lo avvisi.")
+
+        async def joblist() -> str:
+            rows = jobs().listing()[:8]
+            return "\n".join(f"- {r['id']} [{r['status']}] {r['title']}" + (f" — {r['now']}" if r["status"] == "running" else "") for r in rows) or "Nessun lavoro in background."
+
+        reg.register("code_background", "Avvia un lavoro di coding in BACKGROUND sul server: continua anche con l'app chiusa e notifica l'utente a fine lavoro (app, push, Telegram). Usala quando l'utente dice "
+                     "«in background», «avvisami quando hai finito», «lavoraci tu» o per compiti lunghi. 'task' = istruzioni complete (obiettivo, vincoli); 'repo' facoltativo se la sessione è già aperta.",
+                     obj({"task": s, "repo": s}, ["task"]), guarded(bg), available=on)
+        reg.register("code_jobs", "Elenco dei lavori di coding in background (in coda, in corso, finiti).", obj({}), guarded(joblist), available=on)

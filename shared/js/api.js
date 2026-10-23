@@ -137,6 +137,11 @@ export class Jarvis {
   codeDiff() { return this.#req("/api/code/diff", { timeout: 30_000 }); }
   codeChecks() { return this.#req("/api/code/checks", { timeout: 30_000 }); }
   codeCreate(p) { return this.#req("/api/code/create", { method: "POST", body: p, timeout: 120_000 }); }
+  codeCommands() { return this.#get("/api/code/commands"); }
+  codeJobs() { return this.#req("/api/code/jobs"); }
+  codeJob(id) { return this.#req(`/api/code/jobs/${encodeURIComponent(id)}`); }
+  codeJobStart(task, repo = "") { return this.#req("/api/code/jobs", { method: "POST", body: { task, repo }, timeout: 30_000 }); }
+  codeJobCancel(id) { return this.#req(`/api/code/jobs/${encodeURIComponent(id)}/cancel`, { method: "POST" }); }
   codeResume(repo) { return this.#req("/api/code/resume", { method: "POST", body: { repo }, timeout: 90_000 }); }
   /** Dettatura di qualità: manda l'audio registrato e riceve il testo (Whisper del router), già corretto se `fix` è quick/full. */
   stt(blob, fix = "quick") { return this.#req(`/api/stt?fix=${fix}`, { method: "POST", body: blob, binary: (blob.type || "audio/webm").split(";")[0], timeout: 60_000 }); }

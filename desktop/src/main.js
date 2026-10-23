@@ -718,7 +718,8 @@ function start() {
     onNotification: onNote,
     onRead: (ids) => { S.notes.forEach((n) => { if (!ids || ids.includes(n.id)) n.read = true; }); renderRail(); if (S.view === "notifications") renderView(); },
     onSync: ({ scope, origin }) => {  // Telegram, app Android o server hanno cambiato qualcosa: ci si aggiorna subito
-      if (scope === "code") { if (origin !== deviceId) studioInst?.onSync(); }
+      if (scope === "code_jobs") studioInst?.onJobs();
+      else if (scope === "code") { if (origin !== deviceId) studioInst?.onSync(); }
       else if (scope === "reminders") loadReminders();
       else if (scope === "tasks") loadTasks();
       else if (scope === "brain" || scope === "memories") loadBrain();
