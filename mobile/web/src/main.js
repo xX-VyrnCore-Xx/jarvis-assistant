@@ -7,7 +7,7 @@ import { appVersion, dictationAvailable, haptic, hideSplash, onBack, openExterna
 import { initPush, teardownPush } from "./push.js";
 import { checkPin, cryptoOk, makePin, open as openSealed, seal } from "./secure.js";
 import { showLock } from "./lock.js";
-import { NUMBER_RE, phone, phoneAvailable } from "./phone.js";
+import { NUMBER_RE, phone, phoneAvailable, updater } from "./phone.js";
 
 // URL pubblico del server (non è un segreto); il token personale resta nella memoria privata dell'app
 const DEFAULT_URL = "https://jarvis-ai-841t.onrender.com";
@@ -729,6 +729,7 @@ function buildReminders() {
 // ---------------------------------------------------------------- aggiornamenti dell'app
 // ---------------------------------------------------------------- aggiornamenti dell'app
 const WHATS_NEW = [
+  ["down", "Aggiornamenti nell'app", "Scarica con avanzamento, verifica l'SHA-256 e apre l'installazione: niente browser. Vedi le novità di ogni versione saltata."],
   ["mic", "Conversazione a voce", "Tocca il microfono, parla: JARVIS risponde a voce da solo e ti riascolta, senza Invio. Tocca di nuovo per fermare."],
   ["volume", "Voce nuova", "Voce neurale italiana sempre disponibile, anche a PC spento: scegli Isabella, Elsa o Diego in Altro."],
   ["shield", "Strumenti sempre in forma", "Ogni poche ore JARVIS prova meteo, notizie, cambi e Wikipedia: quelli rotti escono dall'elenco e rientrano da soli."],
@@ -769,24 +770,41 @@ function whatsNew() {
     el("div", { class: "m-btns" }, el("button", { class: "m-primary", onclick: () => S.sheets.at(-1)?.close() }, "Ottimo")));
 }
 
+/** Scarica l'APK dentro l'app (con avanzamento e controllo dell'SHA-256) e apre l'installazione; senza il plugin nuovo ripiega sul browser. */
+async function runUpdate(u, ui) {
+  if (!trustedDownload(u.url)) { toast("Indirizzo di download non attendibile: non lo apro.", true); return haptic("heavy"); }
+  if (!updater.available) { haptic("medium"); return openExternal(u.url); }
+  ui.btn.disabled = true; ui.bar.hidden = false; ui.msg.textContent = "Scarico l'aggiornamento…";
+  try {
+    const r = await updater.install(u.url, u.sha256, (p) => { ui.bar.firstChild.style.width = `${p}%`; ui.msg.textContent = `Scarico… ${p}%`; });
+    if (r?.needsPermission) { ui.msg.textContent = "Consenti a JARVIS di installare app dalla schermata che si è aperta, poi torna qui e tocca di nuovo."; ui.bar.hidden = true; }
+    else { ui.bar.firstChild.style.width = "100%"; ui.msg.textContent = "Verificato (SHA-256). Conferma l'installazione nella schermata di Android: dati e impostazioni restano."; haptic("medium"); }
+  } catch (e) {
+    ui.bar.hidden = true;
+    const m = e?.message || String(e);
+    if (/not implemented|unimplemented/i.test(m) || e?.code === "UNIMPLEMENTED") { haptic("medium"); return openExternal(u.url); }  // APK vecchio, senza il plugin di aggiornamento
+    ui.msg.textContent = m; toast(m, true); haptic("heavy");
+  } finally { ui.btn.disabled = false; }
+}
+
 function openUpdate() {
   const u = S.update;
   if (!u?.available) return toast("Nessun aggiornamento disponibile");
   const notes = (u.notes || "").replace(/(^|\n)#{1,3} Installazione[\s\S]*?(?=\n#{1,3} |$)/, "").replace(/^#{1,6}\s*(.+)$/gm, "**$1**").trim().slice(0, 900);
   const copy = () => navigator.clipboard?.writeText(u.sha256).then(() => toast("SHA-256 copiato")).catch(() => toast("Copia non riuscita", true));
+  const changes = (u.changes || []).filter((c) => c.highlights?.length);
+  const ui = { msg: el("p", { class: "upd-msg", role: "status" }), bar: el("div", { class: "upd-bar", hidden: true }, el("i")), btn: null };
+  ui.btn = el("button", { class: "m-primary", onclick: () => runUpdate(u, ui) }, updater.available ? "Scarica e installa" : "Scarica");
   const s = openSheet("Aggiornamento disponibile",
     el("div", { class: "ver-line" }, el("span", { class: "ver" }, u.current), el("span", { class: "ver-arrow" }, icon("down", 18)), el("span", { class: "ver new" }, u.latest)),
     el("div", { class: "m-chips-row" }, u.size ? el("span", { class: "pill" }, `${(u.size / 1048576).toFixed(1)} MB`) : null, u.published_at ? el("span", { class: "pill" }, fmtDate(u.published_at)) : null,
-      u.sha256 ? el("span", { class: "pill ok" }, icon("shield", 13), "SHA-256 verificabile") : null),
-    notes ? el("div", { class: "upd-notes" }, markdown(notes)) : null,
-    el("ol", { class: "upd-steps" }, el("li", {}, "Scarica l'APK dal sito ufficiale del progetto."), el("li", {}, "Aprilo e consenti l'installazione da questa origine."), el("li", {}, "Installa sopra l'app attuale: dati e impostazioni restano.")),
+      u.behind > 1 ? el("span", { class: "pill" }, `${u.behind} versioni nuove`) : null, u.sha256 ? el("span", { class: "pill ok" }, icon("shield", 13), "SHA-256 verificato") : null),
+    changes.length ? el("div", { class: "upd-notes" }, changes.map((c) => el("div", {}, el("b", {}, `Versione ${c.version}`), el("ul", {}, c.highlights.map((h) => el("li", {}, h))))))
+      : notes ? el("div", { class: "upd-notes" }, markdown(notes)) : null,
+    ui.bar, ui.msg,
     u.sha256 ? el("button", { class: "sha", onclick: copy, "aria-label": "Copia SHA-256" }, el("small", {}, "SHA-256"), el("code", {}, `${u.sha256.slice(0, 16)}…${u.sha256.slice(-8)}`), icon("copy", 14)) : null,
     el("div", { class: "m-btns" },
-      el("button", { class: "m-ghost", onclick: () => { store.set("jarvis.updhide", JSON.stringify({ v: u.latest, t: Date.now() })); s.close(); renderTop(); } }, "Più tardi"),
-      el("button", { class: "m-primary", onclick: () => {
-        if (!trustedDownload(u.url)) { toast("Indirizzo di download non attendibile: non lo apro.", true); return haptic("heavy"); }
-        haptic("medium"); s.close(); openExternal(u.url);
-      } }, "Scarica e installa")),
+      el("button", { class: "m-ghost", onclick: () => { store.set("jarvis.updhide", JSON.stringify({ v: u.latest, t: Date.now() })); s.close(); renderTop(); } }, "Più tardi"), ui.btn),
     el("button", { class: "m-linkbtn", onclick: () => { store.set("jarvis.skipver", u.latest); s.close(); renderTop(); renderTab(); toast(`Salto la ${u.latest}: ti avviso alla prossima`); } }, "Salta questa versione"));
 }
 
@@ -1326,7 +1344,7 @@ function start() {
   });
   initPush(api, (route) => { if (ROUTE_TAB[route]) setTab(ROUTE_TAB[route]); }).catch(() => {});
   checkUpdate();
-  timers = [setInterval(refreshStatus, 30_000), setInterval(pollPending, 5_000), setInterval(checkUpdate, 6 * 3600_000)];
+  timers = [setInterval(refreshStatus, 30_000), setInterval(pollPending, 5_000), setInterval(checkUpdate, 3600_000)];
 }
 function stop() { closeStream?.(); closeStream = null; timers.forEach(clearInterval); timers = []; S.status = null; S.checked = false; S.online = false; S.pending = []; renderTop(); renderPending(); }
 

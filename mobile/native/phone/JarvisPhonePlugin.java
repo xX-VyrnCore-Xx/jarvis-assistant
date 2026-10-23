@@ -40,6 +40,28 @@ public class JarvisPhonePlugin extends Plugin {
     private static final String WA_VOICE = "vnd.android.cursor.item/vnd.com.whatsapp.voip.call";
     private static final String WA_VIDEO = "vnd.android.cursor.item/vnd.com.whatsapp.video.call";
 
+    /** Scarica l'APK della Release, ne controlla l'impronta e apre l'installazione. Avanzamento: evento «updateProgress». */
+    @PluginMethod
+    public void installUpdate(PluginCall call) {
+        final String url = call.getString("url", "");
+        final String sha = call.getString("sha256", "");
+        if (!UpdateInstaller.allowed(url)) { call.reject("Indirizzo di download non attendibile"); return; }
+        final Context ctx = getContext();
+        if (!UpdateInstaller.canInstall(ctx)) {
+            call.resolve(new JSObject().put("needsPermission", true));  // l'utente consente «installa app sconosciute» e riprova
+            return;
+        }
+        new Thread(() -> {
+            try {
+                java.io.File apk = UpdateInstaller.download(ctx, url, sha, pct -> notifyListeners("updateProgress", new JSObject().put("percent", pct)));
+                UpdateInstaller.install(ctx, apk);
+                call.resolve(new JSObject().put("started", true));
+            } catch (Exception e) {
+                call.reject(e.getMessage() == null ? "Aggiornamento non riuscito" : e.getMessage());
+            }
+        }).start();
+    }
+
     private boolean has(String alias) { return getPermissionState(alias) == PermissionState.GRANTED; }
 
     private JSObject perms() {

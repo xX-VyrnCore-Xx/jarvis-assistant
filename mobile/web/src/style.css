@@ -444,3 +444,10 @@ html { background: var(--bg); }
 @keyframes micPulse { 70% { box-shadow: 0 0 0 14px rgba(255, 179, 71, 0); } 100% { box-shadow: 0 0 0 0 rgba(255, 179, 71, 0); } }
 .m-voicebar { display: flex; align-items: center; gap: 10px; margin: 0 14px 6px; padding: 8px 14px; border-radius: 16px; background: var(--surf); border: var(--hair, 1px) solid var(--line); font-size: 13.5px; color: var(--muted); }
 .m-voicebar b { color: var(--text); }
+
+/* aggiornamento nell'app */
+.upd-bar { height: 8px; border-radius: 99px; background: var(--surf2); overflow: hidden; margin: 10px 0 4px; }
+.upd-bar[hidden] { display: none; }
+.upd-bar i { display: block; height: 100%; width: 0; border-radius: 99px; background: linear-gradient(90deg, #ffb347, #ff6b81); transition: width .25s ease; }
+.upd-msg { margin: 4px 2px 8px; font-size: 13.5px; color: var(--muted); min-height: 1em; }
+.upd-notes ul { margin: 4px 0 10px; padding-left: 18px; } .upd-notes li { margin: 2px 0; }
