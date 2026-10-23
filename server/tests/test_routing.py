@@ -15,7 +15,8 @@ def msgs(text, system="Sei JARVIS"):
 def test_classification_by_kind_of_request():
     r = Router()
     assert r.pick(msgs("ciao come stai")).profile == FAST
-    assert r.pick(msgs("che ore sono?"), tools=True).profile == RELIABLE
+    assert r.pick(msgs("che ore sono?"), tools=True).profile == FAST  # richiesta breve con strumenti: modello veloce
+    assert r.pick(msgs("Controlla il calendario " + "della prossima settimana e poi " * 12), tools=True).profile == RELIABLE
     assert r.pick(msgs("Perché il mio script python lancia Traceback in main.py:42?")).profile == SMART
     assert r.pick(msgs("scrivi una funzione che ordina una lista")).task == "code"
     assert r.pick(msgs("Analizza pro e contro di due strategie e motiva la scelta"), tools=True).profile == SMART

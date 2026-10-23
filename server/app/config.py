@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     freellm_db_path: str = ""  # se FREELLM_API_KEY è vuota, la chiave unificata si legge da questo DB SQLite
     llm_timeout_s: float = 90.0
     llm_attempt_timeout_s: float = 35.0
+    llm_first_token_s: float = 12.0  # in streaming: se il primo token non arriva entro questo tempo si passa subito a un altro modello (prima si aspettavano 35 s)
     llm_routing: bool = True  # profili auto:fast/smart/reliable/balanced scelti per tipo di richiesta (solo con modello «auto»)
     llm_context_tokens: int = 9000  # tetto di token inviati a un modello (0 = nessun limite); i profili veloci hanno un tetto più basso e tutti si restringono se un provider rifiuta per dimensione
     llm_repair: bool = True  # ripara da solo richieste troppo grandi, strumenti rifiutati, modelli non più disponibili e risposte vuote

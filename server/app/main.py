@@ -311,6 +311,8 @@ async def chat_stream(body: ChatIn, x_device_id: str = Header(default="", max_le
     limiter.hit()
 
     async def gen():
+        yield ": " + " " * 2048 + "\n\n"  # riempitivo: i proxy che trattengono i primi byte lasciano passare il flusso subito
+        yield f"event: status\ndata: {json.dumps({'text': 'Ci penso…'}, ensure_ascii=False)}\n\n"
         try:
             async for kind, data in app.state.agent.reply_stream(body.message, body.session_id, voice=body.voice, model=body.model, skills=[body.skill] if body.skill else None):
                 yield f"event: {kind}\ndata: {json.dumps({'text': data}, ensure_ascii=False)}\n\n"
@@ -334,6 +336,8 @@ async def code_chat_stream(body: ChatIn, x_device_id: str = Header(default="", m
     limiter.hit()
 
     async def gen():
+        yield ": " + " " * 2048 + "\n\n"
+        yield f"event: status\ndata: {json.dumps({'text': 'Ci penso…'}, ensure_ascii=False)}\n\n"
         try:
             async for kind, data in app.state.agent.reply_stream(body.message, "code", model=body.model, skills=[body.skill] if body.skill else None, mode="code"):
                 yield f"event: {kind}\ndata: {json.dumps({'text': data}, ensure_ascii=False)}\n\n"

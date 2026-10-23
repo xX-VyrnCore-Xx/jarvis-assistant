@@ -54,8 +54,12 @@ class Router:
             return SMART, "code", "codice"
         if tools and deep:
             return SMART, "auto", "ragionamento con strumenti"
+        if tools and followup:
+            return RELIABLE, "auto", "continuazione dei strumenti"
+        if tools and len(text) <= 220 and not big:  # richiesta breve con strumenti (meteo, ora, agenda…): il modello veloce sceglie lo strumento in un attimo
+            return FAST, "auto", "strumento rapido"
         if tools:
-            return RELIABLE, "auto", "continuazione dei strumenti" if followup else "chiamata di strumenti"
+            return RELIABLE, "auto", "chiamata di strumenti"
         if deep:
             return SMART, "chat", "ragionamento"
         if spoken and not big:

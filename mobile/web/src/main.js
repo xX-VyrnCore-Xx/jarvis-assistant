@@ -4,6 +4,7 @@ import { icon } from "@shared/icons.js";
 import { Speaker } from "@shared/speech.js";
 import { createCodeStudio } from "@shared/codeview.js";
 import { dictationSupported, recordUtterance } from "@shared/dictate.js";
+import { Typewriter } from "@shared/typewriter.js";
 import { openStream } from "@shared/stream.js";
 import { appVersion, dictationAvailable, haptic, hideSplash, onBack, openExternal, paintSystemBars, micPermission, platform, startDictation, stopDictation, trackViewport } from "./native.js";
 import { initPush, teardownPush } from "./push.js";
@@ -425,31 +426,36 @@ async function send(text, { spoken = false } = {}) {
   const talk = spoken || S.voiceMode;  // a voce si risponde a voce, anche se la lettura delle risposte è spenta
   bubble("user", msg);
   S.busy = true; setOrb("thinking");
-  const label = el("span", { class: "m-status" });
+  const label = el("span", { class: "m-status" }, "Sto pensando…");
   const typing = el("div", { class: "m-msg bot" }, el("div", { class: "m-bubble typing" }, el("i"), el("i"), el("i"), label));
   log.append(typing); log.scrollTop = log.scrollHeight;
   const skill = S.skill?.name || "";
   S.skill = null; renderSkillChip();
-  let live = null, acc = "", raf = 0;
-  const paint = () => { raf = 0; const stick = nearBottom(); live.firstChild.replaceChildren(markdown(acc)); if (stick) log.scrollTop = log.scrollHeight; };
+  let live = null, status = "Sto pensando…";
+  const t0 = Date.now();
+  const clockTimer = setInterval(() => { const sec = Math.round((Date.now() - t0) / 1000); label.textContent = sec >= 6 ? `${status} · ${sec} s` : status; }, 1000);
+  const tw = new Typewriter((text) => {  // il testo compare mentre «scrive», non tutto insieme
+    if (!live) { typing.remove(); live = el("div", { class: "m-msg bot" }, el("div", { class: "m-bubble" })); log.append(live); }
+    const stick = nearBottom();
+    live.firstChild.replaceChildren(markdown(text));
+    if (stick) log.scrollTop = log.scrollHeight;
+  });
   try {
     const reply = await api.chatStream(msg, SESSION, {
       model: store.get("jarvis.model"), skill, voice: talk,
-      onStatus: (t) => { label.textContent = t; },
-      onDelta: (t) => {
-        if (!live) { typing.remove(); live = el("div", { class: "m-msg bot" }, el("div", { class: "m-bubble" })); log.append(live); }
-        acc += t;
-        if (!raf) raf = requestAnimationFrame(paint);
-      },
+      onStatus: (t) => { status = t; label.textContent = t; },
+      onDelta: (t) => tw.push(t),
     });
-    cancelAnimationFrame(raf); typing.remove(); live?.remove();
+    clearInterval(clockTimer);
+    await tw.finish(reply);
+    typing.remove(); live?.remove();
     bubble("bot", reply);
     haptic("light");
     refreshStatus();
     S.busy = false;
     if (talk || (voiceOn() && S.status?.voice)) await speaker.speak(reply);
     if (S.voiceMode) { S.busy = false; return listen(); }  // conversazione a voce: finito di parlare, si riascolta
-  } catch (e) { cancelAnimationFrame(raf); typing.remove(); live?.remove(); bubble("sys", errText(e)); if (S.voiceMode) endVoice(); }
+  } catch (e) { clearInterval(clockTimer); tw.stop(); typing.remove(); live?.remove(); bubble("sys", errText(e)); if (S.voiceMode) endVoice(); }
   finally { S.busy = false; if (!speaker.speaking) setOrb(S.mic ? "listening" : ""); }
 }
 
