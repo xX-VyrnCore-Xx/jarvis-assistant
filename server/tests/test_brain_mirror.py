@@ -80,3 +80,14 @@ async def test_learner_does_not_learn_from_a_reminder_request():
     lr = Learner(Settings(jarvis_api_token="t"), llm, brain, MemoryStore())
     lr.schedule("Ricordami domani alle 9 di chiamare il dentista, devo prenotare", "Promemoria fissato per 24/10/2026 09:00 (sul Calendario).")
     assert not lr._tasks and llm.seen == []
+
+
+@pytest.mark.asyncio
+async def test_duplicate_learned_facts_are_merged_keeping_the_important_one():
+    brain, bstore, store, svc = await setup()
+    await brain.ingest("L'utente abita a Torino in via Roma", title="a", source="memory", tags=["appreso"], importance=0.6)
+    await brain.ingest("L'utente abita a Torino, in via Roma 12", title="b", source="memory", tags=["appreso"], importance=0.8)
+    await brain.ingest("L'utente tifa per la Juventus", title="c", source="memory", tags=["appreso"], importance=0.6)
+    await brain.ingest("Appunto manuale: abita a Torino in via Roma", title="d", source="memory", importance=0.5)  # non appreso: non si tocca
+    assert await BrainMirror(brain, store).dedupe_facts() == 1
+    assert sorted(d.title for d in await bstore.list_docs(10, 0, "memory")) == ["b", "c", "d"]

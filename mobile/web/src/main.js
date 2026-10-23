@@ -44,7 +44,7 @@ async function saveToken(t) {
 const api = new Jarvis({ url: () => cfg.url, token: () => cfg.token });
 const speaker = new Speaker({ tts: (t) => api.tts(t) });
 const voiceOn = () => store.get("jarvis.speak") !== "0";
-const S = { skill: null, update: null, prefs: null, models: null, usage: null, appVer: "", brain: { q: "", results: null, docs: null, stats: null, busy: false }, tab: "chat", status: null, checked: false, tokens: null, tokensErr: "", tokensAt: null, reminders: [], remindersLoaded: false, notes: [], pending: [], online: false, live: "off", backup: null, phone: null, busy: false, mic: false, canMic: false, sheets: [] };
+const S = { skill: null, update: null, prefs: null, models: null, usage: null, appVer: "", brain: { q: "", results: null, docs: null, stats: null, busy: false }, tab: "chat", status: null, checked: false, tokens: null, tokensErr: "", tokensAt: null, reminders: [], remindersLoaded: false, tasks: [], tasksLoaded: false, notes: [], pending: [], online: false, live: "off", backup: null, phone: null, busy: false, mic: false, canMic: false, sheets: [] };
 
 const $app = document.getElementById("m-app");
 let top, content, tabs, log, input, sendBtn, micBtn, downBtn, chatView, hello, chips;
@@ -203,7 +203,7 @@ function setTab(id) {
   renderTabs(); renderTab();
   if (id === "brain") loadBrain();
   if (id === "tokens") loadTokens();
-  if (id === "reminders") loadReminders();
+  if (id === "reminders") { loadReminders(); loadTasks(); }
   if (id === "more") { loadBackup(); loadPhone(); }
 }
 
@@ -528,6 +528,33 @@ async function loadReminders() {
   if (S.tab === "reminders") renderTab();
 }
 
+async function loadTasks() {
+  if (!cfg.token) return;
+  try { S.tasks = await api.tasks(); S.tasksLoaded = true; } catch (e) { toast(errText(e), true); }
+  if (S.tab === "reminders") renderTab();
+}
+
+async function toggleTask(t) {
+  S.tasks = S.tasks.filter((x) => x.id !== t.id); renderTab(); haptic("medium");
+  try { await api.setTaskDone(t.id, true); toast("Attività completata", false, { label: "Annulla", fn: async () => { try { await api.setTaskDone(t.id, false); loadTasks(); } catch (e) { toast(errText(e), true); } } }); }
+  catch (e) { toast(errText(e), true); loadTasks(); }
+}
+
+function tasksSection() {
+  const input = el("input", { type: "text", placeholder: "Nuova attività…", maxlength: 300, "aria-label": "Nuova attività" });
+  const add = async () => {
+    const text = input.value.trim(); if (!text) return;
+    input.value = "";
+    try { await api.addTask(text); haptic(); loadTasks(); } catch (e) { toast(errText(e), true); }
+  };
+  input.addEventListener("keydown", (e) => { if (e.key === "Enter") add(); });
+  const rows = S.tasks.map((t) => el("div", { class: "m-card task" }, el("button", { class: "m-check", "aria-label": "Completa", onclick: () => toggleTask(t) }, icon("check", 16)),
+    el("div", {}, el("b", {}, t.text), t.list && t.list !== "attività" ? el("small", {}, t.list) : null),
+    el("button", { class: "m-icon", "aria-label": "Elimina", onclick: async () => { S.tasks = S.tasks.filter((x) => x.id !== t.id); renderTab(); try { await api.deleteTask(t.id); } catch (e) { toast(errText(e), true); loadTasks(); } } }, icon("trash", 19))));
+  return el("div", { class: "m-tasks" }, el("div", { class: "m-day" }, "Attività"), el("div", { class: "m-addrow" }, input, el("button", { class: "m-ghost", onclick: add }, icon("plus", 16), "Aggiungi")),
+    ...(rows.length || !S.tasksLoaded ? rows : [el("p", { class: "m-note" }, "Nessuna attività aperta. Aggiungila qui, da Telegram o a voce: è sempre la stessa lista.")]));
+}
+
 /** Allinea ora con il Calendario Google e mostra l'esito (o la causa dell'errore). */
 async function syncNow() {
   try {
@@ -633,7 +660,8 @@ function buildReminders() {
     }
     for (const [name, rows] of groups) page.append(el("div", { class: "m-day" }, name), ...rows.map(reminderCard));
   }
-  pullToRefresh(page, loadReminders);
+  page.append(tasksSection());
+  pullToRefresh(page, () => { loadReminders(); loadTasks(); });
   wrap.append(page, el("button", { class: "m-fab", "aria-label": "Nuovo promemoria", onclick: () => { haptic(); newReminder(); } }, icon("plus", 26)));
   return wrap;
 }
@@ -641,6 +669,8 @@ function buildReminders() {
 // ---------------------------------------------------------------- aggiornamenti dell'app
 // ---------------------------------------------------------------- aggiornamenti dell'app
 const WHATS_NEW = [
+  ["refresh", "Tutto in tempo reale", "Attività, promemoria, ricordi e chat sono gli stessi su Telegram, Android e Windows e si aggiornano all'istante."],
+  ["check", "Attività nell'app", "Nella scheda Promemoria c'è la lista delle attività: aggiungi, completa o elimina, anche da Telegram."],
   ["phone", "Chiamate", "Chiama con Telefono o WhatsApp da Altro o chiedilo a JARVIS (con la tua conferma). L'app ora resta solo in verticale."],
   ["shield", "Risposta automatica", "JARVIS accetta le chiamate solo dai numeri che autorizzi e solo se lo attivi; ogni risposta resta nel registro."],
   ["sparkle", "Segreteria con voce", "Con Twilio, JARVIS risponde a voce alle chiamate inoltrate e ti riferisce il messaggio."],
@@ -1199,19 +1229,21 @@ async function pollPending() { if (!cfg.token) return; try { S.pending = await a
 function start() {
   stop();
   if (!cfg.token) return;
-  refreshStatus(); pollPending(); loadHistory(); loadNotes(); loadReminders();
+  refreshStatus(); pollPending(); loadHistory(); loadNotes(); loadReminders(); loadTasks();
   closeStream = openStream({ url: () => cfg.url, token: () => cfg.token }, {
     onNotification: onNote,
     onRead: (ids) => { S.notes.forEach((n) => { if (!ids || ids.includes(n.id)) n.read = true; }); renderTop(); if (notesSheet) fillNotes(); },
     onCommand: handleCommand,
     onSync: ({ scope, origin }) => {  // un altro dispositivo (o il server) ha cambiato qualcosa: ci si aggiorna subito
       if (scope === "reminders") loadReminders();
+      else if (scope === "tasks") loadTasks();
+      else if (scope === "memories") { S.brain.stats = null; if (S.tab === "brain") loadBrain(); }
       else if (scope === "brain") { S.brain.docs = null; S.brain.stats = null; if (S.tab === "brain") loadBrain(); }
       else if (scope === "chat" && origin !== deviceId) syncHistory();
     },
     onState: (st) => {
       const was = S.live; S.live = st; renderTop();
-      if (st === "on") { if (was !== "on") { S.online = true; S.checked = true; renderTop(); loadNotes(); loadReminders(); syncHistory(); } }
+      if (st === "on") { if (was !== "on") { S.online = true; S.checked = true; renderTop(); loadNotes(); loadReminders(); loadTasks(); syncHistory(); } }
       else if (st === "auth") toast("Token non valido: controllalo in Altro.", true);
     },
   });

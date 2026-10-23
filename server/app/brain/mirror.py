@@ -3,9 +3,11 @@
 Quando una di queste cose sparisce (promemoria eliminato, scattato o tolto dal Calendario; ricordo dimenticato; attività fatta) sparisce anche dal cervello,
 compresi i fatti che l'apprendimento automatico aveva ricavato dalla stessa richiesta. Un controllo periodico ripara qualsiasi divergenza."""
 import logging
+import re
 from datetime import datetime
 
 log = logging.getLogger("jarvis.brain")
+DUPLICATE_JACCARD = 0.7  # due fatti appresi con almeno il 70% di parole in comune dicono la stessa cosa
 DERIVED_COSINE = 0.82  # somiglianza minima perché un fatto «appreso» si consideri nato da quel promemoria
 
 
@@ -101,3 +103,35 @@ class BrainMirror:
         if any(res.values()):
             log.info("cervello riallineato: %s", res)
         return res
+
+
+    # ------------------------------------------------------------------ pulizia dei fatti appresi
+    @staticmethod
+    def _words(text: str) -> frozenset:
+        return frozenset(w for w in re.findall(r"\w+", text.lower()) if len(w) > 2)
+
+    async def dedupe_facts(self, limit: int = 300) -> int:
+        """I fatti ricavati dalle conversazioni a volte si ripetono con parole diverse: tiene il più importante (a parità, il più recente) e toglie gli altri."""
+        if not self.on:
+            return 0
+        docs = [d for d in await self._docs("memory") if "appreso" in d.tags and not d.pinned and not d.uri][-limit:]
+        words = {}
+        for d in docs:
+            words[d.id] = self._words(" ".join(c.text for c in await self.brain.store.doc_chunks(d.id)))
+        gone: set[int] = set()
+        ranked = sorted(docs, key=lambda d: (d.importance, d.id), reverse=True)
+        for i, a in enumerate(ranked):
+            if a.id in gone or not words[a.id]:
+                continue
+            for b in ranked[i + 1:]:
+                if b.id in gone or not words[b.id]:
+                    continue
+                inter = len(words[a.id] & words[b.id])
+                if inter / len(words[a.id] | words[b.id]) >= DUPLICATE_JACCARD or inter / min(len(words[a.id]), len(words[b.id])) >= 0.9:
+                    gone.add(b.id)
+        n = 0
+        for i in gone:
+            n += int(await self.brain.forget(i))
+        if n:
+            log.info("cervello: %d fatti duplicati unificati", n)
+        return n

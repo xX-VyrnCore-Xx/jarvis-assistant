@@ -116,6 +116,7 @@ async def brain_cycle(settings: Settings, store: Store, brain, state: dict, mirr
         state["imported"] = True
     if mirror:  # promemoria, ricordi e attività: il cervello non deve ricordare ciò che non esiste più
         await mirror.sync_all()
+        await mirror.dedupe_facts()
     n = await brain.reindex_vectors(32)
     if n:
         log.info("secondo cervello: %d vettori aggiunti", n)

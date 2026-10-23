@@ -31,6 +31,7 @@ from .config import Settings, get_settings
 from .llm import LLMClient, LLMError
 from .gateway import make_client
 from .gateway import router as gateway_router
+from .livesync import Live, LiveStore
 from .memory import build_store
 from .pc import PCBridge
 from .notify import Notifier
@@ -85,7 +86,7 @@ async def _telegram_run(app: FastAPI, settings: Settings) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
-    store = app.state.store = build_store(settings)
+    store = app.state.store = LiveStore(build_store(settings))  # ogni scrittura avvisa subito le app (vedi livesync)
     tools = ToolRegistry()
     admin = app.state.admin = FreeLLMAdmin(settings)
     budget = app.state.budget = BudgetService(admin)
@@ -153,6 +154,7 @@ async def lifespan(app: FastAPI):
     app.state.voiceline = VoiceLine(settings, store, llm, notifier)  # segreteria telefonica con voce (Twilio), spenta finché non si imposta TWILIO_AUTH_TOKEN
     mirror = app.state.mirror = BrainMirror(brain, store)  # il cervello segue promemoria, ricordi e attività
     reminders.mirror = mirror
+    store.on_change = Live(notifier, mirror).changed  # Telegram, app e strumenti: tutto si propaga in tempo reale
     prev = pending.on_create
 
     def on_pending(p) -> None:

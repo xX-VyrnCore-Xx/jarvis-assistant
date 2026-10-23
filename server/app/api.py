@@ -25,6 +25,15 @@ class ReminderIn(BaseModel):
     repeat: str = Field("", max_length=20)  # daily, weekdays, weekly, monthly, yearly (vuoto: una volta)
 
 
+class TaskIn(BaseModel):
+    text: str = Field(min_length=1, max_length=300)
+    list: str = Field("attività", min_length=1, max_length=40)
+
+
+class TaskPatch(BaseModel):
+    done: bool
+
+
 class DeviceIn(BaseModel):
     platform: str = Field(pattern=r"^(android|windows|web)$")
     token: str = Field(min_length=8, max_length=4096)
@@ -149,6 +158,29 @@ async def add_reminder(body: ReminderIn, request: Request) -> dict:
 @router.delete("/reminders/{reminder_id}")
 async def delete_reminder(reminder_id: int, request: Request) -> dict:
     await request.app.state.reminders.delete(reminder_id)
+    return {"ok": True}
+
+
+@router.get("/tasks")
+async def tasks(request: Request, done: bool = False) -> list[dict]:
+    return await request.app.state.store.list_tasks(None, done)
+
+
+@router.post("/tasks", status_code=201)
+async def add_task(body: TaskIn, request: Request) -> dict:
+    tid = await request.app.state.store.add_task(body.text.strip(), body.list.strip().lower() or "attività")
+    return {"ok": True, "id": tid}
+
+
+@router.patch("/tasks/{task_id}")
+async def patch_task(task_id: int, body: TaskPatch, request: Request) -> dict:
+    await request.app.state.store.set_task_done(task_id, body.done)
+    return {"ok": True}
+
+
+@router.delete("/tasks/{task_id}")
+async def delete_task(task_id: int, request: Request) -> dict:
+    await request.app.state.store.delete_task(task_id)
     return {"ok": True}
 
 
