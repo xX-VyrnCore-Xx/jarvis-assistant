@@ -63,6 +63,14 @@ export async function dictationAvailable() {
   try { return (await SpeechRecognition.available()).available; } catch { return false; }
 }
 
+/** Permesso del microfono (serve anche alla registrazione di qualità): lo chiede una volta, poi è già concesso. */
+export async function micPermission() {
+  if (!isNative) return true;
+  const perm = await SpeechRecognition.requestPermissions();
+  if (perm.speechRecognition !== "granted") throw new Error("Permesso del microfono negato");
+  return true;
+}
+
 export async function startDictation(onText, onEnd) {
   const perm = await SpeechRecognition.requestPermissions();
   if (perm.speechRecognition !== "granted") throw new Error("Permesso del microfono negato");

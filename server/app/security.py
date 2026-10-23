@@ -66,6 +66,8 @@ class RateLimiter:
 class SecurityHeaders:
     """ASGI puro (non BaseHTTPMiddleware): non interferisce con le risposte in streaming di /v1."""
 
+    LIMITS = {"/api/stt": 4_000_000}  # il parlato registrato (30 s) pesa più di un messaggio
+
     def __init__(self, app, max_body: int = 1_000_000):
         self.app, self.max_body = app, max_body
 
@@ -77,7 +79,7 @@ class SecurityHeaders:
         api = not path.startswith("/v1")
         if api:
             length = dict(scope["headers"]).get(b"content-length", b"0")
-            if length.isdigit() and int(length) > self.max_body:
+            if length.isdigit() and int(length) > self.LIMITS.get(path, self.max_body):
                 await send({"type": "http.response.start", "status": 413, "headers": [(b"content-type", b"application/json")]})
                 await send({"type": "http.response.body", "body": b'{"detail":"Richiesta troppo grande"}'})
                 return

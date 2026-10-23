@@ -456,3 +456,6 @@ html { background: var(--bg); }
 .cs-wrap { padding: 8px 12px 6px; }
 .m-linkrow { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; margin-bottom: 8px; } .m-linkrow span { flex: 1; } .m-linkrow svg:last-child { transform: rotate(-90deg); opacity: .6; }
 .cs-wrap > .cs { flex: 1; min-height: 0; }
+
+.m-fix { background: var(--surf2); color: var(--amber); } .m-fix[hidden] { display: none; }
+.m-mic.on { transform: scale(calc(1 + var(--lvl, 0) * .22)); transition: transform .08s linear; }

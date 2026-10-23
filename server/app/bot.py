@@ -132,6 +132,7 @@ class TelegramBot:
             return await self.tg.send(chat_id, "Il vocale è troppo lungo, signore: massimo 5 minuti.")
         try:
             text = await self.app.state.agent.llm.transcribe(await self.tg.download_file(voice["file_id"]), "voice.ogg", voice.get("mime_type") or "audio/ogg")
+            text = await self.app.state.corrector.fix(text, "quick") if getattr(self.app.state, "corrector", None) else text  # punteggiatura e accenti a posto
         except Exception as e:
             log.info("trascrizione non riuscita: %s", type(e).__name__)
             return await self.tg.send(chat_id, "Non sono riuscito a trascrivere il vocale, signore. Riprovi o lo scriva.")

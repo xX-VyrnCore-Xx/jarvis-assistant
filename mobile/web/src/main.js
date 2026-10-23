@@ -3,8 +3,9 @@ import { el, fmtDate, fmtTokens, fmtUptime, markdown, pct } from "@shared/format
 import { icon } from "@shared/icons.js";
 import { Speaker } from "@shared/speech.js";
 import { createCodeStudio } from "@shared/codeview.js";
+import { dictationSupported, recordUtterance } from "@shared/dictate.js";
 import { openStream } from "@shared/stream.js";
-import { appVersion, dictationAvailable, haptic, hideSplash, onBack, openExternal, paintSystemBars, platform, startDictation, stopDictation, trackViewport } from "./native.js";
+import { appVersion, dictationAvailable, haptic, hideSplash, onBack, openExternal, paintSystemBars, micPermission, platform, startDictation, stopDictation, trackViewport } from "./native.js";
 import { initPush, teardownPush } from "./push.js";
 import { checkPin, cryptoOk, makePin, open as openSealed, seal } from "./secure.js";
 import { showLock } from "./lock.js";
@@ -45,10 +46,10 @@ async function saveToken(t) {
 const api = new Jarvis({ url: () => cfg.url, token: () => cfg.token });
 const speaker = new Speaker({ tts: (t) => api.tts(t) });
 const voiceOn = () => store.get("jarvis.speak") !== "0";
-const S = { skill: null, update: null, prefs: null, models: null, usage: null, appVer: "", brain: { q: "", results: null, docs: null, stats: null, busy: false }, tab: "chat", status: null, checked: false, tokens: null, tokensErr: "", tokensAt: null, reminders: [], remindersLoaded: false, tasks: [], tasksLoaded: false, notes: [], pending: [], online: false, live: "off", backup: null, phone: null, busy: false, mic: false, canMic: false, sheets: [] };
+const S = { skill: null, update: null, prefs: null, models: null, usage: null, appVer: "", brain: { q: "", results: null, docs: null, stats: null, busy: false }, tab: "chat", status: null, checked: false, tokens: null, tokensErr: "", tokensAt: null, reminders: [], remindersLoaded: false, tasks: [], tasksLoaded: false, notes: [], pending: [], online: false, live: "off", backup: null, phone: null, busy: false, mic: false, canMic: false, sttFails: 0, sttDownUntil: 0, sheets: [] };
 
 const $app = document.getElementById("m-app");
-let top, content, tabs, log, input, sendBtn, micBtn, downBtn, chatView, hello, chips;
+let top, content, tabs, log, input, sendBtn, fixBtn, micBtn, downBtn, chatView, hello, chips;
 let timers = [];
 let closeStream = null;
 
@@ -264,12 +265,13 @@ function buildChat() {
   log = el("div", { class: "m-log", "aria-live": "polite" });
   input = el("textarea", { id: "m-input", rows: 1, placeholder: "Scrivi a JARVIS…", "aria-label": "Messaggio", enterkeyhint: "send" });
   sendBtn = el("button", { class: "m-circle m-send", "aria-label": "Invia", disabled: true, onclick: () => send() }, icon("send", 21));
+  fixBtn = el("button", { class: "m-circle m-fix", "aria-label": "Correggi la grammatica", title: "Correggi la grammatica", hidden: true, onclick: fixText }, icon("sparkle", 19));
   micBtn = el("button", { class: "m-circle m-mic", "aria-label": "Detta", onclick: toggleMic, style: S.canMic ? "" : "display:none" }, icon("mic", 22));
   downBtn = el("button", { class: "m-down", "aria-label": "Vai in fondo", onclick: () => log.scrollTo({ top: log.scrollHeight, behavior: "smooth" }) }, icon("down", 20));
-  input.addEventListener("input", () => { input.style.height = "auto"; input.style.height = `${Math.min(input.scrollHeight, 130)}px`; sendBtn.disabled = !input.value.trim(); });
+  input.addEventListener("input", () => { input.style.height = "auto"; input.style.height = `${Math.min(input.scrollHeight, 130)}px`; sendBtn.disabled = !input.value.trim(); fixBtn.hidden = input.value.trim().length < 8; });
   log.addEventListener("scroll", () => downBtn.classList.toggle("show", !nearBottom()), { passive: true });
   chips = el("div", { class: "m-chips" }, CHIPS.map(([l, t]) => el("button", { onclick: () => send(t) }, l)));
-  chatView = el("div", { class: "m-chat" }, log, downBtn, chips, el("div", { id: "m-skillchip" }), el("div", { class: "m-composer" }, micBtn, input, sendBtn));
+  chatView = el("div", { class: "m-chat" }, log, downBtn, chips, el("div", { id: "m-skillchip" }), el("div", { class: "m-composer" }, micBtn, input, fixBtn, sendBtn));
   showHello();
   return chatView;
 }
@@ -298,9 +300,27 @@ function renderSkillChip() {
 
 /** Conversazione a voce: tocchi il microfono, parli, alla fine della frase JARVIS risponde da solo (senza premere Invio) a voce, poi torna in ascolto.
  *  Si ferma toccando di nuovo il microfono, dopo due ascolti senza parole o a un errore. */
+/** Correttore grammaticale: sistema ortografia, accenti, concordanze e punteggiatura di ciò che hai scritto, senza cambiarne il senso (con «Annulla»). */
+async function fixText() {
+  const orig = input.value.trim();
+  if (orig.length < 3) return;
+  fixBtn.disabled = true; haptic();
+  try {
+    const r = await api.correct(orig, "full");
+    if (r.text && r.text !== orig) {
+      input.value = r.text; input.dispatchEvent(new Event("input"));
+      toast("Testo corretto", false, { label: "Annulla", fn: () => { input.value = orig; input.dispatchEvent(new Event("input")); } });
+    } else toast("Il testo è già corretto");
+  } catch (e) { toast(errText(e), true); }
+  finally { fixBtn.disabled = false; }
+}
+
 async function toggleMic() {
   haptic("medium");
-  if (S.voiceMode) return endVoice();
+  if (S.voiceMode) {  // mentre ascolta, un tocco chiude la frase (e la invia); in ogni altro momento chiude la conversazione
+    if (S.mic && S.rec?.stop?.stop) return S.rec.stop.stop();
+    return endVoice();
+  }
   if (!cfg.token) return setTab("more");
   S.voiceMode = true; S.silent = 0;
   showVoiceBar();
@@ -321,13 +341,62 @@ async function endVoice() {
   if (input) input.placeholder = "Scrivi a JARVIS…";
   document.getElementById("m-voicebar")?.remove();
   speaker.stop();
+  S.rec?.ac.abort();
+  micBtn?.style.removeProperty("--lvl");
   await stopDictation();
   setOrb(S.busy ? "thinking" : "");
 }
 
+const sttOn = () => store.get("jarvis.stt") !== "0" && dictationSupported() && Date.now() > (S.sttDownUntil || 0);
+const fixLevel = () => (store.get("jarvis.fix") === "0" ? "none" : "quick");
+
+/** Un ascolto: con la registrazione di qualità (Whisper sul server) se disponibile, altrimenti con il riconoscimento del telefono. */
 async function listen() {
   if (!S.voiceMode || S.busy) return;
   speaker.stop();
+  return sttOn() ? listenServer() : listenNative();
+}
+
+function afterSilence() {
+  if (++S.silent >= 2) { endVoice(); toast("Non ti sento più: conversazione a voce finita"); } else listen();
+}
+
+async function listenServer() {
+  const ac = new AbortController(), stop = {};
+  S.rec = { ac, stop };
+  let res;
+  try {
+    await micPermission();
+    S.mic = true; micBtn.classList.add("on"); input.placeholder = "Ti ascolto…"; setOrb("listening");
+    res = await recordUtterance({ signal: ac.signal, stopRef: stop, onLevel: (v) => micBtn.style.setProperty("--lvl", v.toFixed(2)), onSpeech: () => { input.placeholder = "Ti sento…"; } });
+  } catch (e) {
+    S.mic = false; micBtn.classList.remove("on"); input.placeholder = "Scrivi a JARVIS…";
+    if (!S.voiceMode) return;
+    S.sttDownUntil = Date.now() + 600_000;  // microfono avanzato non disponibile (permesso, WebView): per un po' si usa quello del telefono
+    toast("Registrazione avanzata non disponibile: uso il riconoscimento del telefono");
+    return listenNative();
+  }
+  S.mic = false; micBtn.classList.remove("on"); micBtn.style.removeProperty("--lvl"); input.placeholder = "Scrivi a JARVIS…";
+  if (!S.voiceMode) return;
+  if (!res.blob) return afterSilence();
+  input.placeholder = "Trascrivo…"; setOrb("thinking");
+  let text = "";
+  try { text = ((await api.stt(res.blob, fixLevel())).text || "").trim(); S.sttFails = 0; }
+  catch (e) {
+    input.placeholder = "Scrivi a JARVIS…";
+    if ([404, 415, 501].includes(e.status) || ++S.sttFails >= 2) { S.sttDownUntil = Date.now() + 600_000; toast("Trascrizione di qualità non disponibile: uso il riconoscimento del telefono", true); }
+    else toast(errText(e), true);
+    return S.voiceMode ? listen() : undefined;
+  }
+  input.placeholder = "Scrivi a JARVIS…";
+  if (!text) return afterSilence();
+  S.silent = 0;
+  send(text, { spoken: true });
+}
+
+async function listenNative() {
+  if (!S.voiceMode || S.busy) return;
+  S.rec = null;
   let heard = "", closed = false;
   const done = () => {
     if (closed) return;
@@ -335,7 +404,7 @@ async function listen() {
     S.mic = false; micBtn.classList.remove("on"); input.placeholder = "Scrivi a JARVIS…";
     if (!S.voiceMode) return;
     const text = heard.trim();
-    if (!text) { if (++S.silent >= 2) { endVoice(); toast("Non ti sento più: conversazione a voce finita"); } else listen(); return; }
+    if (!text) return afterSilence();
     S.silent = 0;
     send(text, { spoken: true });
   };
@@ -742,6 +811,8 @@ function buildReminders() {
 // ---------------------------------------------------------------- aggiornamenti dell'app
 // ---------------------------------------------------------------- aggiornamenti dell'app
 const WHATS_NEW = [
+  ["mic", "Microfono molto più preciso", "Ora registra la voce e la trascrive con Whisper: capisce meglio le parole, non taglia le pause e mette punteggiatura e accenti. Tocca il microfono mentre parli per chiudere la frase."],
+  ["sparkle", "Correttore grammaticale", "La stella accanto al campo di testo corregge ortografia, accenti e concordanze senza cambiare il senso, con Annulla. Anche le frasi dettate si correggono da sole."],
   ["code", "Sezione Codice", "Uno spazio solo per programmare: JARVIS al massimo, con tutte le competenze di programmazione, piano, revisione, file, diff e CI del progetto."],
   ["down", "Aggiornamenti nell'app", "Scarica con avanzamento, verifica l'SHA-256 e apre l'installazione: niente browser. Vedi le novità di ogni versione saltata."],
   ["mic", "Conversazione a voce", "Tocca il microfono, parla: JARVIS risponde a voce da solo e ti riascolta, senza Invio. Tocca di nuovo per fermare."],
@@ -1125,6 +1196,10 @@ function buildMore() {
       S.voiceCfg?.options?.length ? el("label", { class: "m-row" }, el("span", {}, "Voce di JARVIS"), el("select", { class: "m-select", "aria-label": "Voce di JARVIS",
         onchange: async (e) => { try { await api.setVoice(e.target.value); S.voiceCfg.active = e.target.value; haptic(); speaker.speak("Ecco la mia nuova voce, signore."); } catch (er) { toast(errText(er), true); } } },
         S.voiceCfg.options.map((o) => el("option", { value: o.id, selected: o.id === S.voiceCfg.active }, o.label)))) : null,
+      el("label", { class: "m-row" }, el("span", {}, "Dettatura di qualità (trascrizione precisa)"), el("input", { type: "checkbox", class: "m-switch", "aria-label": "Dettatura di qualità", checked: store.get("jarvis.stt") !== "0",
+        onchange: (e) => { store.set("jarvis.stt", e.target.checked ? "1" : "0"); S.sttDownUntil = 0; haptic(); } })),
+      el("label", { class: "m-row" }, el("span", {}, "Correggi la grammatica di ciò che detto"), el("input", { type: "checkbox", class: "m-switch", "aria-label": "Correttore grammaticale per la dettatura", checked: store.get("jarvis.fix") !== "0",
+        onchange: (e) => { store.set("jarvis.fix", e.target.checked ? "1" : "0"); haptic(); } })),
       el("div", { class: "m-row" }, el("span", {}, "Prova la voce"), el("button", { class: "m-ghost", onclick: () => speaker.speak("Buongiorno, signore. Tutti i sistemi sono operativi.") }, icon("volume", 16), "Ascolta")),
       el("div", { class: "m-row" }, el("span", {}, "Canali e ore silenziose"), el("button", { class: "m-ghost", onclick: openNotifySettings }, icon("sliders", 16), "Imposta")),
       el("div", { class: "m-row" }, el("span", {}, "Notifica di prova"), el("button", { class: "m-ghost", onclick: async () => { try { await api.testNotification(); toast("Inviata"); } catch (e) { toast(errText(e), true); } } }, icon("bell", 16), "Invia"))),
@@ -1406,6 +1481,6 @@ renderTabs(); renderTab();
   renderTabs(); renderTab();
   await lockIfNeeded(true);  // all'apertura, con il PIN attivo, si parte bloccati
   if (cfg.token) start();
-  dictationAvailable().then((ok) => { S.canMic = ok; if (micBtn) micBtn.style.display = ok ? "" : "none"; });
+  dictationAvailable().then((ok) => { S.canMic = ok || dictationSupported(); if (micBtn) micBtn.style.display = ok ? "" : "none"; });
 })();
 setTimeout(hideSplash, 350);
