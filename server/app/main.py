@@ -320,6 +320,29 @@ async def chat_stream(body: ChatIn, x_device_id: str = Header(default="", max_le
     return StreamingResponse(gen(), media_type="text/event-stream", headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
 
 
+@app.post("/code/chat/stream", dependencies=[Depends(require_token)])
+async def code_chat_stream(body: ChatIn, x_device_id: str = Header(default="", max_length=64)) -> StreamingResponse:
+    """La chat della sezione Codice: conversazione a parte («code»), prompt da ingegnere, competenze di programmazione, strumenti code_* sempre disponibili e più passi."""
+    limiter: RateLimiter = app.state.chat_limiter
+    if wait := limiter.retry_after():
+        raise HTTPException(429, "Troppe richieste: rallenta un momento", headers={"Retry-After": str(wait)})
+    limiter.hit()
+
+    async def gen():
+        try:
+            async for kind, data in app.state.agent.reply_stream(body.message, "code", model=body.model, skills=[body.skill] if body.skill else None, mode="code"):
+                yield f"event: {kind}\ndata: {json.dumps({'text': data}, ensure_ascii=False)}\n\n"
+                if kind == "done":
+                    app.state.notifier.sync("code", x_device_id)  # le altre app mostrano subito lo scambio e lo stato del progetto
+        except LLMError as e:
+            yield f"event: error\ndata: {json.dumps({'text': str(e)}, ensure_ascii=False)}\n\n"
+        except Exception:
+            log.exception("errore nella chat di coding")
+            yield f"event: error\ndata: {json.dumps({'text': 'Si è verificato un problema, riprova.'})}\n\n"
+
+    return StreamingResponse(gen(), media_type="text/event-stream", headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
+
+
 @app.post("/github/webhook")
 async def github_webhook(request: Request) -> dict:
     """Facoltativo: GitHub avvisa alla pubblicazione di una Release e le app lo sanno subito (altrimenti basta il controllo ogni 30 minuti)."""

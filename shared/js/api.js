@@ -83,10 +83,10 @@ export class Jarvis {
   health() { return this.#req("/health", { auth: false, timeout: 70_000 }); }
   chat(message, session) { return this.#req("/chat", { method: "POST", body: { message, session_id: session }, timeout: 120_000 }).then((r) => r.reply); }
   /** Risposta in streaming: onStatus(testo) durante i tool, onDelta(testo) mentre scrive. Restituisce la risposta intera. Se il server è vecchio ripiega su /chat. */
-  async chatStream(message, session, { model = "", skill = "", voice = false, onStatus = () => {}, onDelta = () => {}, signal } = {}) {
+  async chatStream(message, session, { path = "/chat/stream", model = "", skill = "", voice = false, onStatus = () => {}, onDelta = () => {}, signal } = {}) {
     let res;
     try {
-      res = await fetch(`${this.cfg.url()}/chat/stream`, {
+      res = await fetch(`${this.cfg.url()}${path}`, {
         method: "POST",
         headers: { Authorization: `Bearer ${this.cfg.token()}`, "Content-Type": "application/json", Accept: "text/event-stream", "X-Device-Id": deviceId },
         body: JSON.stringify({ message, session_id: session, model: model || undefined, skill: skill || undefined, voice: voice || undefined }),
@@ -96,7 +96,7 @@ export class Jarvis {
       if (e.name === "AbortError") throw e;
       throw new ApiError(0, "Server non raggiungibile: si sta svegliando o manca la rete.");
     }
-    if (res.status === 404) return this.chat(message, session);
+    if (res.status === 404 && path === "/chat/stream") return this.chat(message, session);
     if (!res.ok || !res.body) {
       let detail = "";
       try { detail = (await res.json()).detail || ""; } catch { /* non JSON */ }
@@ -127,6 +127,16 @@ export class Jarvis {
     }
     return final || streamed;
   }
+  /** Chat della sezione Codice (conversazione a parte, prompt da ingegnere, competenze e strumenti di programmazione). */
+  codeChatStream(message, opts = {}) { return this.chatStream(message, "code", { ...opts, path: "/code/chat/stream" }); }
+  codeOverview() { return this.#req("/api/code/overview", { timeout: 30_000 }); }
+  codeHistory(limit = 40) { return this.#get(`/api/code/history?limit=${limit}`); }
+  codeNew() { return this.#req("/api/code/new", { method: "POST" }); }
+  codeFiles() { return this.#req("/api/code/files"); }
+  codeFile(path, start = 1) { return this.#req(`/api/code/file?path=${encodeURIComponent(path)}&start=${start}`); }
+  codeDiff() { return this.#req("/api/code/diff", { timeout: 30_000 }); }
+  codeChecks() { return this.#req("/api/code/checks", { timeout: 30_000 }); }
+  codeResume(repo) { return this.#req("/api/code/resume", { method: "POST", body: { repo }, timeout: 90_000 }); }
   status() { return this.#get("/api/status"); }
   models() { return this.#get("/api/models"); }
   skills() { return this.#get("/api/skills"); }

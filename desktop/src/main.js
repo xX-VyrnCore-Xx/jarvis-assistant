@@ -5,6 +5,7 @@ import { Jarvis, ApiError, deviceId } from "@shared/api.js";
 import { el, fmtDate, fmtTokens, fmtUptime, markdown, nowLocalInput, pct } from "@shared/format.js";
 import { icon } from "@shared/icons.js";
 import { Speaker } from "@shared/speech.js";
+import { createCodeStudio } from "@shared/codeview.js";
 import { openStream } from "@shared/stream.js";
 import { initVoice, installVoice, onVoiceChange, removeVoice, synth, toBase64, voice } from "./voice.js";
 import { clearToken, loadToken, saveToken } from "./secrets.js";
@@ -26,6 +27,7 @@ const CHIPS = [
 ];
 const VIEWS = [
   ["chat", "Conversazione", "chat"],
+  ["code", "Codice", "code"],
   ["tokens", "Token", "gauge"],
   ["brain", "Cervello", "sparkle"],
   ["notifications", "Notifiche", "bell"],
@@ -89,11 +91,13 @@ function setView(v) {
   if (v === "reminders") { loadReminders(); loadTasks(); }
   if (v === "notifications") loadNotes();
   if (v === "brain") loadBrain();
+  if (v === "code") codeStudio().refresh();
 }
 
 function renderView() {
   viewBox.className = `view-${S.view}`;
   if (S.view === "chat") return viewBox.replaceChildren(buildChat());
+  if (S.view === "code") return viewBox.replaceChildren(buildCode());
   if (S.view === "tokens") return viewBox.replaceChildren(buildTokens());
   if (S.view === "reminders") return viewBox.replaceChildren(buildReminders());
   if (S.view === "notifications") return viewBox.replaceChildren(buildNotes());
@@ -413,6 +417,14 @@ function buildBrain() {
     el("div", { class: "brain-cols" }, el("div", { class: "list" }, list), reader));
 }
 
+// ------------------------------------------------------------------ codice
+let studioInst = null, codeBox = null;
+function codeStudio() { return studioInst ||= createCodeStudio({ api, toast, errText }); }
+function buildCode() {
+  if (!codeBox) codeBox = el("div", { class: "page code-page" }, panelHead("Codice", "Uno spazio solo per programmare: JARVIS al massimo, con tutte le competenze di programmazione, piano, revisione e CI."), el("div", { class: "code-wrap" }, codeStudio().root));
+  return codeBox;
+}
+
 // ------------------------------------------------------------------ promemoria
 async function loadReminders() {
   if (!cfg.token) return;
@@ -642,7 +654,8 @@ function start() {
     onNotification: onNote,
     onRead: (ids) => { S.notes.forEach((n) => { if (!ids || ids.includes(n.id)) n.read = true; }); renderRail(); if (S.view === "notifications") renderView(); },
     onSync: ({ scope, origin }) => {  // Telegram, app Android o server hanno cambiato qualcosa: ci si aggiorna subito
-      if (scope === "reminders") loadReminders();
+      if (scope === "code") { if (origin !== deviceId) studioInst?.onSync(); }
+      else if (scope === "reminders") loadReminders();
       else if (scope === "tasks") loadTasks();
       else if (scope === "brain" || scope === "memories") loadBrain();
       else if (scope === "chat" && origin !== deviceId) loadHistory(true);

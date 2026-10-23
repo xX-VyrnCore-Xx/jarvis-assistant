@@ -136,6 +136,7 @@ class Session:
     base_text: dict[str, bytes] = field(default_factory=dict)  # contenuto dell'ultimo commit (per diff e ripristino)
     ignored: int = 0
     root: Path = Path()
+    plan: list[dict] = field(default_factory=list)  # piano di lavoro: [{text, done}], visibile nella sezione Codice dell'app
 
 
 class CodingService:
@@ -733,6 +734,74 @@ class CodingService:
         if not hits:
             return "Nessuna corrispondenza."
         return ("Anteprima (nulla scritto): " if dry_run else "Sostituite ") + f"{total} occorrenze in {len(hits)} file:\n" + "\n".join(hits[:60]) + ("" if not dry_run else "\nRichiama con dry_run=false per applicare.")
+
+    # ------------------------------------------------------------------ piano di lavoro e revisione
+    def plan_set(self, steps: str) -> str:
+        """Il piano del lavoro: un passo per riga. Si mostra nella sezione Codice e si spunta con plan_done."""
+        s = self._need()
+        rows = [re.sub(r"^\s*(?:[-*•]|\d+[.)])\s*", "", ln).strip() for ln in re.split(r"[\n;]", steps or "")]
+        s.plan = [{"text": r[:140], "done": False} for r in rows if r][:15]
+        if not s.plan:
+            raise CodingError("Il piano è vuoto: scrivi un passo per riga.")
+        return "Piano impostato:\n" + "\n".join(f"{i}. {p['text']}" for i, p in enumerate(s.plan, 1))
+
+    def plan_done(self, index: int, done: bool = True) -> str:
+        s = self._need()
+        if not 1 <= index <= len(s.plan):
+            raise CodingError(f"Passo {index} inesistente: il piano ha {len(s.plan)} passi.")
+        s.plan[index - 1]["done"] = bool(done)
+        left = [p for p in s.plan if not p["done"]]
+        return f"Passo {index} {'completato' if done else 'riaperto'}. " + (f"Restano {len(left)} passi: prossimo «{left[0]['text']}»." if left else "Piano completato.")
+
+    TEST_NAME = re.compile(r"(^|/)(tests?/|test_[^/]*$|[^/]*_test\.\w+$|[^/]*\.(test|spec)\.\w+$)")
+    SOURCE_EXT = (".py", ".js", ".jsx", ".ts", ".tsx", ".rs", ".go", ".java", ".kt", ".cs", ".php", ".rb", ".c", ".cpp")
+
+    def review(self) -> str:
+        """Revisione automatica delle modifiche non committate: ciò che un buon revisore guarderebbe per primo (senza eseguire nulla)."""
+        mod, gone = self._changes()
+        s = self._need()
+        if not mod and not gone:
+            return "Nessuna modifica da rivedere."
+        issues: list[str] = []
+        src = [k for k in mod if k.endswith(self.SOURCE_EXT) and not self.TEST_NAME.search(k)]
+        tests = [k for k in mod if self.TEST_NAME.search(k)]
+        if src and not tests:
+            issues.append(f"Modificati {len(src)} file di codice senza toccare i test: aggiungi o aggiorna i test.")
+        for k, v in mod.items():
+            text = v.decode("utf-8", errors="ignore")
+            old = s.base_text.get(k, b"").decode("utf-8", errors="ignore")
+            added = [ln for ln in text.splitlines() if ln not in set(old.splitlines())]
+            if (n := sum(bool(re.search(r"\b(TODO|FIXME|XXX|HACK)\b", ln)) for ln in added)):
+                issues.append(f"{k}: {n} TODO/FIXME aggiunti.")
+            if k.endswith((".py",)) and (n := sum(bool(re.match(r"\s*(print\(|breakpoint\(|import pdb)", ln)) for ln in added)) and not self.TEST_NAME.search(k):
+                issues.append(f"{k}: {n} print/breakpoint di debug rimasti.")
+            if k.endswith((".js", ".jsx", ".ts", ".tsx")) and (n := sum(bool(re.search(r"\bconsole\.log\(|\bdebugger\b", ln)) for ln in added)):
+                issues.append(f"{k}: {n} console.log/debugger di debug rimasti.")
+            if (n := sum(len(ln) > 160 for ln in added)):
+                issues.append(f"{k}: {n} righe oltre 160 caratteri.")
+            if (n := sum(bool(re.search(r"except\s*:|except Exception:\s*pass|catch\s*\(\w*\)\s*\{\s*\}", ln)) for ln in added)):
+                issues.append(f"{k}: {n} gestioni d'errore che nascondono i problemi (except vuoto/catch vuoto).")
+            if len(v) > 300_000:
+                issues.append(f"{k}: file molto grande ({len(v) // 1024} KB).")
+        try:
+            self._scan(mod)
+        except CodingError as e:
+            issues.insert(0, str(e))
+        head = f"Revisione: {len(mod)} file nuovi o modificati, {len(gone)} eliminati."
+        return head + ("\n" + "\n".join(f"⚠ {i}" for i in issues) if issues else "\nNessun problema evidente. Resta da verificare con la CI.")
+
+    # ------------------------------------------------------------------ viste per la sezione Codice dell'app (sola lettura)
+    def snapshot(self) -> dict:
+        s = self.session
+        if not s:
+            return {"active": False}
+        mod, gone = self._changes()
+        return {"active": True, "repo": s.repo, "branch": s.branch or s.default_branch, "default_branch": s.default_branch, "pr": s.pr, "head": s.head[:7], "plan": s.plan,
+                "changes": {"modified": sorted(k for k in mod if k in s.base), "new": sorted(k for k in mod if k not in s.base), "deleted": sorted(gone)}, "files": len(s.base) + sum(1 for k in mod if k not in s.base)}
+
+    def file_list(self, limit: int = 500) -> list[str]:
+        self._need()
+        return sorted(k for k in self._files() if not k.startswith(".git/"))[:limit]
 
     def stats(self) -> str:
         self._need()

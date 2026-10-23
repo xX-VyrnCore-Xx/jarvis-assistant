@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 
 from .auth import require_token
 from .freellm_admin import AdminError
+from .coding import CodingError
 from .voice import TTSError
 from .tools.basic import parse_due
 
@@ -463,6 +464,94 @@ async def tools_health_run(request: Request) -> dict:
     """Prova subito gli strumenti esterni."""
     w = request.app.state.toolwatch
     return {"ok": True, "results": await asyncio.wait_for(w.run(), 120), "down": w.tools.down}
+
+
+# ---------------------------------------------------------------- sezione Codice
+def _code(request: Request):
+    c = request.app.state.coding
+    if not c.enabled:
+        raise HTTPException(404, "Il coding non è attivo: manca GITHUB_TOKEN sul server")
+    return c
+
+
+class CodeResume(BaseModel):
+    repo: str = Field(min_length=1, max_length=100)
+
+
+@router.get("/code/overview")
+async def code_overview(request: Request) -> dict:
+    """Tutto ciò che serve alla sezione Codice: stato del progetto, repository di JARVIS, competenze di programmazione e modello in uso."""
+    st = request.app.state
+    c = st.coding
+    snap = c.snapshot() if c.enabled else {"active": False}
+    try:
+        repos = await c.repos() if c.enabled else []
+    except Exception:
+        repos = []
+    sk = st.skills.coding_skills() if st.skills else []
+    last = st.llm.router.last
+    return {"enabled": c.enabled, "session": snap, "repos": repos, "skills": [s.card() for s in sk], "tools": len([n for n in st.agent.tools.names if n.startswith("code_")]),
+            "model": {"profile": last.profile, "why": last.reason} if last else None}
+
+
+@router.get("/code/history")
+async def code_history(request: Request, limit: int = Query(40, ge=1, le=100)) -> list[dict]:
+    return await request.app.state.store.recent_messages("code", limit)
+
+
+@router.post("/code/new")
+async def code_new(request: Request, x_device_id: str = Header(default="", max_length=64)) -> dict:
+    """Cancella la conversazione di coding (il progetto aperto e il suo codice restano)."""
+    await request.app.state.store.clear_messages("code")
+    request.app.state.notifier.sync("code", x_device_id)
+    return {"ok": True}
+
+
+@router.get("/code/files")
+async def code_files(request: Request) -> dict:
+    c = _code(request)
+    try:
+        return {"files": c.file_list()}
+    except CodingError as e:
+        raise HTTPException(409, str(e)) from e
+
+
+@router.get("/code/file")
+async def code_file(request: Request, path: str = Query(min_length=1, max_length=200), start: int = Query(1, ge=1), lines: int = Query(300, ge=1, le=800)) -> dict:
+    c = _code(request)
+    try:
+        return {"path": path, "text": c.read(path, start, lines)}
+    except CodingError as e:
+        raise HTTPException(409, str(e)) from e
+
+
+@router.get("/code/diff")
+async def code_diff(request: Request, path: str = Query("", max_length=200)) -> dict:
+    c = _code(request)
+    try:
+        return {"diff": c.diff(path), "review": c.review()}
+    except CodingError as e:
+        raise HTTPException(409, str(e)) from e
+
+
+@router.get("/code/checks")
+async def code_checks(request: Request) -> dict:
+    c = _code(request)
+    try:
+        return await c.checks()
+    except CodingError as e:
+        raise HTTPException(409, str(e)) from e
+
+
+@router.post("/code/resume")
+async def code_resume(body: CodeResume, request: Request) -> dict:
+    c = _code(request)
+    try:
+        msg = await c.resume(body.repo)
+    except CodingError as e:
+        raise HTTPException(409, str(e)) from e
+    request.app.state.notifier.sync("code")
+    return {"ok": True, "message": msg, "session": c.snapshot()}
 
 
 class VoiceIn(BaseModel):

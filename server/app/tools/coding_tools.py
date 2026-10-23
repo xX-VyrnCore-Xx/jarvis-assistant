@@ -111,6 +111,11 @@ def register_coding_tools(reg: ToolRegistry, coding: CodingService, pending) -> 
     reg.register("code_replace", "Sostituzione con regex in più file. Di default solo anteprima (dry_run=true): rilancia con dry_run=false per applicare.",
                  obj({"pattern": s, "replacement": s, "glob": s, "dry_run": b}, ["pattern", "replacement"]), guarded(coding.replace_all), available=on)
     reg.register("code_stats", "Statistiche della sandbox: file, righe per estensione, TODO/FIXME.", obj({}), guarded(coding.stats), available=on)
+    reg.register("code_plan", "Imposta il piano del lavoro (un passo per riga, al massimo 15): compare nella sezione Codice dell'app. Fallo all'inizio di ogni lavoro non banale.",
+                 obj({"steps": s}, ["steps"]), guarded(coding.plan_set), available=on)
+    reg.register("code_plan_done", "Spunta (o riapre) un passo del piano, numerato da 1. Aggiornalo man mano che avanzi.", obj({"index": i, "done": b}, ["index"]), guarded(coding.plan_done), available=on)
+    reg.register("code_review", "Revisione automatica delle modifiche non committate: test mancanti, TODO, debug dimenticato, errori nascosti, segreti. Chiamala PRIMA di ogni commit.",
+                 obj({}), guarded(coding.review), available=on)
     reg.register("code_scaffold", "Crea nella sandbox uno scheletro di progetto con test e CI: python-cli, fastapi-api, node-express-api, static-site, telegram-bot. Non sovrascrive file esistenti.",
                  obj({"kind": s, "name": s, "overwrite": b}, ["kind"]), guarded(coding.scaffold), available=on)
     # ---- rami, cronologia, PR, issue, rilasci, CI
