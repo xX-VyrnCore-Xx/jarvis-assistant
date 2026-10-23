@@ -1,5 +1,6 @@
 mod actions;
 mod paths;
+mod update;
 mod voice;
 
 use tauri::menu::{Menu, MenuItem};
@@ -29,7 +30,7 @@ fn toggle(app: &AppHandle) {
 
 /// Uscita definitiva: chiude voce e installazione (con i loro processi figli), toglie l'icona dalla barra, distrugge la finestra e termina il processo.
 /// Se l'uscita normale restasse appesa (WebView, thread), dopo 3 secondi il processo viene terminato comunque.
-fn exit_all(app: &AppHandle) {
+pub(crate) fn exit_all(app: &AppHandle) {
     voice::stop_all(&app.state::<voice::Voice>());
     let _ = app.remove_tray_by_id("main");
     if let Some(w) = app.get_webview_window("main") {
@@ -107,6 +108,7 @@ pub fn run() {
         // invece di lasciare due processi di cui «Esci» ne chiuderebbe uno solo
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show(app)))
         .manage(voice::Voice::default())
+        .manage(update::Updater::default())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, Some(vec!["--hidden"])))
@@ -157,7 +159,7 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![run_action, notify, show_window, quit_app, secret_get, secret_set, secret_delete, autostart_get, autostart_set,
-            voice::voice_status, voice::voice_install, voice::voice_start, voice::voice_stop, voice::voice_uninstall])
+            update::update_download, update::update_install, voice::voice_status, voice::voice_install, voice::voice_start, voice::voice_stop, voice::voice_uninstall])
         .build(tauri::generate_context!())
         .expect("errore nell'avvio di JARVIS")
         .run(|app, event| {

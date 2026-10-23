@@ -77,7 +77,11 @@ RELEASE = {"tag_name": "v0.4.0", "body": "## Novità\n- Grafica nuova per Androi
 def release_client():
     sums = f"{'a' * 64}  android/JARVIS-0.4.0.apk\n{'b' * 64}  windows/JARVIS_0.4.0_x64-setup.exe\n"
 
+    older = {**RELEASE, "tag_name": "v0.3.5", "body": "## What's Changed\n* Voce neurale sempre disponibile (#42) by @utente in https://github.com/o/r/pull/42\n* Nuova chat in tutte le app (#41) by @utente in https://github.com/o/r/pull/41\n**Full Changelog**: https://github.com/o/r/compare/a...b"}
+
     def handler(req):
+        if "per_page" in str(req.url):
+            return httpx.Response(200, json=[RELEASE, older, {**RELEASE, "tag_name": "v0.3.0", "body": "- Vecchia novità già installata"}])
         if "api.github.com" in str(req.url):
             return httpx.Response(200, json=RELEASE)
         return httpx.Response(200, text=sums)
@@ -93,6 +97,7 @@ async def test_updates_pick_assets_verify_hash_and_notify_once():
     u = UpdateService(Settings(github_repo="o/r"), store, n, release_client())
     a = await u.check_for("android", "0.3.0")
     assert a["available"] and a["latest"] == "0.4.0" and a["sha256"] == "a" * 64 and a["url"].endswith("JARVIS-0.4.0.apk")
+    assert a["behind"] == 2 and a["changes"][1]["highlights"] == ["Voce neurale sempre disponibile", "Nuova chat in tutte le app"]  # novità di ogni versione saltata, senza autore e link
     assert not (await u.check_for("android", "0.4.0"))["available"] and (await u.check_for("windows", "0.3.0"))["sha256"] == "b" * 64
     assert "evil" not in json.dumps((await u.latest())["assets"])  # solo file della Release del repository
 

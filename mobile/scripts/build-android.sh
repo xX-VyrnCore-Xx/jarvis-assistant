@@ -62,6 +62,15 @@ fi
 grep -q 'CallStateReceiver' "$MANIFEST" && grep -q 'ANSWER_PHONE_CALLS' "$MANIFEST" || { echo "manifest: permessi del telefono non applicati"; exit 1; }
 grep -q 'registerPlugin(JarvisPhonePlugin.class)' "$JAVA_DIR/MainActivity.java" || { echo "MainActivity: plugin del telefono non registrato"; exit 1; }
 
+# aggiornamento dentro l'app: serve poter installare l'APK scaricato (provider dei file già nel modello di Capacitor: ci si aggiunge la cartella temporanea)
+grep -q 'REQUEST_INSTALL_PACKAGES' "$MANIFEST" || sed -i 's#<application#<uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />\n    <application#' "$MANIFEST"
+grep -q 'REQUEST_INSTALL_PACKAGES' "$MANIFEST" || { echo "manifest: permesso di installazione non applicato"; exit 1; }
+grep -q '\.fileprovider' "$MANIFEST" || { echo "manifest: provider dei file non trovato"; exit 1; }
+PATHS="$XML_DIR/file_paths.xml"
+[ -f "$PATHS" ] || { echo "file_paths.xml non trovato"; exit 1; }
+grep -q 'cache-path' "$PATHS" || sed -i 's#</paths>#    <cache-path name="updates" path="updates/" />\n</paths>#' "$PATHS"
+grep -q 'cache-path' "$PATHS" || { echo "file_paths.xml: cartella degli aggiornamenti non aggiunta"; exit 1; }
+
 if [ -n "${ANDROID_GOOGLE_SERVICES_JSON_B64:-}" ]; then
   echo "$ANDROID_GOOGLE_SERVICES_JSON_B64" | base64 -d > android/app/google-services.json
   grep -q '"it.vyrncore.jarvis"' android/app/google-services.json || { echo "google-services.json: package diverso da it.vyrncore.jarvis"; exit 1; }

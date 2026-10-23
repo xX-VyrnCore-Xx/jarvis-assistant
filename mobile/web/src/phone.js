@@ -16,3 +16,13 @@ export const phone = {
   setAuto: (cfg) => Phone.setAuto(cfg),
   log: async (clear = false) => (await Phone.log({ clear })).log || [],
 };
+
+/** Aggiornamento dell'app dentro l'app (solo Android con il plugin nuovo): scarica, verifica l'SHA-256 e apre l'installazione. */
+export const updater = {
+  available: !!Phone,
+  /** @returns {Promise<{needsPermission?: boolean, started?: boolean}>} */
+  async install(url, sha256, onProgress = () => {}) {
+    const h = await Phone.addListener("updateProgress", (e) => onProgress(e.percent));
+    try { return await Phone.installUpdate({ url, sha256: sha256 || "" }); } finally { h.remove(); }
+  },
+};

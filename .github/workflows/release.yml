@@ -97,4 +97,4 @@ jobs:
       - name: Crea la Release
         run: |
           gh release create "v$VERSION" dist/windows/*.exe dist/android/*.apk SHA256SUMS.txt \
-            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "JARVIS v$VERSION" --notes-file notes.md
+            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "JARVIS v$VERSION" --notes-file notes.md --generate-notes

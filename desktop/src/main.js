@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
 import { Jarvis, ApiError, deviceId } from "@shared/api.js";
 import { el, fmtDate, fmtTokens, fmtUptime, markdown, nowLocalInput, pct } from "@shared/format.js";
@@ -138,8 +139,7 @@ function renderSide() {
       stat("Memoria", st ? (st.memory === "supabase" ? "permanente" : "temporanea") : "—", st ? st.memory === "supabase" : undefined),
       st ? stat("Attivo da", fmtUptime(st.uptime_s)) : null,
     ),
-    S.update?.available ? el("div", { class: "side-card update" }, icon("down", 16), el("span", {}, `Nuova versione ${S.update.latest}`),
-      el("button", { class: "btn primary", onclick: () => local("pc_open_url", { url: S.update.url }).then(() => toast("Scarico l'installer: avvialo per aggiornare")).catch((e) => toast(errText(e), true)) }, "Aggiorna")) : null,
+    S.update?.available ? updateCard() : null,
     el("div", { class: "side-card hint" }, icon("shield", 16), el("span", {}, "Le azioni sensibili chiedono sempre la tua conferma.")),
   );
 }
@@ -274,6 +274,46 @@ function buildTokens() {
 }
 
 // ------------------------------------------------------------------ aggiornamenti
+// Scarica l'installer dentro l'app (avanzamento, controllo SHA-256), poi lo avvia e chiude JARVIS.
+let upd = { phase: "idle", pct: 0, msg: "" };
+
+function updateCard() {
+  const u = S.update;
+  const news = (u.changes || []).flatMap((c) => c.highlights || []).slice(0, 3);
+  const busy = upd.phase === "downloading";
+  return el("div", { class: "side-card update" },
+    el("div", { style: "display:flex;gap:8px;align-items:center" }, icon("down", 16), el("span", {}, `Nuova versione ${u.latest}${u.size ? ` · ${(u.size / 1048576).toFixed(1)} MB` : ""}`)),
+    news.length ? el("ul", { class: "upd-list" }, news.map((n) => el("li", {}, n))) : null,
+    busy ? el("div", { class: "upd-bar" }, el("i", { style: `width:${upd.pct}%` })) : null,
+    upd.msg ? el("small", {}, upd.msg) : null,
+    upd.phase === "ready"
+      ? el("button", { class: "btn primary", onclick: installUpdate }, "Installa e riavvia")
+      : el("button", { class: "btn primary", disabled: busy, onclick: startUpdate }, busy ? `Scarico… ${upd.pct}%` : "Scarica e aggiorna"));
+}
+
+async function startUpdate() {
+  if (!isTauri) return;
+  if (!/^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/releases\/download\//.test(S.update.url || "")) return toast("Indirizzo di download non attendibile", true);
+  upd = { phase: "downloading", pct: 0, msg: "" }; renderSide();
+  try { await invoke("update_download", { url: S.update.url, sha256: S.update.sha256 || "" }); }
+  catch (e) { upd = { phase: "error", pct: 0, msg: String(e) }; renderSide(); toast(String(e), true); }
+}
+
+async function installUpdate() {
+  try { await invoke("update_install"); } catch (e) { upd = { phase: "error", pct: 0, msg: String(e) }; renderSide(); toast(String(e), true); }
+}
+
+async function initUpdates() {
+  if (!isTauri) return;
+  await listen("update-progress", (ev) => { upd.pct = Number(ev.payload) || 0; renderSide(); });
+  await listen("update-done", (ev) => {
+    const { ok, error } = ev.payload || {};
+    upd = ok ? { phase: "ready", pct: 100, msg: "Scaricato e verificato (SHA-256)." } : { phase: "error", pct: 0, msg: error || "Download non riuscito." };
+    renderSide();
+    if (!ok) toast(upd.msg, true);
+  });
+}
+
 async function checkUpdate() {
   if (!cfg.token || !isTauri) return;
   try { S.update = await api.appUpdate("windows", await getVersion()); renderSide(); } catch { /* server in avvio: riprova al prossimo ciclo */ }
@@ -620,6 +660,7 @@ function stop() {
 
 // ------------------------------------------------------------------ avvio
 (async () => {
+  initUpdates();
   const { token, where } = await loadToken();
   cfg.token = token; cfg.where = where;
   shell();
