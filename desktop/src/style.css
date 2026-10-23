@@ -180,3 +180,6 @@ button, input, textarea { font: inherit; color: inherit; }
 /* sezione Codice */
 .code-page { display: flex; flex-direction: column; min-height: 0; height: 100%; }
 .code-wrap { flex: 1; min-height: 0; display: flex; } .code-wrap > .cs { flex: 1; }
+
+.composer .send.mic.on { background: var(--cy); color: #04131c; transform: scale(calc(1 + var(--lvl, 0) * .18)); transition: transform .08s linear; }
+.composer .send.fix { opacity: .85; }

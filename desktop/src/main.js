@@ -6,6 +6,7 @@ import { el, fmtDate, fmtTokens, fmtUptime, markdown, nowLocalInput, pct } from 
 import { icon } from "@shared/icons.js";
 import { Speaker } from "@shared/speech.js";
 import { createCodeStudio } from "@shared/codeview.js";
+import { dictationSupported, recordUtterance } from "@shared/dictate.js";
 import { openStream } from "@shared/stream.js";
 import { initVoice, installVoice, onVoiceChange, removeVoice, synth, toBase64, voice } from "./voice.js";
 import { clearToken, loadToken, saveToken } from "./secrets.js";
@@ -171,7 +172,11 @@ function buildChat() {
       el("button", { class: "btn", title: "Cancella la conversazione e riparti da zero", onclick: newChat }, icon("plus", 16), "Nuova chat")),
     chatLog,
     el("div", { class: "chips" }, CHIPS.map(([label, text]) => el("button", { class: "chip", onclick: () => send(text) }, label))),
-    el("div", { class: "composer" }, chatInput, el("button", { class: "send", title: "Invia", "aria-label": "Invia", onclick: () => send() }, icon("send", 20))),
+    el("div", { class: "composer" },
+      micBtn = el("button", { class: "send mic", title: "Detta (si ferma da solo quando smetti di parlare)", "aria-label": "Detta", onclick: dictate }, icon("mic", 20)),
+      chatInput,
+      fixBtn = el("button", { class: "send fix", title: "Correggi la grammatica", "aria-label": "Correggi la grammatica", onclick: fixText }, icon("sparkle", 20)),
+      el("button", { class: "send", title: "Invia", "aria-label": "Invia", onclick: () => send() }, icon("send", 20))),
   );
   addMessage("sys", cfg.token ? "Pronto, signore." : "Inserisci il token personale in Impostazioni per iniziare.");
   return chatView;
@@ -192,6 +197,39 @@ async function newChat(e) {
   if (btn) btn.lastChild.textContent = "Nuova chat";
   try { await api.newChat(); S.histSig = null; chatLog.replaceChildren(); addMessage("sys", "Nuova conversazione. Pronto, signore."); }
   catch (e) { toast(errText(e), true); }
+}
+
+let micBtn, fixBtn, recAbort = null;
+const recStop = {};
+
+/** Dettatura di qualità: registra, capisce da sola quando finisci e trascrive con Whisper sul server (con accenti e punteggiatura a posto). Un secondo clic chiude la frase. */
+async function dictate() {
+  if (!cfg.token) return setView("settings");
+  if (recAbort) return recStop.stop?.();
+  if (!dictationSupported()) return toast("Il microfono non è disponibile in questa finestra", true);
+  recAbort = new AbortController(); micBtn.classList.add("on");
+  try {
+    const res = await recordUtterance({ signal: recAbort.signal, stopRef: recStop, onLevel: (v) => micBtn.style.setProperty("--lvl", v.toFixed(2)) });
+    if (!res.blob) return toast("Non ho sentito nulla");
+    chatInput.placeholder = "Trascrivo…";
+    const r = await api.stt(res.blob, "quick");
+    if (r.text) { chatInput.value = (chatInput.value ? `${chatInput.value} ` : "") + r.text; chatInput.dispatchEvent(new Event("input")); chatInput.focus(); }
+    else toast("Non ho capito: riprova parlando più vicino al microfono");
+  } catch (e) { toast(e?.status ? errText(e) : "Microfono non disponibile o permesso negato", true); }
+  finally { recAbort = null; micBtn.classList.remove("on"); micBtn.style.removeProperty("--lvl"); chatInput.placeholder = "Scrivi a JARVIS…  (Invio per inviare, Maiusc+Invio per andare a capo)"; }
+}
+
+/** Correttore grammaticale (ortografia, accenti, concordanze, punteggiatura) senza cambiare il senso. */
+async function fixText() {
+  const orig = chatInput.value.trim();
+  if (orig.length < 3) return;
+  fixBtn.disabled = true;
+  try {
+    const r = await api.correct(orig, "full");
+    if (r.text && r.text !== orig) { chatInput.value = r.text; chatInput.dispatchEvent(new Event("input")); toast("Testo corretto (Ctrl+Z per annullare)"); }
+    else toast("Il testo è già corretto");
+  } catch (e) { toast(errText(e), true); }
+  finally { fixBtn.disabled = false; }
 }
 
 async function send(text) {

@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 FAST, SMART, RELIABLE, BALANCED = "auto:fast", "auto:smart", "auto:reliable", "auto:balanced"
 CHAIN = {SMART: (BALANCED, RELIABLE), RELIABLE: (BALANCED, FAST), FAST: (BALANCED, RELIABLE), BALANCED: (RELIABLE, FAST)}
-BACKGROUND_FAST = {"learn", "enrich", "rag", "call"}  # estrazioni brevi: la velocità conta più della finezza
+BACKGROUND_FAST = {"learn", "enrich", "rag", "call", "fix"}  # estrazioni brevi: la velocità conta più della finezza
 BACKGROUND_QUALITY = {"journal", "profile"}  # testi lunghi da riassumere bene
 BAD_AFTER, BAD_FOR_S, WINDOW_S = 3, 300, 600
 

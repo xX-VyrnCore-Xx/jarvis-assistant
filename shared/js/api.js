@@ -54,16 +54,16 @@ export class Jarvis {
     return run;
   }
 
-  async #req(path, { method = "GET", body, timeout = 30_000, auth = true, raw = false } = {}) {
+  async #req(path, { method = "GET", body, timeout = 30_000, auth = true, raw = false, binary = "" } = {}) {
     const headers = { "X-Device-Id": deviceId };
     if (auth) headers.Authorization = `Bearer ${this.cfg.token()}`;
-    if (body !== undefined) headers["Content-Type"] = "application/json";
+    if (body !== undefined) headers["Content-Type"] = binary || "application/json";
     let res;
     try {
       res = await fetch(`${this.cfg.url()}${path}`, {
         method,
         headers,
-        body: body === undefined ? undefined : JSON.stringify(body),
+        body: body === undefined ? undefined : binary ? body : JSON.stringify(body),
         signal: AbortSignal.timeout(timeout),
       });
     } catch (e) {
@@ -137,6 +137,10 @@ export class Jarvis {
   codeDiff() { return this.#req("/api/code/diff", { timeout: 30_000 }); }
   codeChecks() { return this.#req("/api/code/checks", { timeout: 30_000 }); }
   codeResume(repo) { return this.#req("/api/code/resume", { method: "POST", body: { repo }, timeout: 90_000 }); }
+  /** Dettatura di qualità: manda l'audio registrato e riceve il testo (Whisper del router), già corretto se `fix` è quick/full. */
+  stt(blob, fix = "quick") { return this.#req(`/api/stt?fix=${fix}`, { method: "POST", body: blob, binary: (blob.type || "audio/webm").split(";")[0], timeout: 60_000 }); }
+  /** Correttore grammaticale italiano: quick = regole istantanee, full = regole + modello. */
+  correct(text, level = "full") { return this.#req("/api/correct", { method: "POST", body: { text, level }, timeout: 45_000 }); }
   status() { return this.#get("/api/status"); }
   models() { return this.#get("/api/models"); }
   skills() { return this.#get("/api/skills"); }

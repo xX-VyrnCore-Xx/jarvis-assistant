@@ -32,6 +32,7 @@ from .llm import LLMClient, LLMError
 from .gateway import make_client
 from .gateway import router as gateway_router
 from .edgetts import EdgeTTS
+from .grammar import Corrector
 from .livesync import Live, LiveStore
 from .memory import build_store
 from .pc import PCBridge
@@ -160,6 +161,7 @@ async def lifespan(app: FastAPI):
     except Exception:
         pass
     app.state.voice = VoiceService(pc, edge)
+    app.state.corrector = Corrector(llm)  # correttore grammaticale (regole + modello veloce)
     notifier = app.state.notifier = Notifier(settings, store, tg)
     reminders.on_change = lambda: notifier.sync("reminders")
     app.state.voiceline = VoiceLine(settings, store, llm, notifier)  # segreteria telefonica con voce (Twilio), spenta finché non si imposta TWILIO_AUTH_TOKEN

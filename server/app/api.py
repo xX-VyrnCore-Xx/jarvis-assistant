@@ -1,6 +1,7 @@
 """API per le app (Windows e Android): stato, token, cronologia, promemoria e conferme."""
 import asyncio
 import json
+import re
 import time
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -12,6 +13,7 @@ from pydantic import BaseModel, Field
 from .auth import require_token
 from .freellm_admin import AdminError
 from .coding import CodingError
+from .llm import LLMError
 from .voice import TTSError
 from .tools.basic import parse_due
 
@@ -464,6 +466,54 @@ async def tools_health_run(request: Request) -> dict:
     """Prova subito gli strumenti esterni."""
     w = request.app.state.toolwatch
     return {"ok": True, "results": await asyncio.wait_for(w.run(), 120), "down": w.tools.down}
+
+
+# ---------------------------------------------------------------- dettatura e correttore grammaticale
+HALLUCINATION = re.compile(r"sottotitoli|amara\.org|grazie (a tutti )?per (la visione|aver guardato|l'attenzione)|iscriviti al canale|alla prossima|subtitles|thanks for watching|www\.", re.I)
+
+
+class CorrectIn(BaseModel):
+    text: str = Field(min_length=1, max_length=4000)
+    level: str = Field("full", pattern="^(quick|full)$")
+
+
+@router.post("/correct")
+async def correct(body: CorrectIn, request: Request) -> dict:
+    """Correttore grammaticale: `quick` (regole, istantaneo) o `full` (regole + modello, senza cambiare il senso)."""
+    limiter = request.app.state.chat_limiter
+    if wait := limiter.retry_after():
+        raise HTTPException(429, "Troppe richieste: rallenta un momento", headers={"Retry-After": str(wait)})
+    limiter.hit()
+    out = await request.app.state.corrector.fix(body.text, body.level)
+    return {"text": out, "changed": out != body.text.strip()}
+
+
+@router.post("/stt")
+async def stt(request: Request, fix: str = Query("quick", pattern="^(none|quick|full)$")) -> dict:
+    """Dettatura di qualità: l'app registra la voce e la manda qui; la trascrizione è del modello Whisper del router (molto più precisa del riconoscimento del telefono),
+    poi, se richiesto, passa dal correttore grammaticale. Corpo: l'audio (webm/ogg/mp4/wav), al massimo 4 MB."""
+    st = request.app.state
+    limiter = st.chat_limiter
+    if wait := limiter.retry_after():
+        raise HTTPException(429, "Troppe richieste: rallenta un momento", headers={"Retry-After": str(wait)})
+    audio = await request.body()
+    if len(audio) < 800:
+        raise HTTPException(422, "Registrazione troppo breve")
+    if len(audio) > 4_000_000:
+        raise HTTPException(413, "Registrazione troppo lunga")
+    mime = (request.headers.get("content-type") or "audio/webm").split(";")[0].strip().lower()
+    ext = {"audio/webm": "webm", "audio/ogg": "ogg", "audio/mp4": "m4a", "audio/mpeg": "mp3", "audio/wav": "wav", "audio/x-wav": "wav", "audio/aac": "aac"}.get(mime)
+    if not ext:
+        raise HTTPException(415, "Formato audio non supportato")
+    limiter.hit()
+    try:
+        raw = await st.agent.llm.transcribe(audio, f"voce.{ext}", mime)
+    except LLMError as e:
+        raise HTTPException(502, str(e)) from e
+    if HALLUCINATION.search(raw) and len(raw) < 90:  # Whisper su silenzio o rumore «inventa» frasi di repertorio: meglio nulla
+        return {"text": "", "raw": raw}
+    text = raw if fix == "none" else await st.corrector.fix(raw, fix)
+    return {"text": text, "raw": raw}
 
 
 # ---------------------------------------------------------------- sezione Codice

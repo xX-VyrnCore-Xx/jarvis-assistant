@@ -62,6 +62,12 @@ fi
 grep -q 'CallStateReceiver' "$MANIFEST" && grep -q 'ANSWER_PHONE_CALLS' "$MANIFEST" || { echo "manifest: permessi del telefono non applicati"; exit 1; }
 grep -q 'registerPlugin(JarvisPhonePlugin.class)' "$JAVA_DIR/MainActivity.java" || { echo "MainActivity: plugin del telefono non registrato"; exit 1; }
 
+# registrazione della voce dentro l'app (dettatura di qualità: getUserMedia nella WebView)
+for PERM in RECORD_AUDIO MODIFY_AUDIO_SETTINGS; do
+  grep -q "android.permission.$PERM" "$MANIFEST" || sed -i "s#<application#<uses-permission android:name=\"android.permission.$PERM\" />\n    <application#" "$MANIFEST"
+  grep -q "android.permission.$PERM" "$MANIFEST" || { echo "manifest: permesso $PERM non applicato"; exit 1; }
+done
+
 # aggiornamento dentro l'app: serve poter installare l'APK scaricato (provider dei file già nel modello di Capacitor: ci si aggiunge la cartella temporanea)
 grep -q 'REQUEST_INSTALL_PACKAGES' "$MANIFEST" || sed -i 's#<application#<uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />\n    <application#' "$MANIFEST"
 grep -q 'REQUEST_INSTALL_PACKAGES' "$MANIFEST" || { echo "manifest: permesso di installazione non applicato"; exit 1; }
