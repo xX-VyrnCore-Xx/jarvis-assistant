@@ -1,5 +1,5 @@
 // Telefono e WhatsApp (solo Android): chiamare, cercare nei contatti, risposta automatica ai numeri autorizzati.
-// Il lavoro è nel plugin nativo JarvisPhone (mobile/native/android). Nel browser di prova e su altre piattaforme non c'è nulla.
+// Il lavoro è nel plugin nativo JarvisPhone (mobile/native/phone). Nel browser di prova e su altre piattaforme non c'è nulla.
 import { registerPlugin } from "@capacitor/core";
 import { isNative, platform } from "./native.js";
 
