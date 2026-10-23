@@ -140,13 +140,18 @@ class SkillRegistry:
         # senza una frase di attivazione servono 2+ parole in comune (una almeno del titolo) o 3+ della descrizione: una sola («tempo», «prezzo») è troppo vaga
         return sc if hit or (t_hit and len(t_hit | d_hit) >= 2) or len(d_hit) >= 3 else 0.0
 
-    def match(self, text: str, k: int = 2, min_score: float = 3.0) -> list[Skill]:
+    CODE_DOMAINS = ("programmazione", "tecnologia")
+
+    def coding_skills(self) -> list[Skill]:
+        return [s for s in self.skills.values() if s.domain in self.CODE_DOMAINS or (not s.builtin and s.domain == "personali" and "codice" in norm(s.description))]
+
+    def match(self, text: str, k: int = 2, min_score: float = 3.0, domains: tuple[str, ...] | None = None) -> list[Skill]:
         """Le competenze più adatte alla richiesta (al massimo `k`). Soglia alta: le chiacchiere non ne attivano nessuna."""
         tn = " " + " ".join(tokens(text)) + " "
         words = set(stems(text))
         if not words:
             return []
-        ranked = sorted(((self.score(s, tn, words), s) for s in self.skills.values()), key=lambda x: -x[0])
+        ranked = sorted(((self.score(s, tn, words), s) for s in self.skills.values() if not domains or s.domain in domains), key=lambda x: -x[0])
         top = [(sc, s) for sc, s in ranked if sc >= min_score][:k]
         if len(top) == 2 and top[1][0] < 0.6 * top[0][0]:  # la seconda conta solo se quasi pertinente quanto la prima
             top = top[:1]

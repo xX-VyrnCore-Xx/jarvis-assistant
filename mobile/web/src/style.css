@@ -451,3 +451,8 @@ html { background: var(--bg); }
 .upd-bar i { display: block; height: 100%; width: 0; border-radius: 99px; background: linear-gradient(90deg, #ffb347, #ff6b81); transition: width .25s ease; }
 .upd-msg { margin: 4px 2px 8px; font-size: 13.5px; color: var(--muted); min-height: 1em; }
 .upd-notes ul { margin: 4px 0 10px; padding-left: 18px; } .upd-notes li { margin: 2px 0; }
+
+/* sezione Codice */
+.cs-wrap { padding: 8px 12px 6px; }
+.m-linkrow { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; margin-bottom: 8px; } .m-linkrow span { flex: 1; } .m-linkrow svg:last-child { transform: rotate(-90deg); opacity: .6; }
+.cs-wrap > .cs { flex: 1; min-height: 0; }

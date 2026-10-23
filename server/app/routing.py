@@ -45,7 +45,7 @@ class Router:
             return BALANCED, "chat", "riassunto lungo"
         text = _last(messages, "user")
         system = _last(messages[:1], "system")
-        coding = bool(CODE.search(text)) or "Sessione di coding attiva" in system
+        coding = bool(CODE.search(text)) or "Sessione di coding attiva" in system or "MODALITÀ CODING" in system
         deep = bool(THINK.search(text)) or len(text) > 450 or text.count("?") >= 3
         spoken = "LETTA AD ALTA VOCE" in system  # risposta parlata: la latenza conta più della finezza
         big = sum(len(str(m.get("content") or "")) for m in messages) // 4 > 4500  # i profili veloci hanno i limiti di token più stretti

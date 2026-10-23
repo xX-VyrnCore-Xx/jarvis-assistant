@@ -2,6 +2,7 @@ import { Jarvis, ApiError, deviceId } from "@shared/api.js";
 import { el, fmtDate, fmtTokens, fmtUptime, markdown, pct } from "@shared/format.js";
 import { icon } from "@shared/icons.js";
 import { Speaker } from "@shared/speech.js";
+import { createCodeStudio } from "@shared/codeview.js";
 import { openStream } from "@shared/stream.js";
 import { appVersion, dictationAvailable, haptic, hideSplash, onBack, openExternal, paintSystemBars, platform, startDictation, stopDictation, trackViewport } from "./native.js";
 import { initPush, teardownPush } from "./push.js";
@@ -12,7 +13,7 @@ import { NUMBER_RE, phone, phoneAvailable, updater } from "./phone.js";
 // URL pubblico del server (non è un segreto); il token personale resta nella memoria privata dell'app
 const DEFAULT_URL = "https://jarvis-ai-841t.onrender.com";
 const SESSION = "mobile";
-const TABS = [["chat", "Chat", "chat"], ["brain", "Cervello", "sparkle"], ["tokens", "Token", "gauge"], ["reminders", "Promemoria", "clock"], ["more", "Altro", "sliders"]];
+const TABS = [["chat", "Chat", "chat"], ["code", "Codice", "code"], ["brain", "Cervello", "sparkle"], ["reminders", "Promemoria", "clock"], ["more", "Altro", "sliders"]];
 const QUICK = [
   ["Agenda", "calendar", "Cosa ho in agenda oggi e domani?"],
   ["Email", "mail", "Ho email non lette importanti?"],
@@ -183,9 +184,10 @@ function renderTabs() {
       ...TABS.map(([id, label, ic]) => el("button", { class: "m-tab", dataset: { tab: id }, "aria-label": label, onclick: () => { haptic(); setTab(id); } },
         el("span", { class: "m-tab-ic" }, icon(ic, 24)), el("small", {}, label))));
   }
-  tabs.style.setProperty("--i", String(Math.max(0, TABS.findIndex(([id]) => id === S.tab))));
+  const shown = S.tab === "tokens" ? "more" : S.tab;  // «Token» non è nella barra: si apre dall'indicatore in alto o da Altro
+  tabs.style.setProperty("--i", String(Math.max(0, TABS.findIndex(([id]) => id === shown))));
   tabs.querySelectorAll(".m-tab").forEach((b) => {
-    const on = b.dataset.tab === S.tab;
+    const on = b.dataset.tab === shown;
     b.classList.toggle("on", on);
     if (on) b.setAttribute("aria-current", "page"); else b.removeAttribute("aria-current");
     const n = badge[b.dataset.tab] || 0;
@@ -195,7 +197,7 @@ function renderTabs() {
 }
 
 function setTab(id) {
-  const from = TABS.findIndex(([t]) => t === S.tab), to = TABS.findIndex(([t]) => t === id);
+  const from = TABS.findIndex(([t]) => t === (S.tab === "tokens" ? "more" : S.tab)), to = TABS.findIndex(([t]) => t === (id === "tokens" ? "more" : id));
   if (content && from !== to) {  // la sezione entra scorrendo dalla parte da cui si è toccato
     content.dataset.dir = to > from ? "r" : "l";
     clearTimeout(setTab.t); setTab.t = setTimeout(() => delete content.dataset.dir, 520);
@@ -204,6 +206,7 @@ function setTab(id) {
   S.tab = id;
   renderTabs(); renderTab(); renderTop();
   if (id === "brain") loadBrain();
+  if (id === "code") studio().refresh();
   if (id === "tokens") loadTokens();
   if (id === "reminders") { loadReminders(); loadTasks(); }
   if (id === "more") { loadBackup(); loadPhone(); }
@@ -211,7 +214,7 @@ function setTab(id) {
 
 function renderTab() {
   content.className = `tab-${S.tab}`;
-  const v = { chat: buildChat, brain: buildBrain, tokens: buildTokens, reminders: buildReminders, more: buildMore }[S.tab]();
+  const v = { chat: buildChat, code: buildCode, brain: buildBrain, tokens: buildTokens, reminders: buildReminders, more: buildMore }[S.tab]();
   content.replaceChildren(v);
   if (S.tab === "chat") requestAnimationFrame(() => { log.scrollTop = log.scrollHeight; });
 }
@@ -580,6 +583,16 @@ function countUp(node, to) {
   requestAnimationFrame(step);
 }
 
+// ---------------------------------------------------------------- codice
+let codeStudio = null, codeView = null;
+function studio() {
+  return codeStudio ||= createCodeStudio({ api, toast, errText, haptic });
+}
+function buildCode() {
+  if (!codeView) codeView = el("div", { class: "m-chat cs-wrap" }, studio().root);
+  return codeView;
+}
+
 // ---------------------------------------------------------------- promemoria
 async function loadReminders() {
   if (!cfg.token) return;
@@ -729,6 +742,7 @@ function buildReminders() {
 // ---------------------------------------------------------------- aggiornamenti dell'app
 // ---------------------------------------------------------------- aggiornamenti dell'app
 const WHATS_NEW = [
+  ["code", "Sezione Codice", "Uno spazio solo per programmare: JARVIS al massimo, con tutte le competenze di programmazione, piano, revisione, file, diff e CI del progetto."],
   ["down", "Aggiornamenti nell'app", "Scarica con avanzamento, verifica l'SHA-256 e apre l'installazione: niente browser. Vedi le novità di ogni versione saltata."],
   ["mic", "Conversazione a voce", "Tocca il microfono, parla: JARVIS risponde a voce da solo e ti riascolta, senza Invio. Tocca di nuovo per fermare."],
   ["volume", "Voce nuova", "Voce neurale italiana sempre disponibile, anche a PC spento: scegli Isabella, Elsa o Diego in Altro."],
@@ -1102,6 +1116,7 @@ function buildMore() {
       S.update?.available ? el("div", { class: "m-row" }, el("span", {}, `Disponibile ${S.update.latest}`), el("button", { class: "m-primary", onclick: openUpdate }, "Aggiorna"))
         : el("div", { class: "m-row" }, el("span", {}, S.update ? "Sei aggiornato" : "Controlla le novità"), el("button", { class: "m-ghost", onclick: () => checkUpdate(true) }, icon("refresh", 16), "Controlla"))),
     el("h3", { class: "m-sub" }, "Intelligenza"),
+    el("button", { class: "m-card m-linkrow", onclick: () => setTab("tokens") }, icon("gauge", 18), el("span", {}, "Token e consumi"), icon("down", 14)),
     el("div", { class: "m-card" }, el("div", { class: "m-row" }, el("span", {}, "Modello"), el("button", { class: "m-ghost", onclick: openModelPicker }, store.get("jarvis.model") || "Automatico")),
       el("div", { class: "m-row" }, el("span", {}, "Competenze (codice, finanza, marketing…)"), el("button", { class: "m-ghost", onclick: openSkills }, icon("sparkle", 16), "Sfoglia"))),
     el("h3", { class: "m-sub" }, "Voce e notifiche"),
@@ -1330,7 +1345,8 @@ function start() {
     onRead: (ids) => { S.notes.forEach((n) => { if (!ids || ids.includes(n.id)) n.read = true; }); renderTop(); if (notesSheet) fillNotes(); },
     onCommand: handleCommand,
     onSync: ({ scope, origin }) => {  // un altro dispositivo (o il server) ha cambiato qualcosa: ci si aggiorna subito
-      if (scope === "reminders") loadReminders();
+      if (scope === "code") { if (origin !== deviceId) codeStudio?.onSync(); }
+      else if (scope === "reminders") loadReminders();
       else if (scope === "tasks") loadTasks();
       else if (scope === "memories") { S.brain.stats = null; if (S.tab === "brain") loadBrain(); }
       else if (scope === "brain") { S.brain.docs = null; S.brain.stats = null; if (S.tab === "brain") loadBrain(); }

@@ -1,0 +1,45 @@
+/* Sezione Codice (condivisa da app Android e Windows). I colori arrivano dalle variabili dell'app che la ospita. */
+.cs { --cs-bg: var(--surf, var(--panel)); --cs-bg2: var(--surf2, var(--panel2)); --cs-acc: var(--amber, var(--cy)); --cs-line: var(--line);
+  --cs-mono: var(--mono, ui-monospace, "Cascadia Mono", Consolas, monospace); display: flex; flex-direction: column; min-height: 0; height: 100%; gap: 8px; }
+.cs button { cursor: pointer; }
+.cs-proj { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 10px; border: 1px solid var(--cs-line); border-radius: 14px; background: var(--cs-bg); }
+.cs-proj b { font-size: 14px; } .cs-proj small { color: var(--muted); }
+.cs-proj .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cs-btn { border: 1px solid var(--cs-line); background: var(--cs-bg2); color: var(--text); border-radius: 10px; padding: 6px 10px; font-size: 13px; display: inline-flex; gap: 6px; align-items: center; }
+.cs-btn.pri { background: var(--cs-acc); color: #1b1207; border-color: transparent; font-weight: 600; }
+.cs-btn:disabled { opacity: .5; }
+.cs-pill { font-size: 11.5px; padding: 2px 8px; border-radius: 99px; border: 1px solid var(--cs-line); color: var(--muted); }
+.cs-pill.ok { color: var(--ok); } .cs-pill.warn { color: var(--warn); } .cs-pill.bad { color: var(--bad); }
+.cs-plan { padding: 8px 10px; border: 1px solid var(--cs-line); border-radius: 14px; background: var(--cs-bg); font-size: 13px; }
+.cs-plan summary { cursor: pointer; display: flex; gap: 8px; align-items: center; }
+.cs-bar { height: 5px; border-radius: 99px; background: var(--cs-bg2); flex: 1; overflow: hidden; } .cs-bar i { display: block; height: 100%; background: var(--cs-acc); border-radius: 99px; transition: width .3s; }
+.cs-plan ol { margin: 8px 0 0; padding-left: 20px; } .cs-plan li { margin: 2px 0; } .cs-plan li.done { color: var(--muted); text-decoration: line-through; }
+.cs-skills { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 2px; scrollbar-width: none; } .cs-skills::-webkit-scrollbar { display: none; }
+.cs-chip { flex: none; border: 1px solid var(--cs-line); background: var(--cs-bg); color: var(--text); border-radius: 99px; padding: 5px 11px; font-size: 12.5px; white-space: nowrap; }
+.cs-chip.on { background: var(--cs-acc); color: #1b1207; border-color: transparent; font-weight: 600; }
+.cs-log { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding: 4px 2px; }
+.cs-msg { max-width: 94%; padding: 9px 12px; border-radius: 14px; background: var(--cs-bg); border: 1px solid var(--cs-line); overflow-wrap: anywhere; }
+.cs-msg.user { align-self: flex-end; background: var(--cs-acc); color: #1b1207; border-color: transparent; }
+.cs-msg.sys { align-self: center; color: var(--muted); background: transparent; border: none; font-size: 12.5px; }
+.cs-msg .md p { margin: 0 0 6px; } .cs-msg .md p:last-child { margin-bottom: 0; }
+.cs-msg pre { position: relative; margin: 6px 0; padding: 10px 12px; background: #0b0a10; color: #e8e4f4; border-radius: 10px; overflow-x: auto; font: 12.5px/1.5 var(--cs-mono); }
+.cs-msg code { font-family: var(--cs-mono); font-size: .92em; }
+.cs-copy { position: sticky; float: right; top: 0; right: 0; margin: -4px -6px 0 6px; border: 1px solid rgba(255, 255, 255, .15); background: rgba(255, 255, 255, .08); color: #e8e4f4; border-radius: 8px; font-size: 11.5px; padding: 2px 8px; }
+.cs-quick { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
+.cs-quick button { text-align: left; padding: 10px 12px; border: 1px solid var(--cs-line); border-radius: 14px; background: var(--cs-bg); color: var(--text); display: flex; flex-direction: column; gap: 2px; }
+.cs-quick button small { color: var(--muted); font-size: 11.5px; }
+.cs-comp { display: flex; gap: 8px; align-items: flex-end; }
+.cs-comp textarea { flex: 1; min-height: 42px; max-height: 160px; resize: none; padding: 10px 12px; border-radius: 14px; border: 1px solid var(--cs-line); background: var(--cs-bg); color: var(--text); font-family: var(--cs-mono); font-size: 13.5px; }
+.cs-comp .cs-btn { min-height: 42px; border-radius: 14px; }
+.cs-status { color: var(--muted); font-size: 12.5px; padding: 0 4px; min-height: 1em; }
+.cs-warn { padding: 10px 12px; border-radius: 14px; border: 1px solid var(--warn); color: var(--warn); font-size: 13px; }
+/* pannello del progetto */
+.cs-sheet-bg { position: fixed; inset: 0; z-index: 60; background: rgba(0, 0, 0, .5); display: flex; align-items: flex-end; justify-content: center; }
+.cs-sheet { width: min(900px, 100%); max-height: 88vh; display: flex; flex-direction: column; gap: 8px; padding: 14px; border-radius: 18px 18px 0 0; background: var(--bg); border: 1px solid var(--cs-line); color: var(--text); }
+.cs-tabs { display: flex; gap: 6px; } .cs-tabs .cs-btn.on { background: var(--cs-acc); color: #1b1207; }
+.cs-body { overflow: auto; min-height: 120px; flex: 1; }
+.cs-files { display: flex; flex-direction: column; } .cs-files button { text-align: left; border: 0; border-bottom: 1px solid var(--cs-line); background: transparent; color: var(--text); padding: 8px 4px; font: 13px var(--cs-mono); }
+.cs-files button.mod { color: var(--warn); } .cs-files button.new { color: var(--ok); }
+.cs-code { margin: 0; padding: 10px; background: #0b0a10; color: #e8e4f4; border-radius: 10px; overflow: auto; font: 12.5px/1.5 var(--cs-mono); white-space: pre; }
+.cs-code .add { color: #6ee7a8; } .cs-code .del { color: #ff7b93; } .cs-code .hdr { color: #ffc15e; font-weight: 600; }
+.cs-list { display: flex; flex-direction: column; gap: 6px; } .cs-list button { text-align: left; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--cs-line); background: var(--cs-bg); color: var(--text); }
