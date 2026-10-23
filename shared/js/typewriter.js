@@ -12,6 +12,7 @@ export class Typewriter {
     this.ending = false;
     this.raf = 0;
     this.last = 0;
+    this.painted = 0;
     this._done = null;
   }
 
@@ -62,8 +63,10 @@ export class Typewriter {
     const lag = this.ending ? 0.5 : this.burst ? 3 : 1.2;  // quanto può restare indietro, in secondi
     const speed = Math.max(this.cps, backlog / lag);
     this.shown = Math.min(this.target.length, this.shown + Math.max(1, Math.round(speed * dt)));
-    this._paint();
-    if (this.shown < this.target.length) this._kick();
+    // il markdown si rielabora per intero a ogni disegno: ~20 volte al secondo bastano e tengono l'app fluida anche con risposte lunghe
+    const end = this.shown >= this.target.length;
+    if (end || now - this.painted >= 48) { this.painted = now; this._paint(); }
+    if (!end) this._kick();
     else if (this._done && this.ending) { this._done(); this._done = null; }
   }
 }
