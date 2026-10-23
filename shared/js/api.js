@@ -143,7 +143,9 @@ export class Jarvis {
   reminders() { return this.#get("/api/reminders"); }
   /** Allinea i promemoria con il Calendario Google ora; risponde sempre con l'esito (e la causa, se è andata male). */
   syncReminders() { return this.#req("/api/reminders/sync", { method: "POST", timeout: 60_000 }); }
-  addReminder(text, when) { return this.#req("/api/reminders", { method: "POST", body: { text, when } }); }
+  addReminder(text, when, repeat = "") { return this.#req("/api/reminders", { method: "POST", body: { text, when, repeat } }); }
+  /** Esegue subito il backup su Hugging Face: risponde con l'esito e, se fallisce, il motivo. */
+  runBackup() { return this.#req("/api/backup/run", { method: "POST", timeout: 150_000 }); }
   deleteReminder(id) { return this.#req(`/api/reminders/${id}`, { method: "DELETE" }); }
   pending() { return this.#get("/api/pending"); }
   decide(id, approve) { return this.#req(`/api/pending/${encodeURIComponent(id)}/${approve ? "approve" : "reject"}`, { method: "POST" }); }
