@@ -174,17 +174,17 @@ class HFBackup:
             await asyncio.sleep(2 * 3 ** attempt)
         raise BackupError(explain("salvataggio su Hugging Face", last or RuntimeError("sconosciuto"))) from last
 
-    async def run(self) -> str:
+    async def run(self, force: bool = False) -> str:
         now = datetime.now(timezone.utc)
         path = f"{FOLDER}/{now:%Y-%m-%d}.json.enc"
         existing = await self._existing()
-        if path in existing:
+        if path in existing and not force:
             return f"{path} già presente, nulla da fare"
         raw = await self.export()
         blob = encrypt(derive_key(self.s), raw, compress=True)
         if len(blob) > MAX_BLOB:
             raise BackupError(f"il backup pesa {len(blob) // 1_000_000} MB dopo la compressione: oltre il limite di {MAX_BLOB // 1_000_000} MB del commit su Hugging Face")
-        stale = existing[: max(0, len(existing) + 1 - self.keep)]
+        stale = [p for p in existing if p != path][: max(0, len([p for p in existing if p != path]) + 1 - self.keep)]
         ops = [{"key": "header", "value": {"summary": f"Backup Supabase {now:%Y-%m-%d}"}},
                {"key": "file", "value": {"path": path, "encoding": "base64", "content": base64.b64encode(blob).decode()}}]
         if not await self._has_card():

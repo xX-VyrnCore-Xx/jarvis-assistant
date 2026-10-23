@@ -22,6 +22,7 @@ VERSION = "0.4.0"
 class ReminderIn(BaseModel):
     text: str = Field(min_length=1, max_length=500)
     when: str  # data/ora locale ISO 8601
+    repeat: str = Field("", max_length=20)  # daily, weekdays, weekly, monthly, yearly (vuoto: una volta)
 
 
 class DeviceIn(BaseModel):
@@ -138,7 +139,10 @@ async def add_reminder(body: ReminderIn, request: Request) -> dict:
         raise HTTPException(422, "Data non valida (usa il formato ISO 8601)") from e
     if due <= datetime.now(tz):
         raise HTTPException(422, "La data è nel passato")
-    r = await request.app.state.reminders.create(body.text, due)
+    try:
+        r = await request.app.state.reminders.create(body.text, due, body.repeat)
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from e
     return {"ok": True, "id": r["id"], "calendar": r["calendar"], "calendar_error": r.get("error", "")}
 
 
@@ -146,6 +150,28 @@ async def add_reminder(body: ReminderIn, request: Request) -> dict:
 async def delete_reminder(reminder_id: int, request: Request) -> dict:
     await request.app.state.reminders.delete(reminder_id)
     return {"ok": True}
+
+
+@router.post("/backup/run")
+async def backup_run(request: Request) -> dict:
+    """Esegue subito il backup su Hugging Face (di solito è notturno) e dice com'è andata, con il motivo se fallisce."""
+    from .backup import BackupError
+
+    st = request.app.state
+    if not st.backup.enabled:
+        raise HTTPException(409, "Backup non configurato: servono FREEAPI_DB_BACKUP_URL, FREEAPI_DB_BACKUP_TOKEN e Supabase.")
+    lock = getattr(st, "backup_lock", None) or asyncio.Lock()
+    st.backup_lock = lock
+    if lock.locked():
+        raise HTTPException(409, "Un backup è già in corso.")
+    async with lock:
+        tz = ZoneInfo(st.settings.timezone)
+        try:
+            detail, ok = await st.backup.run(force=True), True
+        except Exception as e:
+            ok, detail = False, (str(e)[:240] if isinstance(e, BackupError) else type(e).__name__)
+        await st.store.set_setting("backup_status", json.dumps({"ok": ok, "at": datetime.now(tz).isoformat(), "detail": detail}))
+    return {"ok": ok, "detail": detail}
 
 
 @router.post("/reminders/sync")

@@ -5,6 +5,7 @@ from zoneinfo import ZoneInfo
 
 from ..config import Settings
 from ..memory import Store
+from ..reminders import REPEATS, norm_repeat
 from . import UNTRUSTED, ToolRegistry
 
 log = logging.getLogger("jarvis.tools")
@@ -85,17 +86,21 @@ def register_basic_tools(reg: ToolRegistry, settings: Settings, store: Store, bu
         body = "\n\n".join(f"{r['title']}\n{r['href']}\n{r['body']}" for r in results)
         return UNTRUSTED + body if body else "Nessun risultato."
 
-    async def add_reminder(text: str, when: str) -> str:
+    async def add_reminder(text: str, when: str, repeat: str = "") -> str:
         tz = ZoneInfo(settings.timezone)
         due = parse_due(when, tz)
         if due <= datetime.now(tz):
             return "Errore: la data del promemoria è nel passato. Usa get_datetime e riprova."
-        r = await reminders.create(text, due)
-        return f"Promemoria fissato per {due:%d/%m/%Y %H:%M} {where(r)}"
+        try:
+            r = await reminders.create(text, due, repeat)
+        except ValueError as e:
+            return f"Errore: {e}"
+        again = f", si ripete {REPEATS[norm_repeat(repeat)]}" if norm_repeat(repeat) else ""
+        return f"Promemoria fissato per {due:%d/%m/%Y %H:%M}{again} {where(r)}"
 
     async def list_reminders() -> str:
         rows = await store.list_reminders()
-        return "\n".join(f"- [id {r['id']}] {r['due_at']}: {r['text']}" + (" 📅" if r.get("event_id") else "") for r in rows) or "Nessun promemoria attivo."
+        return "\n".join(f"- [id {r['id']}] {r['due_at']}: {r['text']}" + (f" 🔁 {REPEATS[r['repeat']]}" if r.get("repeat") in REPEATS else "") + (" 📅" if r.get("event_id") else "") for r in rows) or "Nessun promemoria attivo."
 
     async def delete_reminder(reminder_id: int) -> str:
         await reminders.delete(reminder_id)
@@ -171,7 +176,9 @@ def register_basic_tools(reg: ToolRegistry, settings: Settings, store: Store, bu
             "type": "object",
             "properties": {
                 "text": {"type": "string", "description": "Cosa ricordare"},
-                "when": {"type": "string", "description": "Data/ora locale ISO 8601, es. 2026-10-21T09:30:00"},
+                "when": {"type": "string", "description": "Data/ora locale ISO 8601 della PRIMA volta, es. 2026-10-21T09:30:00"},
+                "repeat": {"type": "string", "enum": ["", "daily", "weekdays", "weekly", "monthly", "yearly"],
+                           "description": "Solo se l'utente vuole che si ripeta («ogni lunedì», «ogni giorno»…): daily, weekdays (lun-ven), weekly, monthly, yearly"},
             },
             "required": ["text", "when"],
         },

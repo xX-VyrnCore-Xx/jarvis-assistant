@@ -206,3 +206,52 @@ async def test_leftover_jarvis_events_without_a_reminder_are_removed_but_fresh_o
     cal.events[keep["event_id"]]["created"] = "2026-01-01T10:00:00Z"
     assert (await svc.sync())["cleaned"] == 1
     assert cal.events["old"]["status"] == "cancelled" and cal.events["new"]["status"] == "confirmed" and cal.events[keep["event_id"]]["status"] == "confirmed"
+
+
+def test_next_due_for_each_repeat_keeps_the_time_and_skips_weekends():
+    from app.reminders import next_due, norm_repeat
+
+    mon = datetime(2026, 10, 19, 9, 30, tzinfo=TZ)  # lunedì
+    now = datetime(2026, 10, 19, 9, 31, tzinfo=TZ)
+    assert next_due(mon, "daily", now) == datetime(2026, 10, 20, 9, 30, tzinfo=TZ)
+    assert next_due(mon, "weekly", now) == datetime(2026, 10, 26, 9, 30, tzinfo=TZ)
+    fri = datetime(2026, 10, 23, 9, 30, tzinfo=TZ)
+    assert next_due(fri, "weekdays", fri + timedelta(minutes=1)) == datetime(2026, 10, 26, 9, 30, tzinfo=TZ)
+    jan31 = datetime(2026, 1, 31, 8, 0, tzinfo=TZ)
+    assert next_due(jan31, "monthly", jan31 + timedelta(minutes=1)) == datetime(2026, 2, 28, 8, 0, tzinfo=TZ)  # febbraio ha meno giorni
+    assert next_due(datetime(2024, 2, 29, 8, 0, tzinfo=TZ), "yearly", datetime(2024, 3, 1, tzinfo=TZ)) == datetime(2025, 2, 28, 8, 0, tzinfo=TZ)
+    old = datetime(2026, 10, 1, 7, 0, tzinfo=TZ)  # server spento per giorni: salta alla prossima occorrenza futura
+    assert next_due(old, "daily", now) == datetime(2026, 10, 20, 7, 0, tzinfo=TZ)
+    assert norm_repeat("Settimanale") == "weekly" and norm_repeat("") == "" and norm_repeat(None) == ""
+    with pytest.raises(ValueError):
+        norm_repeat("ogni tanto")
+
+
+@pytest.mark.asyncio
+async def test_recurring_reminder_renews_itself_when_it_fires_and_shows_on_the_calendar():
+    from app.notify import Notifier
+    from app.scheduler import deliver_due_reminders
+
+    svc, store, cal = make()
+    r = await svc.create("Riunione di team", soon(5), "weekly")
+    assert "Si ripete ogni settimana" in cal.events["ev1"]["description"]
+    assert (await store.list_reminders())[0]["repeat"] == "weekly"
+    n = Notifier(Settings(jarvis_api_token="t"), store)
+    assert await deliver_due_reminders(store, n, datetime.now(TZ) + timedelta(minutes=10), None, svc) == 1
+    rows = await store.list_reminders()
+    assert len(rows) == 1 and rows[0]["id"] != r["id"] and rows[0]["repeat"] == "weekly"  # il prossimo è già pronto
+    wall = lambda s: datetime.fromisoformat(s).replace(tzinfo=None)  # noqa: E731  (l'ora sul quadrante resta la stessa anche se in mezzo cambia l'ora legale)
+    assert wall(rows[0]["due_at"]) - wall(cal.events["ev1"]["start"]["dateTime"]) == timedelta(weeks=1)
+    assert len(cal.events) == 2
+    out = await _repeat_tool_checks(svc, store)
+    assert "ogni giorno" in out
+
+
+async def _repeat_tool_checks(svc, store):
+    reg = ToolRegistry()
+    register_basic_tools(reg, svc.s, store, reminders=svc)
+    when = soon(600).strftime("%Y-%m-%dT%H:%M:%S")
+    msg = await reg.call("add_reminder", json.dumps({"text": "vitamine", "when": when, "repeat": "daily"}))
+    assert "si ripete ogni giorno" in msg
+    assert "Errore" in await reg.call("add_reminder", json.dumps({"text": "x", "when": when, "repeat": "boh"}))
+    return await reg.call("list_reminders", "{}")

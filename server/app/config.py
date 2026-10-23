@@ -82,6 +82,7 @@ class Settings(BaseSettings):
     evening_hour: int = 21  # ora del riepilogo serale (0 = spento)
     profile_refresh_days: int = 7
     briefing_hour: int = 8  # ora del buongiorno automatico (0 = spento)
+    evening_hour: int = 21  # ora del riepilogo serale (0 = spento): cosa resta da fare e il programma di domani
     chat_per_minute: int = 20
     auth_fail_limit: int = 8
     auth_lock_s: int = 900

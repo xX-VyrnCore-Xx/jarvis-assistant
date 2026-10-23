@@ -21,7 +21,7 @@ class Store(Protocol):
     async def recent_messages(self, session_id: str, limit: int) -> list[dict]: ...
     async def add_memory(self, content: str) -> None: ...
     async def search_memories(self, query: str, limit: int) -> list[str]: ...
-    async def add_reminder(self, text: str, due_at: datetime, event_id: str = "") -> int: ...
+    async def add_reminder(self, text: str, due_at: datetime, event_id: str = "", repeat: str = "") -> int: ...
     async def update_reminder(self, reminder_id: int, due_at: datetime | None = None, text: str | None = None, event_id: str | None = None) -> None: ...
     async def list_reminders(self) -> list[dict]: ...
     async def due_reminders(self, now: datetime) -> list[dict]: ...
@@ -91,9 +91,9 @@ class MemoryStore:
         return hits[-limit:]
 
 
-    async def add_reminder(self, text, due_at, event_id=""):
+    async def add_reminder(self, text, due_at, event_id="", repeat=""):
         rid = max((r["id"] for r in self.reminders), default=0) + 1
-        self.reminders.append({"id": rid, "text": text, "due_at": due_at.isoformat(), "done": False, "event_id": event_id})
+        self.reminders.append({"id": rid, "text": text, "due_at": due_at.isoformat(), "done": False, "event_id": event_id, "repeat": repeat})
         return rid
 
     async def update_reminder(self, reminder_id, due_at=None, text=None, event_id=None):
@@ -261,9 +261,12 @@ class SupabaseStore:
         r = await self._client.delete(f"{self.base}/messages", params={"session_id": self._session_filter(session_id)}, headers=self.headers)
         r.raise_for_status()
 
-    async def add_reminder(self, text, due_at, event_id=""):
+    async def add_reminder(self, text, due_at, event_id="", repeat=""):
         h = {**self.headers, "Prefer": "return=representation"}
-        r = await self._client.post(f"{self.base}/reminders", json={"text": self.vault.seal(text), "due_at": due_at.isoformat(), "event_id": event_id}, headers=h)
+        row = {"text": self.vault.seal(text), "due_at": due_at.isoformat(), "event_id": event_id}
+        if repeat:  # la colonna `repeat` arriva con la migrazione 0002: senza ricorrenza non serve
+            row["repeat"] = repeat
+        r = await self._client.post(f"{self.base}/reminders", json=row, headers=h)
         r.raise_for_status()
         return r.json()[0]["id"]
 
@@ -284,12 +287,12 @@ class SupabaseStore:
 
     async def list_reminders(self):
         return self._reminders(await self._get(
-            "reminders", {"select": "id,text,due_at,event_id", "done": "eq.false", "order": "due_at.asc", "limit": 100}))
+            "reminders", {"select": "*", "done": "eq.false", "order": "due_at.asc", "limit": 100}))
 
     async def due_reminders(self, now):
         return self._reminders(await self._get(
             "reminders",
-            {"select": "id,text,due_at,event_id", "done": "eq.false", "due_at": f"lte.{now.isoformat()}", "order": "due_at.asc"}))
+            {"select": "*", "done": "eq.false", "due_at": f"lte.{now.isoformat()}", "order": "due_at.asc"}))
 
     async def mark_reminder_done(self, reminder_id):
         r = await self._client.patch(
@@ -303,7 +306,7 @@ class SupabaseStore:
         r.raise_for_status()
 
     async def get_reminder(self, reminder_id):
-        rows = self._reminders(await self._get("reminders", {"select": "id,text,due_at,event_id,done", "id": f"eq.{int(reminder_id)}", "limit": 1}))
+        rows = self._reminders(await self._get("reminders", {"select": "*", "id": f"eq.{int(reminder_id)}", "limit": 1}))
         return rows[0] if rows else None
 
     async def done_reminders_with_event(self):

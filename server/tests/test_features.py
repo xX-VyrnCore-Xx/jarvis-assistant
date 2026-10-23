@@ -343,3 +343,64 @@ async def test_hf_backup_skips_regenerable_data_compresses_and_explains_failures
     b2 = HFBackup(s, httpx.AsyncClient(transport=httpx.MockTransport(handler)))
     with pytest.raises(BackupError, match="HTTP 403.*non può scrivere"):
         await b2.run()
+
+
+def test_backup_run_endpoint_reports_the_reason_and_recurring_reminders_via_api(client):
+    r = client.post("/api/backup/run", headers=AUTH)
+    assert r.status_code == 409 and "non configurato" in r.json()["detail"]  # nel test non ci sono Supabase/Hugging Face
+    ok = client.post("/api/reminders", headers=AUTH, json={"text": "palestra", "when": "2999-01-01T10:00:00", "repeat": "weekly"})
+    assert ok.status_code == 201
+    assert client.get("/api/reminders", headers=AUTH).json()[0]["repeat"] == "weekly"
+    assert client.post("/api/reminders", headers=AUTH, json={"text": "x", "when": "2999-01-01T10:00:00", "repeat": "ogni tanto"}).status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_evening_briefing_is_pushed(monkeypatch):
+    from app.scheduler import evening_briefing
+
+    sent = []
+
+    class Agent:
+        async def reply(self, text, session):
+            assert session == "briefing" and "domani" in text
+            return "Resta da pagare la bolletta. Domani riunione alle 10."
+
+    class Notifier:
+        async def push(self, kind, title, body, **kw):
+            sent.append((kind, title, body, kw))
+
+    await evening_briefing(Settings(jarvis_api_token="t"), None, Agent(), Notifier())
+    assert sent[0][0] == "info" and sent[0][1] == "Buonasera, signore" and sent[0][3] == {"telegram": True}
+
+
+@pytest.mark.asyncio
+async def test_forced_backup_replaces_todays_file_without_deleting_it():
+    import json as _json
+    from datetime import datetime, timezone
+
+    from app.backup import HFBackup
+
+    s = Settings(jarvis_api_token="t", encryption_key="k", supabase_url="https://x.supabase.co", supabase_service_key="sk",
+                 freeapi_db_backup_url="https://huggingface.co/datasets/me/store/resolve/main/x", freeapi_db_backup_token="hf", hf_backup_keep=1)
+    today = f"jarvis/{datetime.now(timezone.utc):%Y-%m-%d}.json.enc"
+    commits = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        u = str(req.url)
+        if "supabase.co" in u:
+            return httpx.Response(200, json=[])
+        if "/tree/main/jarvis" in u:
+            return httpx.Response(200, json=[{"type": "file", "path": "jarvis/2020-01-01.json.enc"}, {"type": "file", "path": today}])
+        if req.method == "HEAD":
+            return httpx.Response(200)
+        if "/commit/main" in u:
+            commits.append([_json.loads(line) for line in req.content.decode().splitlines()])
+        return httpx.Response(200, json={})
+
+    b = HFBackup(s, httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    assert "già presente" in await b.run()
+    assert not commits
+    await b.run(force=True)
+    ops = commits[0]
+    assert [o["value"]["path"] for o in ops if o["key"] == "deletedFile"] == ["jarvis/2020-01-01.json.enc"]  # tiene solo l'ultimo; il file di oggi non si cancella
+    assert any(o["key"] == "file" and o["value"]["path"] == today for o in ops)

@@ -159,7 +159,7 @@ async def lifespan(app: FastAPI):
 
     pending.on_create = on_pending
     guard = None
-    task = asyncio.create_task(background_loop(settings, store, notifier, budget, app.state.backup, mirror))
+    task = asyncio.create_task(background_loop(settings, store, notifier, budget, app.state.backup, mirror, reminders))
     updates = app.state.updates = UpdateService(settings, store, notifier)
     live = app.state.live = LiveFeeds(settings, store)
     await live.load_custom()
