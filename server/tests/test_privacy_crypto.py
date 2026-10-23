@@ -13,6 +13,7 @@ from app.privacy import Redactor
 from app.tools import ToolRegistry
 from app.tools.basic import register_basic_tools
 from tests.test_agent import FakeLLM
+from tests.test_features import client  # noqa: F401
 
 IBAN = "IT60X0542811101000000123456"
 CARD = "4539 1488 0343 6467"  # numero di prova valido per Luhn
@@ -186,3 +187,60 @@ async def test_tasks_snooze_units_and_crypto_tools():
     web = ToolRegistry()
     register_web_tools(web, httpx.AsyncClient(transport=httpx.MockTransport(handler)))
     assert "bitcoin: 90,000.50 €" in await web.call("crypto_price", json.dumps({"coin": "BTC"}))
+
+
+def test_key_rotation_reads_old_data_flags_it_for_resealing_and_checks_strength():
+    old, new = Vault("chiave-vecchia-molto-lunga-abcdef123456"), Vault("chiave-nuova-molto-lunga-abcdef1234567", ["chiave-vecchia-molto-lunga-abcdef123456"])
+    sealed = old.seal("dato importante")
+    assert Vault("chiave-nuova-molto-lunga-abcdef1234567").open(sealed) == UNREADABLE  # senza la chiave precedente non si legge
+    assert new.open(sealed) == "dato importante" and new.needs_reseal(sealed)
+    fresh = new.seal(new.open(sealed))
+    assert not new.needs_reseal(fresh) and new.open(fresh) == "dato importante" and not new.needs_reseal("testo in chiaro")
+    assert Vault("corta").strength()["weak"] and not new.strength()["weak"]
+    assert Vault("token-di-accesso").strength("token-di-accesso")["shared_with_token"] and not new.strength("altro-token")["shared_with_token"]
+
+
+def test_neural_voice_text_never_carries_personal_data_and_caches_are_bounded():
+    from app.edgetts import speech_safe
+    from app.tools import CACHE_TOTAL_MAX, ToolRegistry
+
+    t = speech_safe("Scrivi a mario.rossi@example.com o chiama +39 333 1234567, IBAN IT60X0542811101000000123456, vedi https://x.it/a?t=1, chiave sk-abcdefghij1234567890, il 2026-10-23 alle 10:30")
+    assert "@" not in t and "333" not in t and "IT60" not in t and "https" not in t and "sk-abc" not in t
+    assert "un indirizzo email" in t and "un numero di telefono" in t and "un IBAN" in t and "un link" in t and "2026-10-23" in t and "10:30" in t  # date e orari restano
+
+    import asyncio
+
+    reg = ToolRegistry()
+
+    async def big(q: str) -> str:
+        return "x" * 50_000
+
+    async def mail(q: str) -> str:
+        return "contenuto di una email privata"
+
+    reg.register("web_big", "d", {"type": "object", "properties": {"q": {"type": "string"}}}, big, cache_ttl=900)
+    reg.register("gmail_read", "d", {"type": "object", "properties": {"q": {"type": "string"}}}, mail, cache_ttl=900)
+
+    async def go():
+        for i in range(60):
+            await reg.call("web_big", f'{{"q": "{i}"}}')
+        await reg.call("gmail_read", '{"q": "1"}')
+
+    asyncio.run(go())
+    assert sum(len(v[1]) for v in reg._cache.values()) <= CACHE_TOTAL_MAX  # la cache non cresce oltre il tetto
+    mail_entry = next(v for k, v in reg._cache.items() if k.startswith("gmail_read"))
+    import time
+
+    assert mail_entry[0] - time.monotonic() <= 46  # i contenuti privati scadono in 45 secondi
+    assert reg.clear_cache() > 0 and not reg._cache
+
+
+def test_privacy_endpoints(client):  # noqa: F811
+    from tests.test_features import AUTH
+
+    r = client.get("/api/privacy", headers=AUTH).json()
+    assert {f["id"] for f in r["flows"]} >= {"llm", "tts", "stt", "supabase", "github"} and r["redaction"] in ("standard", "strict", "off") and "encryption" in r
+    assert client.post("/api/privacy/neural-voice", headers=AUTH, json={"neural_voice": False}).json()["neural_voice"] is False
+    assert client.get("/api/voice", headers=AUTH).json()["neural"] is False
+    assert client.post("/api/privacy/wipe", headers=AUTH).json()["ok"] is True
+    assert "security" in client.get("/api/status", headers=AUTH).json()

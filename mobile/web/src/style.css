@@ -459,3 +459,16 @@ html { background: var(--bg); }
 
 .m-fix { background: var(--surf2); color: var(--amber); } .m-fix[hidden] { display: none; }
 .m-mic.on { transform: scale(calc(1 + var(--lvl, 0) * .22)); transition: transform .08s linear; }
+
+/* correzioni grafiche (barra in alto affollata, etichette attaccate, pulsante flottante sopra i contenuti, blocchi di codice nel tema chiaro) */
+.m-top { gap: 8px; }
+.m-title { flex: 1 1 auto; min-width: 0; } .m-title > div { min-width: 0; }
+.m-right { flex: none; gap: 6px; }
+.m-pill { white-space: nowrap; padding: 0 11px; }
+.m-right .m-bell { width: 38px; height: 38px; }
+.m-page { padding-bottom: 104px; }
+.m-card.task b { display: block; overflow-wrap: anywhere; } .m-card.task small { display: block; margin-top: 2px; color: var(--muted); font-size: 12px; }
+.m-addrow { align-items: stretch; } .m-addrow .m-ghost { min-height: 44px; white-space: nowrap; }
+.md pre, .cs-msg pre { background: #17141f; color: #efeaf7; } .md pre code { color: inherit; background: none; }
+:root[data-theme="light"] .md pre { box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .06); }
+.m-note { white-space: pre-line; }

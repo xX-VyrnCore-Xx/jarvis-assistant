@@ -149,3 +149,87 @@ async def test_empty_completion_is_retried_on_another_model_and_auth_errors_are_
     c3 = client(lambda req: httpx.Response(401, json={}))
     with pytest.raises(LLMError, match="rifiutato"):
         await c3.chat([{"role": "system", "content": "s"}, {"role": "user", "content": "u"}], None, model="auto")
+
+
+@pytest.mark.asyncio
+async def test_malformed_provider_answers_are_retried_and_generic_rejections_try_another_model(tmp_path):
+    n = {"i": 0}
+
+    def malformed_then_ok(req):
+        n["i"] += 1
+        return httpx.Response(200, text="<html>gateway</html>") if n["i"] == 1 else ok("risposta buona")
+
+    c = client(malformed_then_ok, llm_routing=False)
+    c._client = httpx.AsyncClient(transport=httpx.MockTransport(malformed_then_ok))
+    out = await c.chat([{"role": "system", "content": "s"}, {"role": "user", "content": "u"}], None, model="auto")
+    assert out["content"] == "risposta buona" and n["i"] == 2  # niente errore 500 per una risposta non JSON
+
+    seen = []
+
+    def picky(req):
+        m = json.loads(req.content)["model"]
+        seen.append(m)
+        return httpx.Response(400, json={"error": {"message": "invalid request"}}) if len(seen) == 1 else ok("ok", model=m)
+
+    c2 = client(picky)
+    c2.router = Router()
+    out = await c2.chat([{"role": "system", "content": "s"}, {"role": "user", "content": "ciao"}], None, model="auto")
+    assert out["content"] == "ok" and len(seen) == 2 and seen[0] != seen[1]
+
+
+@pytest.mark.asyncio
+async def test_a_rotated_router_key_is_reread_after_an_auth_error(tmp_path):
+    import sqlite3
+
+    db = tmp_path / "f.db"
+    con = sqlite3.connect(db)
+    con.execute("CREATE TABLE settings (key TEXT, value TEXT)")
+    con.execute("INSERT INTO settings VALUES ('unified_api_key', 'vecchia')")
+    con.commit()
+    keys = []
+
+    def handler(req):
+        keys.append(req.headers["authorization"])
+        if req.headers["authorization"] == "Bearer vecchia":
+            con.execute("UPDATE settings SET value='nuova'")  # il router ha rigenerato la chiave a un riavvio
+            con.commit()
+            return httpx.Response(401, json={"error": {"message": "invalid api key"}})
+        return ok("fatto")
+
+    s = Settings(jarvis_api_token="t", freellm_base_url="http://x/v1", freellm_db_path=str(db), freellm_api_key="", llm_routing=False)
+    c = LLMClient(s, httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    out = await c.chat([{"role": "system", "content": "s"}, {"role": "user", "content": "u"}], None, model="auto")
+    assert out["content"] == "fatto" and keys == ["Bearer vecchia", "Bearer nuova"]
+
+
+@pytest.mark.asyncio
+async def test_background_jobs_use_their_own_slots_so_chat_never_waits_for_them():
+    import asyncio
+
+    release = asyncio.Event()
+    started = {"bg": 0}
+
+    async def handler(req):
+        if json.loads(req.content)["messages"][-1]["content"] == "fondo":
+            started["bg"] += 1
+            await release.wait()
+        return ok("x")
+
+    c = client(handler, llm_routing=False)
+    bg = [asyncio.create_task(c.chat([{"role": "user", "content": "fondo"}], None, model="auto", kind="learn")) for _ in range(5)]
+    await asyncio.sleep(0.05)
+    assert started["bg"] == 2  # al massimo due lavori di fondo insieme
+    out = await asyncio.wait_for(c.chat([{"role": "user", "content": "domanda"}], None, model="auto"), 2)
+    assert out["content"] == "x"  # la chat passa comunque
+    release.set()
+    await asyncio.gather(*bg)
+
+
+def test_code_requests_get_deterministic_temperature_and_room_for_long_answers():
+    from app.routing import Route
+
+    c = client(lambda r: ok(), llm_routing=True)
+    st = c._attempt([{"role": "system", "content": "MODALITÀ CODING"}, {"role": "user", "content": "scrivi la funzione"}], None, "auto", "chat", Route("auto:smart", "code", "auto:smart", "codice"))
+    assert st["payload"]["temperature"] <= 0.25 and st["payload"]["max_tokens"] >= 3072
+    st = c._attempt([{"role": "user", "content": "ciao"}], None, "auto", "chat", Route("auto:fast", "chat", "auto:fast", "breve"))
+    assert st["payload"]["max_tokens"] == 1500 and st["payload"]["temperature"] == 0.6

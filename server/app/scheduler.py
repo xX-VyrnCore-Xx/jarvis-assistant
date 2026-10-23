@@ -53,6 +53,7 @@ async def background_loop(settings: Settings, store: Store, notifier: Notifier, 
     alerted = False
     started = time.monotonic()
     encrypted = not hasattr(store, "encrypt_existing")
+    rotated = not hasattr(store, "reseal_rotated")
     last_backup = None
     failures = 0
     while True:
@@ -76,6 +77,13 @@ async def background_loop(settings: Settings, store: Store, notifier: Notifier, 
                 encrypted = n == 0
             except Exception as e:
                 log.warning("cifratura dei dati esistenti rimandata: %s", type(e).__name__)
+        if encrypted and not rotated and now - started > 150:  # rotazione della chiave: riscrive i dati cifrati con quella precedente
+            try:
+                n = await store.reseal_rotated()
+                log.info("rotazione della chiave: %d righe riscritte con la chiave nuova", n)
+                rotated = True
+            except Exception as e:
+                log.warning("rotazione della chiave rimandata: %s", type(e).__name__)
         if now - last_prune >= PRUNE_EVERY_S:
             last_prune = now
             try:

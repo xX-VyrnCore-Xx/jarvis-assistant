@@ -93,7 +93,7 @@ async def lifespan(app: FastAPI):
     tools = ToolRegistry()
     admin = app.state.admin = FreeLLMAdmin(settings)
     budget = app.state.budget = BudgetService(admin)
-    vault = Vault(settings.encryption_key or settings.jarvis_api_token)
+    vault = Vault(settings.encryption_key or settings.jarvis_api_token, settings.encryption_key_previous.split(","))
     if settings.supabase_url and settings.supabase_service_key:
         bstore = SupabaseBrainStore(settings, vault)
     else:
@@ -158,8 +158,11 @@ async def lifespan(app: FastAPI):
     edge = EdgeTTS(settings.tts_neural, settings.tts_rate, settings.tts_pitch)
     try:
         edge.set_voice(await store.get_setting("tts_voice") or settings.tts_voice)
+        if await store.get_setting("tts_neural") == "off":
+            edge.on = False  # l'utente ha scelto la voce solo sul dispositivo
     except Exception:
         pass
+    app.state.vault = vault
     app.state.voice = VoiceService(pc, edge)
     app.state.corrector = Corrector(llm)  # correttore grammaticale (regole + modello veloce)
     notifier = app.state.notifier = Notifier(settings, store, tg)

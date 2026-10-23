@@ -129,7 +129,7 @@ function renderSide() {
   const st = S.status;
   const t = st?.tokens;
   const left = t ? pct(t.remaining_tokens, t.documented_monthly_tokens) : 0;
-  side.replaceChildren(
+  side.replaceChildren(...[
     el("div", { class: "side-card reactor" },
       gauge(left, t ? fmtTokens(t.remaining_tokens) : "—", "token disponibili"),
       el("p", { class: "tiny" }, t ? `su ${fmtTokens(t.documented_monthly_tokens)} · usati ${fmtTokens(t.used_tokens)}` : "in attesa dei dati"),
@@ -146,7 +146,7 @@ function renderSide() {
     ),
     S.update?.available ? updateCard() : null,
     el("div", { class: "side-card hint" }, icon("shield", 16), el("span", {}, "Le azioni sensibili chiedono sempre la tua conferma.")),
-  );
+  ].filter(Boolean));
 }
 
 // ------------------------------------------------------------------ chat
@@ -587,6 +587,28 @@ function buildSettings() {
   };
   drawVoice();
   const stopVoice = onVoiceChange(() => (vbox.isConnected ? drawVoice() : stopVoice()));
+  // privacy: cosa è cifrato, cosa esce dal server, voce neurale sì/no, cancellazione di chat e cache
+  const pbox = el("div", { class: "field" });
+  const drawPrivacy = async () => {
+    if (!cfg.token) return;
+    try {
+      const p = await api.privacy(), enc = p.encryption || {};
+      const tts = p.flows.find((f) => f.id === "tts");
+      let armed = 0;
+      pbox.replaceChildren(el("b", {}, "Privacy e sicurezza"),
+        el("small", {}, `Cifratura dei dati: ${enc.enabled ? "attiva (AES-256-GCM)" : "SPENTA"} · dati sensibili verso i modelli: ${p.redaction === "off" ? "non mascherati" : "mascherati"}`),
+        enc.shared_with_token ? el("small", { class: "bad" }, "La chiave di cifratura coincide con il token: imposta ENCRYPTION_KEY separata su Render.") : null,
+        el("small", {}, "Esce dal server: " + p.flows.filter((f) => f.on).map((f) => f.label.split(" (")[0]).join(", ") + "."),
+        tts ? el("label", { class: "check" }, el("input", { type: "checkbox", checked: tts.on, onchange: async (e) => { try { await api.setNeuralVoice(e.target.checked); toast(e.target.checked ? "Voce neurale attiva" : "Solo voce locale: nessun testo esce per la voce"); } catch (er) { toast(errText(er), true); } } }), "Voce neurale del server (invia il testo, senza dati personali, a Microsoft)") : null,
+        el("div", { class: "row" }, el("button", { class: "btn danger", onclick: async (e) => {
+          const b = e.currentTarget;
+          if (Date.now() - armed > 4000) { armed = Date.now(); b.textContent = "Conferma: cancella chat e cache"; setTimeout(() => { b.textContent = "Cancella chat e cache"; }, 4000); return; }
+          armed = 0;
+          try { await api.wipe(); S.histSig = null; chatLog?.replaceChildren(); addMessage("sys", "Chat e cache cancellate. Ricordi e promemoria restano."); toast("Chat e cache cancellate"); } catch (er) { toast(errText(er), true); }
+        } }, "Cancella chat e cache")));
+    } catch { /* server non pronto */ }
+  };
+  drawPrivacy();
   return el("div", { class: "page narrow" },
     panelHead("Impostazioni", "Collegamento al tuo JARVIS."),
     el("label", { class: "field" }, "Indirizzo del server", url),
@@ -596,6 +618,7 @@ function buildSettings() {
     result,
     el("label", { class: "check" }, speak, "Leggi le risposte con la voce di JARVIS"),
     isTauri ? vbox : null,
+    pbox,
     isTauri ? el("label", { class: "check" }, autostart, "Avvia JARVIS con Windows (resta nella barra delle applicazioni)") : null,
     el("div", { class: "row" }, el("button", { class: "btn danger", onclick: async () => { await clearToken(); cfg.token = ""; token.value = ""; stop(); toast("Token rimosso da questo computer"); } }, "Rimuovi il token da questo PC")),
     el("p", { class: "tiny" }, "Scorciatoia: Alt+Spazio mostra o nasconde la finestra."),

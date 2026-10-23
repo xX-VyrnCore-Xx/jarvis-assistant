@@ -20,11 +20,35 @@ def _hkdf(secret: bytes, info: bytes) -> bytes:
 
 
 class Vault:
-    def __init__(self, secret: str):
+    def __init__(self, secret: str, previous: tuple[str, ...] | list[str] = ()):
+        """`previous`: chiavi precedenti (rotazione): i dati cifrati con quelle si leggono ancora e vengono riscritti con la chiave nuova."""
         self.enabled = bool(secret)
+        self._secret_len = len(secret or "")
+        self._old: list[bytes] = []
         if self.enabled:
             self._data_key = _hkdf(secret.encode(), b"jarvis-data-v1")
             self._index_key = _hkdf(secret.encode(), b"jarvis-index-v1")
+            self._old = [_hkdf(p.strip().encode(), b"jarvis-data-v1") for p in previous if p and p.strip() and p.strip() != secret]
+
+    def strength(self, token: str = "") -> dict:
+        """Controllo di robustezza della chiave (mai la chiave stessa): lunghezza, e se è la stessa del token di accesso (in tal caso chi ha il token può decifrare i dati)."""
+        return {"enabled": self.enabled, "length": self._secret_len, "weak": self.enabled and self._secret_len < 24,
+                "shared_with_token": bool(self.enabled and token and _hkdf(token.encode(), b"jarvis-data-v1") == self._data_key), "previous_keys": len(self._old)}
+
+    def needs_reseal(self, value: str | None) -> bool:
+        """Cifrato con una chiave precedente: la chiave attuale non lo apre ma una vecchia sì."""
+        if not (self.enabled and self.sealed(value) and self._old):
+            return False
+        from cryptography.exceptions import InvalidTag
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+        try:
+            raw = base64.urlsafe_b64decode(value[len(PREFIX):])
+            AESGCM(self._data_key).decrypt(raw[:12], raw[12:], b"jarvis")
+            return False
+        except (InvalidTag, ValueError):
+            pass
+        return self.open(value) != UNREADABLE
 
     @staticmethod
     def sealed(value: str | None) -> bool:
@@ -50,9 +74,14 @@ class Vault:
 
         try:
             raw = base64.urlsafe_b64decode(value[len(PREFIX):])
-            return AESGCM(self._data_key).decrypt(raw[:12], raw[12:], b"jarvis").decode()
-        except (InvalidTag, ValueError):
+        except ValueError:
             return UNREADABLE
+        for key in (self._data_key, *self._old):  # prima la chiave attuale, poi quelle precedenti (rotazione)
+            try:
+                return AESGCM(key).decrypt(raw[:12], raw[12:], b"jarvis").decode()
+            except (InvalidTag, ValueError):
+                continue
+        return UNREADABLE
 
     def blind(self, text: str) -> str:
         """HMAC stabile di un testo (chiavi di deduplicazione, URI, nomi di entità): il database non può risalire al contenuto."""

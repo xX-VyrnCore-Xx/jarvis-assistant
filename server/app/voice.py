@@ -19,7 +19,12 @@ class VoiceService:
     def __init__(self, pc: PCBridge, edge=None):
         self.pc = pc
         self.edge = edge
-        self._cache: OrderedDict[str, bytes] = OrderedDict()
+        self._cache: OrderedDict[str, bytes] = OrderedDict()  # audio del PC (la voce resta sul PC e sul server): al massimo 40 frasi, svuotabile
+
+    def clear_caches(self) -> int:
+        n = len(self._cache) + (self.edge.clear() if self.edge else 0)
+        self._cache.clear()
+        return n
 
     @property
     def pc_enabled(self) -> bool:
