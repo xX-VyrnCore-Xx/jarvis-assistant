@@ -137,6 +137,8 @@ class Session:
     ignored: int = 0
     root: Path = Path()
     plan: list[dict] = field(default_factory=list)  # piano di lavoro: [{text, done}], visibile nella sezione Codice dell'app
+    hist: list[tuple[str, bytes | None]] = field(default_factory=list)  # (percorso, contenuto prima della modifica; None = non esisteva): serve a code_undo
+    checkpoints: dict[str, dict[str, bytes]] = field(default_factory=dict)  # punti di ripristino con nome (code_checkpoint / code_rollback)
 
 
 class CodingService:
@@ -169,10 +171,14 @@ class CodingService:
         s = self.session
         if not s:
             return ""
-        return (f"Sessione di coding attiva: repository privato {s.repo} (ramo principale {s.default_branch}, ramo di lavoro {s.branch or 'non ancora creato'}"
+        base = (f"Sessione di coding attiva: repository privato {s.repo} (ramo principale {s.default_branch}, ramo di lavoro {s.branch or 'non ancora creato'}"
                 f"{', PR #%d aperta' % s.pr if s.pr else ''}). Lavori nella sandbox con code_*: scrivi i file, committa spesso con messaggi chiari, apri la PR, controlla la CI (code_checks), "
                 "correggi dai log, poi unisci (code_merge). Il codice NON si esegue sul server: i test girano nella CI di GitHub (code_add_ci se manca; code_wait_checks per attendere). Non inventare file che non hai letto. "
                 "Per orientarti usa la mappa a grafo (code_graph, code_symbol, code_deps, code_path) invece di leggere interi file: costa molti meno token. Prima di modificare guarda code_tree/code_diff; per scheletri pronti code_scaffold. Eliminare un repository (code_repo_delete) richiede la conferma esplicita dell'utente: spiega quale e perché, poi attendi.")
+        extra = (" Come un ingegnere: code_checkpoint prima di cambiamenti rischiosi (code_rollback per tornare), code_undo per annullare, code_multi_edit per più modifiche insieme, "
+                 "code_lint dopo aver scritto codice (sintassi senza eseguire), code_review prima del commit, code_pr_diff per rivedere una PR.")
+        mem = self.project_memory()
+        return base + extra + ("\n" + mem if mem else "")
 
     # ------------------------------------------------------------------ sandbox: file
     def _path(self, rel: str) -> Path:
@@ -217,6 +223,13 @@ class CodingService:
         part = text[max(0, start - 1):max(0, start - 1) + max(1, min(lines, 800))]
         return "\n".join(f"{i}\t{l}" for i, l in enumerate(part, start)) + (f"\n[…{len(text) - start - len(part) + 1} righe ancora]" if start - 1 + len(part) < len(text) else "")
 
+    def _snap(self, rel: str) -> None:
+        """Ricorda com'era un file prima di toccarlo (al massimo 120 passi): così ogni modifica si può annullare con code_undo."""
+        s = self._need()
+        p = self._path(rel)
+        s.hist.append((rel.strip("/"), p.read_bytes() if p.is_file() else None))
+        del s.hist[:-120]
+
     def write(self, path: str, content: str) -> str:
         p = self._path(path)
         data = content.encode()
@@ -227,6 +240,7 @@ class CodingService:
             raise CodingError(f"Troppi file (massimo {MAX_FILES}).")
         if sum(len(v) for k, v in files.items() if k != path.strip("/")) + len(data) > MAX_TOTAL:
             raise CodingError("La sandbox ha raggiunto il limite di spazio.")
+        self._snap(path)
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(content, encoding="utf-8")
         return f"Scritto {path} ({len(data)} B, {content.count(chr(10)) + 1} righe)."
@@ -241,6 +255,7 @@ class CodingService:
             raise CodingError("Il testo da sostituire non c'è nel file (controlla con code_read: deve combaciare esattamente).")
         if n > 1 and not replace_all:
             raise CodingError(f"Il testo compare {n} volte: aggiungi contesto per renderlo unico, oppure usa replace_all.")
+        self._snap(path)
         p.write_text(text.replace(old, new) if replace_all else text.replace(old, new, 1), encoding="utf-8")
         return f"Modificato {path} ({n if replace_all else 1} sostituzione/i)."
 
@@ -248,6 +263,7 @@ class CodingService:
         p = self._path(path)
         if not p.is_file():
             raise CodingError("File non trovato nella sandbox.")
+        self._snap(path)
         p.unlink()
         return f"Eliminato {path} (sparirà dal repository al prossimo commit)."
 
@@ -383,6 +399,7 @@ class CodingService:
             if not mod and not gone:
                 return "Niente da committare: nessuna modifica."
             self._scan(mod)
+            syntax = self.lint()
             msg = (message or "").strip()[:200]
             if len(msg) < 4:
                 raise CodingError("Serve un messaggio di commit chiaro.")
@@ -415,7 +432,7 @@ class CodingService:
             s.head = commit["sha"]
             if not direct:
                 s.branch = target
-            return f"Commit {commit['sha'][:7]} su «{target}»: {len(mod)} file modificati, {len(gone)} eliminati."
+            return f"Commit {commit['sha'][:7]} su «{target}»: {len(mod)} file modificati, {len(gone)} eliminati." + ("\n⚠ " + syntax if syntax.startswith("Sintassi:") else "")
 
     async def open_pr(self, title: str, body: str = "") -> str:
         s = self._need()
@@ -664,6 +681,8 @@ class CodingService:
             raise CodingError("File di partenza non trovato.")
         if b.exists():
             raise CodingError("La destinazione esiste già.")
+        self._snap(src)
+        self._snap(dst)
         b.parent.mkdir(parents=True, exist_ok=True)
         a.rename(b)
         return f"Spostato {src} → {dst} (al commit comparirà come eliminato + creato)."
@@ -730,10 +749,209 @@ class CodingService:
                 hits.append(f"{k}: {n}")
                 total += n
                 if not dry_run:
+                    self._snap(k)
                     self._path(k).write_text(new, encoding="utf-8")
         if not hits:
             return "Nessuna corrispondenza."
         return ("Anteprima (nulla scritto): " if dry_run else "Sostituite ") + f"{total} occorrenze in {len(hits)} file:\n" + "\n".join(hits[:60]) + ("" if not dry_run else "\nRichiama con dry_run=false per applicare.")
+
+    # ------------------------------------------------------------------ come Claude Code: annulla, punti di ripristino, modifiche multiple, controllo sintassi
+    def undo(self, n: int = 1) -> str:
+        """Annulla le ultime n modifiche alla sandbox (scritture, modifiche, eliminazioni, spostamenti), dalla più recente."""
+        s = self._need()
+        n = max(1, min(int(n), 30))
+        done = []
+        while s.hist and len(done) < n:
+            rel, old = s.hist.pop()
+            p = self._path(rel)
+            if old is None:
+                p.unlink(missing_ok=True)
+            else:
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_bytes(old)
+            done.append(rel)
+        return ("Annullato: " + ", ".join(dict.fromkeys(done))) if done else "Niente da annullare."
+
+    def checkpoint(self, name: str = "") -> str:
+        """Salva lo stato attuale della sandbox con un nome (al massimo 5 punti): si ritorna indietro con code_rollback."""
+        s = self._need()
+        key = slug(name) if name.strip() else f"p{len(s.checkpoints) + 1}"
+        files = self._files()
+        if sum(len(v) for v in files.values()) > 3_000_000:
+            raise CodingError("Sandbox troppo grande per un punto di ripristino: committa e prosegui da lì.")
+        if key not in s.checkpoints and len(s.checkpoints) >= 5:
+            s.checkpoints.pop(next(iter(s.checkpoints)))
+        s.checkpoints[key] = files
+        return f"Punto di ripristino «{key}» salvato ({len(files)} file). Disponibili: {', '.join(s.checkpoints)}."
+
+    def rollback(self, name: str = "") -> str:
+        """Riporta la sandbox a un punto di ripristino (l'ultimo se non indichi il nome). Lo stato di prima resta in «prima-del-ripristino»."""
+        s = self._need()
+        if not s.checkpoints:
+            raise CodingError("Non ci sono punti di ripristino: crearne uno con code_checkpoint.")
+        key = slug(name) if name.strip() else list(s.checkpoints)[-1]
+        if key not in s.checkpoints:
+            raise CodingError("Punto di ripristino sconosciuto. Disponibili: " + ", ".join(s.checkpoints))
+        snap = s.checkpoints[key]
+        self.checkpoint("prima-del-ripristino")
+        shutil.rmtree(s.root, ignore_errors=True)
+        s.root.mkdir(parents=True, exist_ok=True)
+        for k, v in snap.items():
+            p = s.root / k
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_bytes(v)
+        s.hist.clear()
+        return f"Sandbox riportata al punto «{key}» ({len(snap)} file). Lo stato precedente è in «prima-del-ripristino»."
+
+    def multi_edit(self, edits: list) -> str:
+        """Più modifiche (anche su file diversi) in un colpo solo e in modo atomico: se una non combacia, non cambia nulla."""
+        s = self._need()
+        if not isinstance(edits, list) or not edits:
+            raise CodingError("Servono modifiche: elenco di {path, old, new}.")
+        if len(edits) > 40:
+            raise CodingError("Massimo 40 modifiche per volta.")
+        mark = len(s.hist)
+        done = []
+        try:
+            for i, e in enumerate(edits, 1):
+                if not isinstance(e, dict) or not all(k in e for k in ("path", "old", "new")):
+                    raise CodingError(f"Modifica {i}: servono path, old e new.")
+                done.append(self.edit(str(e["path"]), str(e["old"]), str(e["new"]), bool(e.get("replace_all"))))
+        except CodingError as err:
+            while len(s.hist) > mark:
+                rel, old = s.hist.pop()
+                p = self._path(rel)
+                if old is None:
+                    p.unlink(missing_ok=True)
+                else:
+                    p.write_bytes(old)
+            raise CodingError(f"Nessuna modifica applicata: {err}") from None
+        return f"{len(done)} modifiche applicate:\n" + "\n".join(done)
+
+    def lint(self, path: str = "") -> str:
+        """Controllo di sintassi senza eseguire nulla: Python (ast), JSON, TOML, YAML, parentesi bilanciate in JS/TS/CSS. Sui file modificati, su uno o su tutti (path=all)."""
+        self._need()
+        if path.strip() in ("all", "*"):
+            files = self._files()
+        elif path.strip():
+            files = {path.strip("/"): self._path(path).read_bytes()}
+        else:
+            files = self._changes()[0]
+        bad, n = [], 0
+        for k, v in sorted(files.items()):
+            text = v.decode("utf-8", errors="replace")
+            err = ""
+            try:
+                if k.endswith(".py"):
+                    import ast
+
+                    ast.parse(text, k)
+                elif k.endswith(".json"):
+                    json.loads(text)
+                elif k.endswith(".toml"):
+                    import tomllib
+
+                    tomllib.loads(text)
+                elif k.endswith((".yml", ".yaml")):
+                    try:
+                        import yaml
+                    except ImportError:
+                        continue
+                    list(yaml.safe_load_all(text))
+                elif k.endswith((".js", ".jsx", ".ts", ".tsx", ".css")):
+                    err = self._balance(text, k.endswith(".css"))
+                else:
+                    continue
+            except SyntaxError as e:
+                err = f"riga {e.lineno}: {e.msg}"
+            except Exception as e:  # noqa: BLE001
+                err = (str(e).splitlines() or [type(e).__name__])[0][:160]
+            n += 1
+            if err:
+                bad.append(f"✗ {k}: {err}")
+        if not n:
+            return "Nessun file da controllare (nessuna modifica, oppure formati non controllabili)."
+        return (f"Sintassi: {len(bad)} problemi su {n} file controllati:\n" + "\n".join(bad)) if bad else f"Sintassi OK su {n} file controllati."
+
+    @staticmethod
+    def _balance(text: str, css: bool = False) -> str:
+        """Parentesi bilanciate ignorando stringhe e commenti (controllo grossolano ma utile prima di committare)."""
+        pairs, close, stack = {"(": ")", "[": "]", "{": "}"}, set(")]}"), []
+        i, line, n = 0, 1, len(text)
+        while i < n:
+            c = text[i]
+            if c == "\n":
+                line += 1
+            elif text.startswith("//", i) and not css:
+                j = text.find("\n", i)
+                i = j if j >= 0 else n
+                continue
+            elif text.startswith("/*", i):
+                j = text.find("*/", i + 2)
+                line += text.count("\n", i, j if j >= 0 else n)
+                i = j + 2 if j >= 0 else n
+                continue
+            elif c in "\"'`":
+                j = i + 1
+                while j < n and text[j] != c:
+                    if c != "`" and text[j] == "\n":
+                        break
+                    j += 2 if text[j] == "\\" else 1
+                line += text.count("\n", i, min(j, n))
+                i = j + 1
+                continue
+            elif c in pairs:
+                stack.append((c, line))
+            elif c in close:
+                if not stack or pairs[stack[-1][0]] != c:
+                    return f"riga {line}: «{c}» senza apertura corrispondente"
+                stack.pop()
+            i += 1
+        return f"riga {stack[-1][1]}: «{stack[-1][0]}» mai chiusa" if stack else ""
+
+    def todos(self, limit: int = 60) -> str:
+        """Elenco dei TODO/FIXME/HACK con file e riga."""
+        self._need()
+        rx = re.compile(r"\b(TODO|FIXME|XXX|HACK)\b[:\s]*(.{0,100})")
+        out = []
+        for k, v in self._files().items():
+            if BLOCKED_NAMES.search(k) or b"\x00" in v[:2000]:
+                continue
+            for i, ln in enumerate(v.decode("utf-8", errors="ignore").splitlines(), 1):
+                if m := rx.search(ln):
+                    out.append(f"{k}:{i}  {m.group(1)} {m.group(2).strip()}")
+                    if len(out) >= limit:
+                        return "\n".join(out) + "\n[…altri]"
+        return "\n".join(out) or "Nessun TODO/FIXME."
+
+    def project_memory(self, limit: int = 3500) -> str:
+        """Le istruzioni del progetto, come il CLAUDE.md: JARVIS.md (o CLAUDE.md / AGENTS.md) nella radice, se c'è, entra nel contesto di ogni lavoro."""
+        s = self.session
+        if not s:
+            return ""
+        for name in ("JARVIS.md", "CLAUDE.md", "AGENTS.md"):
+            p = s.root / name
+            if p.is_file():
+                return f"Istruzioni del progetto ({name}):\n" + p.read_text(encoding="utf-8", errors="replace")[:limit]
+        return ""
+
+    async def pr_diff(self, number: int = 0, max_chars: int = 9000) -> str:
+        """Le modifiche di una Pull Request (file e patch, accorciati) per rivederle; senza numero usa quella della sessione."""
+        s = self._need()
+        n = int(number) or s.pr
+        if not n:
+            raise CodingError("Indica il numero della PR (nessuna PR aperta in questa sessione).")
+        files = await self.gh.call("GET", f"/repos/{s.repo}/pulls/{n}/files", params={"per_page": 40})
+        out, used = [f"PR #{n}: {len(files)} file"], 0
+        for f in files:
+            patch = (f.get("patch") or "")[:2500]
+            block = f"\n### {f['filename']} ({f['status']}, +{f['additions']}/-{f['deletions']})\n{patch}"
+            if used + len(block) > max_chars:
+                out.append("\n[…altri file omessi]")
+                break
+            out.append(block)
+            used += len(block)
+        return "".join(out)
 
     # ------------------------------------------------------------------ piano di lavoro e revisione
     def plan_set(self, steps: str) -> str:

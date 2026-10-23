@@ -627,7 +627,7 @@ async def code_overview(request: Request) -> dict:
     from .coding import LICENSES, SCAFFOLDS
 
     return {"enabled": c.enabled, "session": snap, "repos": repos, "templates": list(SCAFFOLDS), "licenses": [k for k in LICENSES if k], "skills": [s.card() for s in sk], "tools": len([n for n in st.agent.tools.names if n.startswith("code_")]),
-            "model": {"profile": last.profile, "why": last.reason} if last else None}
+            "model": {"profile": last.profile, "why": last.reason} if last else None, "jobs_active": st.codejobs.active}
 
 
 @router.get("/code/history")
@@ -811,3 +811,54 @@ async def skills_get(name: str, request: Request) -> dict:
     if not s:
         raise HTTPException(404, "Competenza inesistente")
     return {**s.card(), "triggers": s.triggers, "body": s.body}
+
+
+# ---------------------------------------------------------------- lavori di coding in background
+class JobIn(BaseModel):
+    task: str = Field(min_length=4, max_length=6000)
+    repo: str = Field("", max_length=100)
+    model: str | None = Field(None, max_length=80)
+    skill: str = Field("", max_length=60)
+    notify: bool = True
+
+
+def _jobs(request: Request):
+    return request.app.state.codejobs
+
+
+@router.get("/code/commands")
+async def code_commands() -> list[dict]:
+    """I comandi rapidi della sezione Codice (/review, /test, /fix…)."""
+    from .codecmds import listing
+
+    return listing()
+
+
+@router.get("/code/jobs")
+async def code_jobs(request: Request) -> dict:
+    j = _jobs(request)
+    return {"jobs": j.listing(), "active": j.active}
+
+
+@router.post("/code/jobs", status_code=201)
+async def code_job_start(body: JobIn, request: Request) -> dict:
+    """Avvia un lavoro di coding in background: va avanti sul server anche con l'app chiusa e avvisa a fine lavoro."""
+    try:
+        return await _jobs(request).start(body.task, body.repo, body.model, body.skill, body.notify)
+    except CodingError as e:
+        raise HTTPException(409, str(e)) from e
+
+
+@router.get("/code/jobs/{job_id}")
+async def code_job(job_id: str, request: Request) -> dict:
+    j = _jobs(request).get(job_id)
+    if not j:
+        raise HTTPException(404, "Lavoro non trovato")
+    return j
+
+
+@router.post("/code/jobs/{job_id}/cancel")
+async def code_job_cancel(job_id: str, request: Request) -> dict:
+    if not await _jobs(request).cancel(job_id):
+        raise HTTPException(409, "Il lavoro non è in coda né in corso")
+    return {"ok": True}

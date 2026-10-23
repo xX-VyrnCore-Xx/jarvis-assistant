@@ -44,6 +44,7 @@ from .proactive import Proactive
 from .brain.mirror import BrainMirror
 from .reminders import ReminderService
 from .coding import CodingService
+from .codejobs import CodeJobs
 from .tools.coding_tools import register_coding_tools
 from .voiceline import VoiceLine, router as voiceline_router
 from .phonebridge import PhoneBridge
@@ -122,7 +123,7 @@ async def lifespan(app: FastAPI):
     register_skill_tools(tools, skills, brain)
     app.state.agent.skills = skills
     coding = app.state.coding = CodingService(settings, store)
-    register_coding_tools(tools, coding, pending)
+    register_coding_tools(tools, coding, pending, jobs=lambda: app.state.codejobs)
     bridge = app.state.phone = PhoneBridge(lambda: app.state.notifier)
     try:
         bridge.enabled = await store.get_setting("contacts_access") != "off"
@@ -194,6 +195,11 @@ async def lifespan(app: FastAPI):
     proactive = app.state.proactive = Proactive(settings, store, notifier, google, brain, budget)
     proactive_task = asyncio.create_task(proactive_loop(settings, proactive))
     heartbeat_task = asyncio.create_task(heartbeat_loop(app))
+    jobs = app.state.codejobs = CodeJobs(settings, store, app.state.agent, coding, notifier)
+    try:
+        await jobs.load()  # lavori rimasti a metà per un riavvio: segnalati, non spariscono
+    except Exception:
+        log.exception("lavori di coding non caricati")
     watch = app.state.toolwatch = ToolWatch(tools, notifier)
     toolwatch_task = asyncio.create_task(toolwatch_loop(watch))  # strumenti esterni rotti escono dall'elenco, riparati rientrano
     if tg.enabled:
