@@ -64,3 +64,19 @@ def test_code_endpoints_without_an_open_project(client):
     assert client.get("/api/code/files", headers=h).status_code in (404, 409)  # senza GitHub 404, con GitHub ma senza progetto aperto 409
     assert client.post("/api/code/new", headers=h).json() == {"ok": True}
     assert client.get("/api/code/history", headers=h).json() == []
+
+
+@pytest.mark.asyncio
+async def test_create_endpoint_logic_creates_private_repo_with_scaffold_and_commits(env):
+    gh, svc = env
+    await svc.create_repo("nuovo-api", "Una API", True, "mit")
+    svc.scaffold("fastapi-api", "nuovo-api")
+    out = await svc.commit("Scheletro iniziale", direct=True)
+    assert gh.repos["mario/nuovo-api"]["private"] and "app/main.py" in svc.snapshot()["changes"]["new"] + sorted(svc.session.base) and "file" in out
+    assert svc.snapshot()["changes"] == {"modified": [], "new": [], "deleted": []}  # tutto committato sul ramo principale
+
+
+def test_create_endpoint_validates_input(client):
+    r = client.post("/api/code/create", headers=AUTH, json={"name": "x y", "scaffold": "boh"})
+    assert r.status_code in (404, 409, 422)  # senza GitHub 404; con GitHub nome/modello non validi 409/422
+    assert client.post("/api/code/create", headers=AUTH, json={"name": "a"}).status_code == 422  # troppo corto

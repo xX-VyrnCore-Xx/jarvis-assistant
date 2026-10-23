@@ -17,6 +17,7 @@ from .usage import UsageTracker, est_tokens
 log = logging.getLogger("jarvis.llm")
 
 RETRY_STATUS = {429, 500, 502, 503, 504}
+BACKGROUND = {"learn", "enrich", "rag", "call", "fix", "journal", "profile"}  # lavori di fondo: non devono mai togliere il posto alla chat
 
 
 class LLMError(RuntimeError):
@@ -50,6 +51,7 @@ class LLMClient:
             limits=httpx.Limits(max_connections=8, max_keepalive_connections=4, keepalive_expiry=60),
         )
         self._gate = asyncio.Semaphore(4)
+        self._bg_gate = asyncio.Semaphore(2)  # i lavori di fondo hanno un posto a parte: la chat dell'utente non aspetta mai l'apprendimento
         self._key = settings.freellm_api_key
         self._models: tuple[float, list[dict]] | None = None
         self.router = Router()
@@ -60,6 +62,13 @@ class LLMClient:
         if not self._key and self.s.freellm_db_path:
             self._key = read_unified_key(self.s.freellm_db_path)
         return self._key
+
+    def _forget_key(self) -> bool:
+        """Dopo un rifiuto di autenticazione: se la chiave arriva dal database di FreeLLMAPI (che può rigenerarla a un riavvio) la si rilegge. True = vale la pena ritentare."""
+        if self.s.freellm_db_path and not self.s.freellm_api_key and self._key:
+            self._key = ""
+            return True
+        return False
 
     def _payload(self, messages, tools, model: str | None, kind: str, stream: bool = False) -> dict[str, Any]:
         payload: dict[str, Any] = {"model": model or self.s.freellm_model, "messages": messages,
@@ -95,6 +104,9 @@ class LLMClient:
         payload = self._payload(msgs, tls, model, kind, stream)
         if route:
             payload["model"] = route.model
+            if route.task == "code":  # il codice vuole risposte deterministiche e abbastanza spazio per file interi
+                payload["temperature"] = min(payload["temperature"], 0.25)
+                payload["max_tokens"] = max(payload["max_tokens"], 3072)
         return {"messages": messages, "tools": tools, "payload": payload, "profile": profile, "repairs": 0, "kind": kind}
 
     def _fit(self, messages, tools, profile: str):
@@ -138,6 +150,14 @@ class LLMClient:
                 return False
             p["model"] = nxt
             log.info("modello non più disponibile: passo a %s", nxt)
+        elif category == "bad_request" and st["repairs"] == 0:
+            # un provider che rifiuta un messaggio che altri accettano (formato, filtri): una volta sola si prova un altro modello
+            failed.append(p["model"])
+            nxt = (self.router.fallback(route, 1) if p["model"].startswith("auto:") and route else None) or self.usage.best_model(bool(p.get("tools")), tuple(failed) + self._dead())
+            if not nxt or nxt == p["model"]:
+                return False
+            p["model"] = nxt
+            log.info("richiesta rifiutata da un modello: provo con %s", nxt)
         else:
             return False
         st["repairs"] += 1
@@ -159,7 +179,8 @@ class LLMClient:
         payload = st["payload"]
         failed: list[str] = []
         attempt = 0
-        async with self._gate:
+        auth_retry = False
+        async with (self._bg_gate if kind in BACKGROUND else self._gate):
             while attempt < 3:
                 delay = min(2**attempt, 4) + random.random() * 0.5  # backoff con jitter
                 if attempt and auto:
@@ -188,13 +209,30 @@ class LLMClient:
                         self.usage.record(kind, payload["model"], 0, 0, (time.monotonic() - t0) * 1000, ok=False)
                         if cat == "too_large" and route:
                             self.router.report_error(route.profile, cat)
+                        if cat == "auth" and not auth_retry and self._forget_key():
+                            auth_retry = True
+                            log.info("autenticazione rifiutata: rileggo la chiave di FreeLLMAPI e riprovo")
+                            continue
                         if cat != "auth" and self._repair(st, cat, route, failed):
                             continue  # riparato: si riprova subito, senza consumare un tentativo
                         raise LLMError(f"FreeLLMAPI ha rifiutato la richiesta (HTTP {r.status_code})")
                     else:
                         r.raise_for_status()
-                        data = r.json()
-                        msg = data["choices"][0]["message"]
+                        try:
+                            data = r.json()
+                            msg = data["choices"][0]["message"]
+                            if not isinstance(msg, dict):
+                                raise TypeError("messaggio non valido")
+                        except (ValueError, KeyError, IndexError, TypeError):  # risposta malformata (provider in difficoltà): come un guasto passeggero
+                            last = LLMError("risposta non valida")
+                            failed.append(payload["model"])
+                            self.usage.record(kind, payload["model"], 0, 0, (time.monotonic() - t0) * 1000, ok=False)
+                            if route and attempt == 0:
+                                self.router.report(route.profile, False)
+                            attempt += 1
+                            if attempt < 3:
+                                await asyncio.sleep(delay)
+                            continue
                         self._record(kind, data.get("model") or payload["model"], data.get("usage"), payload["messages"], msg.get("content") or "", (time.monotonic() - t0) * 1000, tools=bool(payload.get("tools")))
                         if self._empty(msg) and attempt < 2 and self.s.llm_repair:  # risposta vuota: un altro modello
                             last = LLMError("risposta vuota")
@@ -234,6 +272,7 @@ class LLMClient:
         payload = st["payload"]
         failed: list[str] = []
         attempt = 0
+        auth_retry = False
         async with self._gate:
             while attempt < 3:
                 if attempt and auto:
@@ -262,6 +301,9 @@ class LLMClient:
                             self.usage.record("chat", payload["model"], 0, 0, (time.monotonic() - t0) * 1000, ok=False)
                             if cat == "too_large" and route:
                                 self.router.report_error(route.profile, cat)
+                            if cat == "auth" and not auth_retry and self._forget_key():
+                                auth_retry = True
+                                continue
                             if cat != "auth" and self._repair(st, cat, route, failed):
                                 continue
                             raise LLMError(f"FreeLLMAPI ha rifiutato la richiesta (HTTP {r.status_code})")

@@ -525,8 +525,8 @@ function buildBrain() {
   const st = S.brain.stats;
   const search = el("input", { type: "text", placeholder: "Cerca nei tuoi ricordi…", value: S.brain.q, "aria-label": "Cerca", enterkeyhint: "search", autocomplete: "off" });
   search.addEventListener("input", () => brainSearch(search.value, search));
-  page.append(el("div", { class: "m-head" }, el("h2", {}, "Cervello"), st ? el("span", { class: "m-pill" }, `${st.docs} doc`) : null), search,
-    st ? el("p", { class: "m-note" }, `${st.chunks} frammenti${st.vectors < st.chunks ? ` · ${st.vectors} con ricerca per significato` : ""}`) : null, el("div", { id: "brain-body" }));
+  page.append(el("div", { class: "m-head" }, el("h2", {}, "Cervello"), Number.isFinite(st?.docs) ? el("span", { class: "m-pill" }, `${st.docs} doc`) : null), search,
+    Number.isFinite(st?.chunks) ? el("p", { class: "m-note" }, `${st.chunks} frammenti${st.vectors < st.chunks ? ` · ${st.vectors} con ricerca per significato` : ""}`) : null, el("div", { id: "brain-body" }));
   pullToRefresh(page, () => { S.brain.results = null; loadBrain(); });
   wrap.append(page, el("button", { class: "m-fab", "aria-label": "Nuova nota", onclick: () => { haptic(); newNote(); } }, icon("plus", 26)));
   setTimeout(renderBrainBody, 0);
@@ -811,6 +811,8 @@ function buildReminders() {
 // ---------------------------------------------------------------- aggiornamenti dell'app
 // ---------------------------------------------------------------- aggiornamenti dell'app
 const WHATS_NEW = [
+  ["shield", "Privacy sotto controllo", "In Altro vedi cosa è cifrato e cosa esce dal server, puoi spegnere la voce neurale e cancellare chat e cache con un tocco."],
+  ["plus", "Nuovo repository dal Codice", "Crea un repository privato con README, licenza e scheletro con test e CI direttamente dalla sezione Codice."],
   ["mic", "Microfono molto più preciso", "Ora registra la voce e la trascrive con Whisper: capisce meglio le parole, non taglia le pause e mette punteggiatura e accenti. Tocca il microfono mentre parli per chiudere la frase."],
   ["sparkle", "Correttore grammaticale", "La stella accanto al campo di testo corregge ortografia, accenti e concordanze senza cambiare il senso, con Annulla. Anche le frasi dettate si correggono da sole."],
   ["code", "Sezione Codice", "Uno spazio solo per programmare: JARVIS al massimo, con tutte le competenze di programmazione, piano, revisione, file, diff e CI del progetto."],
@@ -1128,6 +1130,39 @@ function rerenderMore() {
   renderTab();
   const page = content.querySelector(".m-page"); if (page) page.scrollTop = y;
 }
+async function loadPrivacy() {
+  if (!cfg.token || S.privacy) return;
+  try { S.privacy = await api.privacy(); if (S.tab === "more") renderTab(); } catch { /* server non pronto: alla prossima apertura */ }
+}
+
+/** Privacy e sicurezza: stato della cifratura, che cosa esce dal server e verso chi, interruttore della voce neurale, «Cancella chat e cache». */
+let wipeArmed = 0;
+function privacyCard() {
+  const p = S.privacy;
+  if (!p) return el("div", { class: "m-card" }, el("div", { class: "m-row" }, el("span", {}, "Carico lo stato della privacy…")));
+  const enc = p.encryption || {};
+  const warn = !enc.enabled ? "La cifratura dei dati è SPENTA: imposta ENCRYPTION_KEY su Render." : enc.shared_with_token ? "La chiave di cifratura coincide con il token di accesso: imposta una ENCRYPTION_KEY separata su Render." : enc.weak ? "La chiave di cifratura è corta: usane una di almeno 32 caratteri casuali." : "";
+  const wipe = el("button", { class: "m-ghost", onclick: async (e) => {
+    const b = e.currentTarget;
+    if (Date.now() - wipeArmed > 4000) { wipeArmed = Date.now(); b.textContent = "Tocca di nuovo per confermare"; setTimeout(() => { b.textContent = "Cancella"; }, 4000); return; }
+    wipeArmed = 0; b.disabled = true;
+    try { const r = await api.wipe(); S.histSig = null; log?.replaceChildren(); hello = null; if (log) showHello(); haptic("medium"); toast(`Cancellato: chat, notifiche, ${r.cache_entries} voci di cache e ${r.audio_clips} audio`); }
+    catch (er) { toast(errText(er), true); }
+    b.disabled = false; b.textContent = "Cancella";
+  } }, "Cancella");
+  return el("div", { class: "m-card" },
+    row("Cifratura dei dati", enc.enabled ? "attiva · AES-256-GCM" : "SPENTA", !!enc.enabled && !enc.weak),
+    row("Dati sensibili verso i modelli", p.redaction === "off" ? "non mascherati" : p.redaction === "strict" ? "mascherati (rigoroso)" : "mascherati", p.redaction !== "off"),
+    warn ? el("p", { class: "m-note", style: "color:var(--warn)" }, warn) : null,
+    el("div", { class: "m-row" }, el("span", {}, "Cancella chat, notifiche e cache (ricordi e promemoria restano)"), wipe),
+    el("h3", { class: "m-sub", style: "margin-top:14px" }, "Cosa esce dal server"),
+    ...p.flows.filter((f) => f.on || f.toggle).map((f) => f.toggle
+      ? el("label", { class: "m-row" }, el("span", {}, el("b", {}, f.label), el("small", { style: "display:block;color:var(--muted)" }, f.data)),
+        el("input", { type: "checkbox", class: "m-switch", "aria-label": f.label, checked: f.on, onchange: async (e) => { try { await api.setNeuralVoice(e.target.checked); f.on = e.target.checked; S.voiceCfg = null; haptic(); toast(e.target.checked ? "Voce neurale attiva" : "Solo voce del dispositivo: nessun testo esce per la voce"); } catch (er) { e.target.checked = !e.target.checked; toast(errText(er), true); } } }))
+      : el("div", { class: "m-row" }, el("span", {}, el("b", {}, f.label), el("small", { style: "display:block;color:var(--muted)" }, f.data)))),
+    el("p", { class: "m-note" }, (p.protections || []).map((t) => `• ${t}`).join("\n")));
+}
+
 function backupCard() {
   const b = S.backup;
   const when = b?.at ? new Date(b.at).toLocaleString("it-IT", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "";
@@ -1151,7 +1186,7 @@ async function loadVoiceCfg() {
 }
 
 function buildMore() {
-  loadVoiceCfg();
+  loadVoiceCfg(); loadPrivacy();
   const st = S.status;
   const url = el("input", { type: "text", value: cfg.url, spellcheck: "false", autocapitalize: "off", "aria-label": "Indirizzo del server" });
   const token = el("input", { type: "password", value: cfg.token, autocomplete: "off", "aria-label": "Token personale" });
@@ -1204,6 +1239,8 @@ function buildMore() {
       el("div", { class: "m-row" }, el("span", {}, "Canali e ore silenziose"), el("button", { class: "m-ghost", onclick: openNotifySettings }, icon("sliders", 16), "Imposta")),
       el("div", { class: "m-row" }, el("span", {}, "Notifica di prova"), el("button", { class: "m-ghost", onclick: async () => { try { await api.testNotification(); toast("Inviata"); } catch (e) { toast(errText(e), true); } } }, icon("bell", 16), "Invia"))),
     phoneAvailable ? [el("h3", { class: "m-sub" }, "Telefono"), phoneCard()] : null,
+    el("h3", { class: "m-sub" }, "Privacy e sicurezza"),
+    privacyCard(),
     el("h3", { class: "m-sub" }, "Salvataggi"),
     backupCard(),
     el("h3", { class: "m-sub" }, "Stato"),

@@ -7,6 +7,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     jarvis_api_token: str = ""
+    encryption_key_previous: str = ""  # chiavi precedenti separate da virgola (rotazione senza perdere dati): si leggono ancora, e i dati si riscrivono con la nuova
     encryption_key: str = ""  # la stessa di FreeLLMAPI: da qui si ricava la password del suo account interno
     owner_name: str = "signore"
     timezone: str = "Europe/Rome"

@@ -405,6 +405,29 @@ class SupabaseStore:
         done += await self._encrypt_legacy_settings_and_devices(batch)
         return done
 
+    async def reseal_rotated(self, batch: int = 200) -> int:
+        """Rotazione della chiave: riscrive con la chiave attuale i dati ancora cifrati con una precedente (tabelle principali; il secondo cervello resta leggibile con le chiavi vecchie)."""
+        if not (self.vault.enabled and self.vault._old):
+            return 0
+        done = 0
+        for table, cols in (("messages", ["content"]), ("memories", ["content"]), ("reminders", ["text"]), ("notifications", ["title", "body"]), ("tasks", ["text"])):
+            offset = 0
+            while True:
+                rows = await self._get(table, {"select": "id," + ",".join(cols), "order": "id.asc", "limit": batch, "offset": offset})
+                for row in rows:
+                    patch = {c: self.vault.seal(self.vault.open(row[c])) for c in cols if self.vault.needs_reseal(row.get(c))}
+                    if not patch:
+                        continue
+                    if table == "memories" and "content" in patch:
+                        patch["terms"] = self.vault.terms(self.vault.open(row["content"]))
+                    r = await self._client.patch(f"{self.base}/{table}", params={"id": f"eq.{row['id']}"}, json=patch, headers=self.headers)
+                    r.raise_for_status()
+                    done += 1
+                if len(rows) < batch:
+                    break
+                offset += batch
+        return done
+
     async def _encrypt_legacy_settings_and_devices(self, batch: int) -> int:
         done = 0
         for row in await self._get("app_settings", {"select": "key,value", "value": "not.like.enc1:*", "limit": batch}):
@@ -464,5 +487,5 @@ class SupabaseStore:
 
 def build_store(settings: Settings) -> Store:
     if settings.supabase_url and settings.supabase_service_key:
-        return SupabaseStore(settings, vault=Vault(settings.encryption_key or settings.jarvis_api_token))
+        return SupabaseStore(settings, vault=Vault(settings.encryption_key or settings.jarvis_api_token, settings.encryption_key_previous.split(",")))
     return MemoryStore()

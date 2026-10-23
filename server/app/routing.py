@@ -14,7 +14,7 @@ BAD_AFTER, BAD_FOR_S, WINDOW_S = 3, 300, 600
 CODE = re.compile(r"```|^\s*(def|class|import|from|function|const|let|var|public|private|fn|SELECT|CREATE|INSERT)\b|Traceback|\bat \S+\(\S+:\d+|\b\w+\.(py|js|ts|tsx|rs|go|java|kt|cpp|c|sql|yml|yaml|json|html|css)\b(:\d+)?|"
                   r"\b(codice|script|funzione|bug|errore di compilazione|compila|refactor|repository|repo|commit|pull request|branch|merge|api|endpoint|database|query|deploy|docker|test unitari|sandbox|programma|implementa)\b", re.I | re.M)
 SIMPLE = re.compile(r"\b(traduci|traduzione|riassumi|riassunto|correggi|riformula|elenca|sinonimi|che ore|quanto fa|converti|definizione di|significa)\b", re.I)
-THINK = re.compile(r"\b(analizza|analisi|confronta|strategia|dimostra|ragiona|pro e contro|spiega in dettaglio|approfondisci|progetta|architettura|pianifica|valuta|ottimizza|perché|motiva|passo per passo|business plan)\b", re.I)
+THINK = re.compile(r"\b(analizza|analisi|confronta|strategia|dimostra|ragiona|pro e contro|spiega in dettaglio|approfondisci|progetta|architettura|pianifica|valuta|ottimizza|motiva|passo per passo|business plan)\b", re.I)
 
 
 @dataclass

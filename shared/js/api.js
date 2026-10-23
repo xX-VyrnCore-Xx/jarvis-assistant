@@ -136,6 +136,7 @@ export class Jarvis {
   codeFile(path, start = 1) { return this.#req(`/api/code/file?path=${encodeURIComponent(path)}&start=${start}`); }
   codeDiff() { return this.#req("/api/code/diff", { timeout: 30_000 }); }
   codeChecks() { return this.#req("/api/code/checks", { timeout: 30_000 }); }
+  codeCreate(p) { return this.#req("/api/code/create", { method: "POST", body: p, timeout: 120_000 }); }
   codeResume(repo) { return this.#req("/api/code/resume", { method: "POST", body: { repo }, timeout: 90_000 }); }
   /** Dettatura di qualità: manda l'audio registrato e riceve il testo (Whisper del router), già corretto se `fix` è quick/full. */
   stt(blob, fix = "quick") { return this.#req(`/api/stt?fix=${fix}`, { method: "POST", body: blob, binary: (blob.type || "audio/webm").split(";")[0], timeout: 60_000 }); }
@@ -168,6 +169,10 @@ export class Jarvis {
   newChat() { return this.#req("/api/chat/new", { method: "POST" }); }
   contactsAccess() { return this.#req("/api/contacts/access"); }
   setContactsAccess(enabled) { return this.#req("/api/contacts/access", { method: "POST", body: { enabled } }); }
+  privacy() { return this.#req("/api/privacy"); }
+  setNeuralVoice(neural_voice) { return this.#req("/api/privacy/neural-voice", { method: "POST", body: { neural_voice } }); }
+  /** «Cancella chat e cache»: conversazioni (normale e Codice), notifiche, cache e audio in memoria. Ricordi, cervello, promemoria e attività restano. */
+  wipe() { return this.#req("/api/privacy/wipe", { method: "POST" }); }
   tasks() { return this.#get("/api/tasks"); }
   addTask(text, list = "attività") { return this.#req("/api/tasks", { method: "POST", body: { text, list } }); }
   setTaskDone(id, done) { return this.#req(`/api/tasks/${id}`, { method: "PATCH", body: { done } }); }

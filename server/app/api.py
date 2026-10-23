@@ -121,6 +121,8 @@ async def status(request: Request) -> dict:
         "pending_actions": len(st.pending.list_pending()),
         "calendar_sync": {**st.reminders.status, "linked": st.reminders.linked},
         "tokens": None,
+        "security": {"encryption": bool(getattr(st, "vault", None) and st.vault.enabled), "weak_key": bool(getattr(st, "vault", None) and st.vault.strength(s.jarvis_api_token).get("weak")),
+                     "key_is_token": bool(getattr(st, "vault", None) and st.vault.strength(s.jarvis_api_token).get("shared_with_token")), "redaction": s.privacy_mode},
         "tools_down": sorted(getattr(st, "toolwatch", None).tools.down) if getattr(st, "toolwatch", None) else [],
     }
     if st.budget.enabled:
@@ -468,6 +470,61 @@ async def tools_health_run(request: Request) -> dict:
     return {"ok": True, "results": await asyncio.wait_for(w.run(), 120), "down": w.tools.down}
 
 
+# ---------------------------------------------------------------- privacy e sicurezza
+@router.get("/privacy")
+async def privacy(request: Request) -> dict:
+    """Che cosa è protetto e che cosa esce dal server (e verso chi): la risposta alla domanda «quanto è privato JARVIS?»."""
+    st = request.app.state
+    s = st.settings
+    vault = getattr(st, "vault", None)
+    strength = vault.strength(s.jarvis_api_token) if vault else {"enabled": False}
+    edge = st.voice.edge
+    flows = [
+        {"id": "llm", "label": "Modelli di linguaggio (provider gratuiti tramite FreeLLMAPI)", "data": "il testo delle richieste: email, IBAN, carte, telefoni e chiavi sono sostituiti da segnaposto prima dell'invio" if s.privacy_mode != "off" else "il testo delle richieste, SENZA mascheramento", "on": True, "masked": s.privacy_mode != "off"},
+        {"id": "tts", "label": "Voce neurale (servizio Microsoft Edge)", "data": "il testo delle risposte lette ad alta voce, senza dati personali (email, IBAN, telefoni, link diventano parole generiche)", "on": bool(edge and edge.on), "toggle": True},
+        {"id": "stt", "label": "Dettatura (Whisper del router)", "data": "l'audio registrato mentre detti; non viene conservato sul server", "on": True},
+        {"id": "github", "label": "GitHub", "data": "il codice dei repository privati creati da JARVIS", "on": st.coding.enabled},
+        {"id": "google", "label": "Google", "data": "agenda, email e Drive, solo se hai collegato l'account", "on": st.google.enabled},
+        {"id": "supabase", "label": "Supabase", "data": "messaggi, ricordi e attività, cifrati AES-256-GCM prima di uscire dal server", "on": bool(s.supabase_url and s.supabase_service_key)},
+        {"id": "backup", "label": "Hugging Face (dataset privato)", "data": "backup notturno cifrato AES-256-GCM", "on": st.backup.enabled},
+        {"id": "telegram", "label": "Telegram", "data": "i messaggi che scambi con il bot", "on": st.tg.enabled},
+    ]
+    return {"encryption": strength, "redaction": s.privacy_mode, "flows": flows,
+            "protections": ["Token di accesso confrontato in tempo costante, con blocco dopo i tentativi falliti", "Intestazioni di sicurezza (HSTS, no-store, CSP) su tutte le risposte",
+                            "Nessun dato personale nei log; i corpi degli errori dei provider non vengono mai registrati", "Cache in memoria (mai su disco) con scadenza e tetto di dimensione; email, calendario, file e ricordi restano 45 secondi",
+                            "La rubrica non lascia mai il telefono: al server arrivano solo nomi e codici, filtrati"]}
+
+
+class PrivacyToggle(BaseModel):
+    neural_voice: bool
+
+
+@router.post("/privacy/neural-voice")
+async def privacy_neural_voice(body: PrivacyToggle, request: Request) -> dict:
+    """Voce neurale sì/no: spenta, il testo delle risposte non lascia mai il server (si usa la voce del dispositivo)."""
+    e = request.app.state.voice.edge
+    if e:
+        e.on = body.neural_voice
+        if not body.neural_voice:
+            e.clear()
+    await request.app.state.store.set_setting("tts_neural", "on" if body.neural_voice else "off")
+    return {"ok": True, "neural_voice": body.neural_voice}
+
+
+@router.post("/privacy/wipe")
+async def privacy_wipe(request: Request, x_device_id: str = Header(default="", max_length=64)) -> dict:
+    """«Cancella chat e cache»: conversazioni (normale e Codice), notifiche, risultati in cache e audio in memoria. Ricordi, cervello, promemoria e attività restano."""
+    st = request.app.state
+    await st.store.clear_messages("main")
+    await st.store.clear_messages("code")
+    await st.store.clear_notifications(False)
+    cache = st.agent.tools.clear_cache()
+    audio = st.voice.clear_caches()
+    st.notifier.sync("chat", x_device_id)
+    st.notifier.sync("code", x_device_id)
+    return {"ok": True, "cache_entries": cache, "audio_clips": audio}
+
+
 # ---------------------------------------------------------------- dettatura e correttore grammaticale
 HALLUCINATION = re.compile(r"sottotitoli|amara\.org|grazie (a tutti )?per (la visione|aver guardato|l'attenzione)|iscriviti al canale|alla prossima|subtitles|thanks for watching|www\.", re.I)
 
@@ -528,6 +585,33 @@ class CodeResume(BaseModel):
     repo: str = Field(min_length=1, max_length=100)
 
 
+class CodeCreate(BaseModel):
+    name: str = Field(min_length=2, max_length=60)
+    description: str = Field("", max_length=300)
+    readme: bool = True
+    license: str = Field("mit", max_length=12)
+    scaffold: str = Field("", max_length=30)  # python-cli, fastapi-api, node-express-api, static-site, telegram-bot (vuoto: nessuno)
+
+
+@router.post("/code/create")
+async def code_create(body: CodeCreate, request: Request) -> dict:
+    """Crea un repository PRIVATO nuovo dalla sezione Codice (il tocco dell'utente sul pulsante è la conferma), con README, licenza e, se richiesto, uno scheletro con test e CI già committato."""
+    from .coding import SCAFFOLDS
+
+    c = _code(request)
+    if body.scaffold and body.scaffold not in SCAFFOLDS:
+        raise HTTPException(422, "Modello sconosciuto: " + ", ".join(SCAFFOLDS))
+    try:
+        msg = await c.create_repo(body.name.strip(), body.description.strip(), body.readme, body.license.strip().lower() or "nessuna")
+        if body.scaffold:
+            c.scaffold(body.scaffold, body.name.strip())
+            msg += " " + await c.commit("Scheletro iniziale", direct=True)
+    except CodingError as e:
+        raise HTTPException(409, str(e)) from e
+    request.app.state.notifier.sync("code")
+    return {"ok": True, "message": msg, "session": c.snapshot()}
+
+
 @router.get("/code/overview")
 async def code_overview(request: Request) -> dict:
     """Tutto ciò che serve alla sezione Codice: stato del progetto, repository di JARVIS, competenze di programmazione e modello in uso."""
@@ -540,7 +624,9 @@ async def code_overview(request: Request) -> dict:
         repos = []
     sk = st.skills.coding_skills() if st.skills else []
     last = st.llm.router.last
-    return {"enabled": c.enabled, "session": snap, "repos": repos, "skills": [s.card() for s in sk], "tools": len([n for n in st.agent.tools.names if n.startswith("code_")]),
+    from .coding import LICENSES, SCAFFOLDS
+
+    return {"enabled": c.enabled, "session": snap, "repos": repos, "templates": list(SCAFFOLDS), "licenses": [k for k in LICENSES if k], "skills": [s.card() for s in sk], "tools": len([n for n in st.agent.tools.names if n.startswith("code_")]),
             "model": {"profile": last.profile, "why": last.reason} if last else None}
 
 
@@ -615,7 +701,7 @@ async def voice_config(request: Request) -> dict:
 
     e = request.app.state.voice.edge
     return {"active": e.voice if e else "", "options": [{"id": k, "label": v[1]} for k, v in VOICES.items()], "available": bool(e and e.enabled),
-            "pc": request.app.state.voice.pc_enabled, "error": e.last_error if e else ""}
+            "pc": request.app.state.voice.pc_enabled, "error": e.last_error if e else "", "neural": bool(e and e.on)}
 
 
 @router.post("/voice")
