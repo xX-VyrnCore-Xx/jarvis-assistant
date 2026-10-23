@@ -135,6 +135,13 @@ def register_basic_tools(reg: ToolRegistry, settings: Settings, store: Store, bu
 
     async def forget(memory_id: int) -> str:
         await store.delete_memory(memory_id)
+        if brain is not None and brain.enabled:  # sparisce anche dal secondo cervello
+            from ..brain.mirror import BrainMirror
+
+            try:
+                await BrainMirror(brain, store).sync_all()
+            except Exception:
+                pass
         return "Dimenticato."
 
     reg.register("get_datetime", "Data e ora correnti.", {"type": "object", "properties": {}}, get_datetime)

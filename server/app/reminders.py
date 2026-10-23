@@ -73,6 +73,7 @@ class ReminderService:
         self.on_change = None  # callable(): avvisa gli altri dispositivi che i promemoria sono cambiati
         self.status: dict = {"ok": None, "at": "", "detail": "", "counts": {}, "failures": 0}
         self._last_logged = ""
+        self.mirror = None  # BrainMirror: tiene il secondo cervello allineato ai promemoria
 
     def _changed(self) -> None:
         if self.on_change:
@@ -132,6 +133,8 @@ class ReminderService:
                 error = explain(e)
                 self._record(False, error)
         rid = await self.store.add_reminder(text, due, event_id)
+        if self.mirror:
+            await self.mirror.reminder_put(rid, text, due)
         self._changed()
         return {"id": rid, "event_id": event_id, "calendar": bool(event_id), "error": error}
 
@@ -154,6 +157,8 @@ class ReminderService:
                 self._record(False, explain(e))
                 await self._set_orphans(await self._orphans() + [eid])
         await self.store.delete_reminder(reminder_id)
+        if self.mirror:  # sparisce anche dal cervello, con i fatti appresi dalla stessa richiesta
+            await self.mirror.reminder_drop(reminder_id, (row or {}).get("text", ""))
         self._changed()
         return row is not None
 
@@ -163,6 +168,8 @@ class ReminderService:
             return None
         due = datetime.now(self.tz) + timedelta(minutes=max(1, minutes))
         await self.store.update_reminder(reminder_id, due_at=due)
+        if self.mirror:
+            await self.mirror.reminder_put(reminder_id, row["text"], due)
         if self.linked:
             try:
                 if row.get("event_id"):
@@ -271,8 +278,10 @@ class ReminderService:
                     else:
                         res["error"] = explain(e)
                         continue
-            if ev.get("status") == "cancelled":  # eliminato sul Calendario → sparisce anche dall'app
+            if ev.get("status") == "cancelled":  # eliminato sul Calendario → sparisce anche dall'app e dal cervello
                 await self.store.delete_reminder(r["id"])
+                if self.mirror:
+                    await self.mirror.reminder_drop(r["id"], r["text"])
                 res["removed"] += 1
                 continue
             start = (ev.get("start") or {}).get("dateTime")
@@ -286,6 +295,8 @@ class ReminderService:
                 fields["text"] = text
             if fields:
                 await self.store.update_reminder(r["id"], **fields)
+                if self.mirror:
+                    await self.mirror.reminder_put(r["id"], fields.get("text", r["text"]), fields.get("due_at", r["due_at"]))
                 res["updated"] += 1
         await self._cleanup(res, now, events)
         known = {r.get("event_id") for r in await self.store.list_reminders()}
@@ -296,7 +307,9 @@ class ReminderService:
             due = datetime.fromisoformat(start.replace("Z", "+00:00")).astimezone(self.tz)
             if due <= now:
                 continue
-            await self.store.add_reminder(_clean(e.get("summary", "")), due, e["id"])
+            rid = await self.store.add_reminder(_clean(e.get("summary", "")), due, e["id"])
+            if self.mirror:
+                await self.mirror.reminder_put(rid, _clean(e.get("summary", "")), due)
             try:
                 await self.google.request("PATCH", f"{CAL}/events/{e['id']}", params={"sendUpdates": "none"}, json={"extendedProperties": {"private": TAG}})
             except Exception as ex:

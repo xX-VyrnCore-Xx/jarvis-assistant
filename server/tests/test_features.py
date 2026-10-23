@@ -288,3 +288,58 @@ async def test_voice_is_relayed_to_the_pc_and_cached():
 def test_tts_endpoint_without_pc(client):
     assert client.post("/api/tts", json={"text": "ciao"}, headers=AUTH).status_code == 404
     assert client.post("/api/tts", json={"text": "ciao"}).status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_hf_backup_skips_regenerable_data_compresses_and_explains_failures(monkeypatch):
+    import base64
+    import types
+    import json as _json
+
+    from app.backup import BackupError, HFBackup, decrypt, derive_key
+
+    s = Settings(jarvis_api_token="t", encryption_key="k", supabase_url="https://x.supabase.co", supabase_service_key="sk",
+                 freeapi_db_backup_url="https://huggingface.co/datasets/me/store/resolve/main/freellmapi.db.backup", freeapi_db_backup_token="hf")
+    seen, commits, state = [], [], {"fail": 0, "status": 503}
+    docs = [{"id": 1, "source": "note"}, {"id": 2, "source": "news"}, {"id": 3, "source": "wiki"}]
+    chunks = [{"id": 10, "doc_id": 1, "text": "mio"}, {"id": 11, "doc_id": 2, "text": "notizia"}, {"id": 12, "doc_id": 3, "text": "wiki"}]
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        u = str(req.url)
+        if "supabase.co" in u:
+            seen.append((req.url.path.rsplit("/", 1)[-1], dict(req.url.params)))
+            table = req.url.path.rsplit("/", 1)[-1]
+            rows = {"brain_docs": [d for d in docs if d["source"] not in ("news", "wiki")], "brain_chunks": chunks}.get(table, [])
+            return httpx.Response(200, json=rows if req.url.params["offset"] == "0" else [])
+        if "/tree/main/jarvis" in u:
+            return httpx.Response(404)
+        if req.method == "HEAD":
+            return httpx.Response(200)
+        if "/commit/main" in u:
+            if state["fail"]:
+                state["fail"] -= 1
+                return httpx.Response(state["status"], json={"error": "boom"})
+            commits.append(req.content)
+            return httpx.Response(200, json={})
+        return httpx.Response(200, json={})
+
+    b = HFBackup(s, httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    async def no_wait(_):
+        return None
+
+    monkeypatch.setattr("app.backup.asyncio", types.SimpleNamespace(sleep=no_wait))  # niente attese reali nei tentativi
+    state["fail"] = 1  # un guasto passeggero: al secondo tentativo riesce
+    await b.run()
+    ops = [_json.loads(line) for line in commits[0].decode().splitlines()]
+    blob = base64.b64decode(next(o["value"] for o in ops if o["key"] == "file")["content"])
+    assert blob[:3] == b"JV2"
+    data = _json.loads(decrypt(derive_key(s), blob))
+    assert [d["id"] for d in data["tables"]["brain_docs"]] == [1] and [c["id"] for c in data["tables"]["brain_chunks"]] == [10]
+    assert "app_settings" in data["tables"]
+    chunk_call = next(p for t, p in seen if t == "brain_chunks")
+    assert "emb" not in chunk_call["select"].split(",")  # i vettori si ricalcolano
+
+    state["fail"], state["status"] = 5, 403
+    b2 = HFBackup(s, httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    with pytest.raises(BackupError, match="HTTP 403.*non può scrivere"):
+        await b2.run()

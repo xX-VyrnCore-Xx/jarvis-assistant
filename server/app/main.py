@@ -38,6 +38,7 @@ from .brain.knowledge import Knowledge
 from .skills.registry import SkillRegistry
 from .skills.tools import register_skill_tools
 from .proactive import Proactive
+from .brain.mirror import BrainMirror
 from .reminders import ReminderService
 from .coding import CodingService
 from .tools.coding_tools import register_coding_tools
@@ -144,6 +145,8 @@ async def lifespan(app: FastAPI):
     app.state.voice = VoiceService(pc)
     notifier = app.state.notifier = Notifier(settings, store, tg)
     reminders.on_change = lambda: notifier.sync("reminders")
+    mirror = app.state.mirror = BrainMirror(brain, store)  # il cervello segue promemoria, ricordi e attività
+    reminders.mirror = mirror
     prev = pending.on_create
 
     def on_pending(p) -> None:
@@ -156,13 +159,13 @@ async def lifespan(app: FastAPI):
 
     pending.on_create = on_pending
     guard = None
-    task = asyncio.create_task(background_loop(settings, store, notifier, budget, app.state.backup))
+    task = asyncio.create_task(background_loop(settings, store, notifier, budget, app.state.backup, mirror))
     updates = app.state.updates = UpdateService(settings, store, notifier)
     live = app.state.live = LiveFeeds(settings, store)
     await live.load_custom()
     register_live_tools(tools, live, updates, brain, getattr(brain, "knowledge", None), VERSION)
     live_task = asyncio.create_task(live_loop(settings, store, live, brain, getattr(brain, "knowledge", None))) if settings.live_news else None
-    brain_task = asyncio.create_task(brain_loop(settings, store, brain, app.state.agent, notifier))
+    brain_task = asyncio.create_task(brain_loop(settings, store, brain, app.state.agent, notifier, mirror))
     maint_task = asyncio.create_task(maintenance_loop(settings, store, usage, updates, notifier, reminders))
     proactive = app.state.proactive = Proactive(settings, store, notifier, google, brain, budget)
     proactive_task = asyncio.create_task(proactive_loop(settings, proactive))
