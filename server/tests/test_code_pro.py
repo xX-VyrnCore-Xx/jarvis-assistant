@@ -198,3 +198,85 @@ def test_jobs_and_commands_endpoints(client):
     assert client.post("/api/code/jobs", headers=AUTH, json={"task": "x"}).status_code == 422
     r = client.post("/api/code/jobs", headers=AUTH, json={"task": "Scrivi i test del parser"})
     assert r.status_code in (201, 409)  # senza GITHUB_TOKEN 409 con spiegazione
+
+
+@pytest.mark.asyncio
+async def test_exec_runs_on_github_temp_branch_and_cleans_up(env):
+    gh, svc = env
+    svc.POLL_S = 0
+    await svc.create_repo("ex1", "Prova", True, "mit")
+    svc.write("src/a.py", "x = 1\n")
+    out = await svc.exec("python -m pytest -q")
+    assert out.startswith("✓ riuscito") and "3 passed" in out and "##[" not in out
+    repo = gh.repos["mario/ex1"]
+    assert not [b for b in repo["refs"] if b.startswith("jarvis-exec/")]  # ramo temporaneo eliminato
+    assert svc.session.branch == "" and "src/a.py" in svc.snapshot()["changes"]["new"]  # la sandbox non è stata committata sul ramo di lavoro
+    exec_commit = [c for c in repo["commits"].values() if c["message"].startswith("JARVIS exec")][0]
+    assert {"src/a.py", ".jarvis-exec.sh", ".github/workflows/jarvis-exec.yml"} <= set(exec_commit["files"])
+    import base64
+
+    wf = [v for v in repo["blobs"].values() if "JARVIS exec" in base64.b64decode(v).decode(errors="ignore")][0]
+    text = base64.b64decode(wf).decode()
+    assert "persist-credentials: false" in text and "contents: read" in text and "secrets" not in text
+
+    gh.exec_state = "fail"
+    assert (await svc.exec("pytest")).startswith("✗ fallito")
+
+
+@pytest.mark.asyncio
+async def test_exec_pending_blocks_secrets_and_limit(env):
+    gh, svc = env
+    svc.POLL_S = 0
+    await svc.create_repo("ex2", "Prova", True, "mit")
+    with pytest.raises(CodingError, match="Comando mancante"):
+        await svc.exec("  ")
+    svc.write("config.py", "KEY = 'ghp_" + "a" * 36 + "'\n")
+    with pytest.raises(CodingError, match="Commit bloccato"):
+        await svc.exec("pytest")  # i segreti non escono nemmeno verso un ramo temporaneo
+    svc.delete("config.py")
+    gh.exec_state = "pending"
+    out = await svc.exec("sleep 999", timeout=5)
+    assert "ancora in corso" in out and svc._exec_pending
+    gh.exec_state = "ok"
+    assert (await svc.exec_result(55)).startswith("✓") and not svc._exec_pending
+    with pytest.raises(CodingError, match="Nessuna esecuzione"):
+        await svc.exec_result(0)
+    svc.session.execs = 15
+    with pytest.raises(CodingError, match="limite"):
+        await svc.exec("pytest")
+
+
+@pytest.mark.asyncio
+async def test_read_many(env):
+    gh, svc = env
+    await svc.create_repo("ex3", "Prova", True, "mit")
+    svc.write("a.py", "a = 1\nb = 2\n")
+    svc.write("b.py", "c = 3\n")
+    out = svc.read_many("a.py, b.py, nope.py")
+    assert "=== a.py ===" in out and "1\ta = 1" in out and "c = 3" in out and "Errore" in out
+    with pytest.raises(CodingError):
+        svc.read_many("  ")
+
+
+@pytest.mark.asyncio
+async def test_telegram_code_and_lavori_commands(env):
+    from tests.test_tools_bot import make_bot
+
+    gh, svc = env
+    await svc.create_repo("tg1", "Prova", True, "mit")
+    bot, st = make_bot()
+    st.codejobs = CodeJobs(Settings(jarvis_api_token="t"), MemoryStore(), FakeAgent(slow=True), svc, FakeNotifier())
+    msg = lambda text, i: {"update_id": i, "message": {"from": {"id": 42}, "chat": {"id": 42}, "text": text}}  # noqa: E731
+    await bot.handle_update(msg("/code", 1))
+    assert "Mi dica cosa" in st.tg.out[-1][0]
+    await bot.handle_update(msg("/code aggiungi i test al parser e apri la PR", 2))
+    assert "Lavoro avviato" in st.tg.out[-1][0]
+    jid = next(iter(st.codejobs.jobs))
+    await asyncio.sleep(0.1)
+    await bot.handle_update(msg("/lavori", 3))
+    assert jid in st.tg.out[-1][0] and "stop" in st.tg.out[-1][0]
+    await bot.handle_update(msg(f"/lavori stop {jid}", 4))
+    assert "annullato" in st.tg.out[-1][0]
+    await _wait(st.codejobs, jid, ("cancelled",))
+    await bot.handle_update(msg("/lavori stop zzzz", 5))
+    assert "Nessun lavoro" in st.tg.out[-1][0]

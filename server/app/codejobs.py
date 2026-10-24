@@ -27,7 +27,7 @@ MAX_SECONDS = 30 * 60
 BG_PREFIX = (
     "LAVORO IN BACKGROUND. L'utente non è presente e non può rispondere: non fare domande, scegli tu con buon senso e dichiara le ipotesi nel riepilogo. "
     "Pianifica con code_plan, lavora a passi piccoli e committa spesso su un ramo di lavoro. Usa code_checkpoint prima dei cambiamenti rischiosi e code_lint dopo aver scritto codice. "
-    "Dopo il commit apri la PR, attendi la CI (code_wait_checks) e se è rossa leggi i log (code_ci_logs) e correggi la causa vera, fino a 3 tentativi. "
+    "Prova il codice davvero con code_exec (test, lint, build) prima di committare. Dopo il commit apri la PR, attendi la CI (code_wait_checks) e se è rossa leggi i log (code_ci_logs) e correggi la causa vera, fino a 3 tentativi. "
     "Non creare né eliminare repository (servono conferme umane) e non unire la PR (code_merge) a meno che la richiesta lo dica esplicitamente. "
     "Chiudi con un riepilogo breve in italiano: cosa hai fatto, file toccati, PR e stato della CI, cosa resta da fare.\n\nRICHIESTA:\n"
 )

@@ -821,6 +821,7 @@ function buildReminders() {
 // ---------------------------------------------------------------- aggiornamenti dell'app
 // ---------------------------------------------------------------- aggiornamenti dell'app
 const WHATS_NEW = [
+  ["code", "Il codice si esegue davvero", "Nel Codice, scheda Esegui (o «/run»): test, lint e build girano su GitHub sulle tue modifiche, senza committare e senza segreti, e JARVIS legge l'esito. Blocchi di codice colorati e, da Telegram, «/code» per lavori in background."],
   ["cloud", "Coding in background", "Nella sezione Codice attiva la nuvola (o scrivi «/bg …»): JARVIS lavora da solo sul server, anche con l'app chiusa, e ti avvisa quando ha finito. Scrivi «/» per i comandi: /review, /test, /fix, /pr, /ship…"],
   ["shield", "Privacy sotto controllo", "In Altro vedi cosa è cifrato e cosa esce dal server, puoi spegnere la voce neurale e cancellare chat e cache con un tocco."],
   ["plus", "Nuovo repository dal Codice", "Crea un repository privato con README, licenza e scheletro con test e CI direttamente dalla sezione Codice."],

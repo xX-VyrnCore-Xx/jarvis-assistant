@@ -19,7 +19,7 @@ class FakeGitHub:
     """GitHub in memoria: repository, rami, commit (albero completo), PR, controlli di CI."""
 
     def __init__(self):
-        self.repos, self.n, self.ci = {}, 0, "success"
+        self.repos, self.n, self.ci, self.exec_state = {}, 0, "success", "ok"
         self.seen = []
 
     def sha(self):
@@ -147,6 +147,15 @@ class FakeGitHub:
             head = repo["refs"][pr["head"]]
             repo["refs"]["main"] = self.commit(repo, repo["commits"][head]["files"], message="squash")
             return j({"merged": True})
+        if rest == "/actions/runs" and "head_sha" in dict(req.url.params):
+            repo["exec_sha"] = req.url.params["head_sha"]
+            return j({"workflow_runs": [{"id": 55, "name": "JARVIS exec", "status": "completed"}]})
+        if rest == "/actions/runs/55":
+            return j({"id": 55, "status": "in_progress" if self.exec_state == "pending" else "completed", "conclusion": "success" if self.exec_state == "ok" else "failure"})
+        if rest == "/actions/runs/55/jobs":
+            return j({"jobs": [{"id": 9}]})
+        if rest == "/actions/jobs/9/logs":
+            return httpx.Response(200, text="2026-10-21T10:00:00.0000Z ##[group]Run bash .jarvis-exec.sh\n2026-10-21T10:00:01.0000Z 3 passed in 0.1s\n2026-10-21T10:00:02.0000Z ##[endgroup]\n", headers={"content-type": "text/plain"})
         if m2 := re.match(r"/actions/jobs/7/logs$", rest):
             return httpx.Response(200, text="2026-10-21T10:00:00.0000000Z FAILED test_x.py::t - AssertionError\n", headers={"content-type": "text/plain"})
         raise AssertionError((method, path))

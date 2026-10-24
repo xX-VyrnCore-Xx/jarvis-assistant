@@ -175,3 +175,20 @@ def register_coding_tools(reg: ToolRegistry, coding: CodingService, pending, job
                      "«in background», «avvisami quando hai finito», «lavoraci tu» o per compiti lunghi. 'task' = istruzioni complete (obiettivo, vincoli); 'repo' facoltativo se la sessione è già aperta.",
                      obj({"task": s, "repo": s}, ["task"]), guarded(bg), available=on)
         reg.register("code_jobs", "Elenco dei lavori di coding in background (in coda, in corso, finiti).", obj({}), guarded(joblist), available=on)
+
+    # ---- esecuzione su GitHub e letture multiple
+    async def exec_cmd(command: str, timeout: int = 100) -> str:
+        return UNTRUSTED + await coding.exec(command, timeout)
+
+    async def exec_res(run_id: int = 0, timeout: int = 100) -> str:
+        return UNTRUSTED + await coding.exec_result(run_id, timeout)
+
+    async def read_many(paths: str, lines: int = 120) -> str:
+        return UNTRUSTED + coding.read_many(paths, lines)
+
+    reg.register("code_exec", "ESEGUE un comando (test, lint, build, script: es. «python -m pytest -q», «npm test», «ruff check .») sulle modifiche attuali nel runner di GitHub Actions, SENZA committare "
+                 "(ramo temporaneo, senza segreti, sola lettura). Restituisce l'output reale: usala per provare il codice prima del commit. Python 3.12 e Node 20 disponibili; installa le dipendenze nel comando "
+                 "(es. «pip install -r requirements.txt && pytest -q»). Max 15 esecuzioni per sessione: ognuna consuma minuti di Actions, quindi un comando che faccia più cose insieme (&&).",
+                 obj({"command": s, "timeout": i}, ["command"]), guarded(exec_cmd), available=on, timeout=135)
+    reg.register("code_exec_result", "Attende l'esito di un'esecuzione di code_exec rimasta in corso (run_id dall'ultimo risultato).", obj({"run_id": i, "timeout": i}), guarded(exec_res), available=on, timeout=135)
+    reg.register("code_read_many", "Legge più file insieme (percorsi separati da virgola, max 8, prime righe di ciascuno): per orientarsi con un solo giro.", obj({"paths": s, "lines": i}, ["paths"]), guarded(read_many), available=on)
