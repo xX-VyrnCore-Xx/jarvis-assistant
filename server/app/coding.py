@@ -1290,8 +1290,9 @@ class CodingService:
         body = re.sub(r"^##\[(?:endgroup|group)\].*\n?", "", body, flags=re.M)
         ok = r.get("conclusion") == "success"
         body = Redactor("standard").mask(body)
-        tail = body[-6000:]
-        return f"{'✓ riuscito' if ok else '✗ fallito (' + str(r.get('conclusion')) + ')'}\n{('[…inizio omesso]\n' if len(body) > 6000 else '')}{tail.strip() or '(nessun output)'}"
+        head = "✓ riuscito" if ok else f"✗ fallito ({r.get('conclusion')})"
+        cut = "[…inizio omesso]\n" if len(body) > 6000 else ""
+        return f"{head}\n{cut}{body[-6000:].strip() or '(nessun output)'}"
 
     async def _exec_cleanup(self, repo: str, branch: str) -> None:
         try:
