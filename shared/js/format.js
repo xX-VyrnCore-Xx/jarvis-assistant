@@ -80,11 +80,12 @@ export function markdown(text) {
   while (i < lines.length) {
     const line = lines[i];
     if (line.startsWith("```")) {
+      const lang = line.slice(3).trim().split(/\s/)[0].toLowerCase().replace(/[^a-z0-9+#-]/g, "");
       const code = [];
       i++;
       while (i < lines.length && !lines[i].startsWith("```")) code.push(lines[i++]);
       i++;
-      root.append(el("pre", {}, el("code", {}, code.join("\n"))));
+      root.append(el("pre", lang ? { "data-lang": lang } : {}, el("code", {}, code.join("\n"))));
     } else if (/^\s*([-*•]|\d+[.)])\s+/.test(line)) {
       const ordered = /^\s*\d+[.)]/.test(line);
       const list = el(ordered ? "ol" : "ul");

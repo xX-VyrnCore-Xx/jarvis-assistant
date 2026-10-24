@@ -137,6 +137,7 @@ export class Jarvis {
   codeDiff() { return this.#req("/api/code/diff", { timeout: 30_000 }); }
   codeChecks() { return this.#req("/api/code/checks", { timeout: 30_000 }); }
   codeCreate(p) { return this.#req("/api/code/create", { method: "POST", body: p, timeout: 120_000 }); }
+  codeExec(command) { return this.#req("/api/code/exec", { method: "POST", body: { command }, timeout: 150_000 }); }
   codeCommands() { return this.#get("/api/code/commands"); }
   codeJobs() { return this.#req("/api/code/jobs"); }
   codeJob(id) { return this.#req(`/api/code/jobs/${encodeURIComponent(id)}`); }

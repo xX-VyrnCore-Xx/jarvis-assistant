@@ -813,6 +813,20 @@ async def skills_get(name: str, request: Request) -> dict:
     return {**s.card(), "triggers": s.triggers, "body": s.body}
 
 
+class ExecIn(BaseModel):
+    command: str = Field(min_length=1, max_length=2000)
+
+
+@router.post("/code/exec")
+async def code_exec(body: ExecIn, request: Request) -> dict:
+    """Esegue un comando (test, lint, build) sulle modifiche attuali nel runner di GitHub Actions (mai sul server). Attende fino a ~110 secondi."""
+    c = _code(request)
+    try:
+        return {"output": await c.exec(body.command, 100), "pending": bool(c._exec_pending)}
+    except CodingError as e:
+        raise HTTPException(409, str(e)) from e
+
+
 # ---------------------------------------------------------------- lavori di coding in background
 class JobIn(BaseModel):
     task: str = Field(min_length=4, max_length=6000)

@@ -39,6 +39,8 @@ COMMANDS = [
     ("profilo", "Cosa so di te (profilo)"),
     ("liste", "Liste e attività (spesa, da fare)"),
     ("nuova", "Azzera la conversazione"),
+    ("code", "Coding in background: /code cosa fare (ti avviso a fine lavoro)"),
+    ("lavori", "Lavori di coding in background (stato, annulla)"),
 ]
 
 HELP = """<b>🤖 JARVIS a sua disposizione, {owner}.</b>
@@ -54,7 +56,7 @@ Mi scriva (o mi mandi un vocale) in linguaggio naturale: agenda, email, meteo, n
 /skills · /skill nome richiesta
 
 <b>⚙️ Sistema</b>
-/proattivo · /impostazioni · /modello · /uso · /token · /stato · /salute · /aggiornamenti · /nuova
+/code · /lavori · /proattivo · /impostazioni · /modello · /uso · /token · /stato · /salute · /aggiornamenti · /nuova
 
 <blockquote>«Che notizie ci sono oggi?» · «Ricordami alle 18 di chiamare Luca» · «Cosa so di Luca?» · «Crea un progetto Python su GitHub»</blockquote>
 I tasti qui sotto portano ai comandi più usati."""
@@ -318,6 +320,8 @@ class TelegramBot:
                 out.setdefault(t["list"], []).append(f"• {t['text']}")
             keys = [[{"text": f"✔ {t['text'][:28]}", "callback_data": f"td:{t['id']}"}] for t in rows[:10]]
             return await self.tg.send(chat_id, "\n\n".join(f"<b>{name.capitalize()}</b>\n" + "\n".join(items) for name, items in out.items()), {"inline_keyboard": keys})
+        if cmd in ("code", "lavori"):
+            return await self._code_jobs(chat_id, cmd, arg)
         if cmd == "nuova":
             await st.store.clear_messages("main")
             self._sync("chat")
@@ -365,6 +369,31 @@ class TelegramBot:
         if rems:
             parts.append("<b>Promemoria di oggi</b>\n" + "\n".join(f"• {datetime.fromisoformat(r['due_at']).astimezone(tz):%H:%M} — {r['text']}" for r in rems))
         await self.tg.send(chat_id, f"<b>Il punto di oggi, {self.s.owner_name}</b>\n\n" + ("\n\n".join(parts) if parts else "Giornata libera e nessuna attività aperta. 🎯"))
+
+    async def _code_jobs(self, chat_id: int, cmd: str, arg: str) -> None:
+        """/code cosa fare: avvia un lavoro di coding in background (continua anche con le app chiuse e avvisa a fine lavoro). /lavori [stop id]: stato e annullamento."""
+        from .coding import CodingError
+
+        jobs = getattr(self.app.state, "codejobs", None)
+        if jobs is None:
+            return await self.tg.send(chat_id, "I lavori di coding non sono disponibili in questo server, signore.")
+        if cmd == "code":
+            if len(arg.strip()) < 4:
+                return await self.tg.send(chat_id, "Mi dica cosa devo fare, signore: <code>/code aggiungi i test al parser e apri la PR</code>. Lavoro da solo sul progetto aperto e la avviso a fine lavoro.")
+            try:
+                j = await jobs.start(arg.strip())
+            except CodingError as e:
+                return await self.tg.send(chat_id, f"Non posso avviarlo, signore: {html.escape(str(e))}")
+            return await self.tg.send(chat_id, f"☁️ Lavoro avviato (<code>{j['id']}</code>): ci lavoro da solo e la avviso quando ho finito. /lavori per lo stato.")
+        parts = arg.split()
+        if parts[:1] == ["stop"] and len(parts) > 1:
+            return await self.tg.send(chat_id, "Lavoro annullato." if await jobs.cancel(parts[1]) else "Nessun lavoro in coda o in corso con quell'id.")
+        rows = jobs.listing()[:6]
+        if not rows:
+            return await self.tg.send(chat_id, "Nessun lavoro di coding, signore. /code cosa fare per avviarne uno.")
+        icon = {"queued": "⏳", "running": "⚙️", "done": "✅", "failed": "⚠️", "cancelled": "🚫", "interrupted": "⚠️"}
+        lines = [f"{icon.get(r['status'], '•')} <code>{r['id']}</code> {html.escape(r['title'])}" + (f"\n   <i>{html.escape(r['now'])}</i>" if r["status"] == "running" and r["now"] else "") for r in rows]
+        await self.tg.send(chat_id, "<b>Lavori di coding</b>\n" + "\n".join(lines) + ("\n\nPer annullare: <code>/lavori stop id</code>" if jobs.active else ""))
 
     async def _skills(self, chat_id: int, cmd: str, arg: str) -> None:
         """/skills: l'elenco per ambito (pulsanti); /skill nome richiesta: usa quella competenza per la richiesta."""

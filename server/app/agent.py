@@ -50,7 +50,7 @@ Metodo di lavoro (sempre):
 3. Orientati prima di scrivere: `code_graph`/`code_symbol`/`code_deps`, poi `code_read` solo sulle righe che servono. Non inventare file, API o funzioni che non hai visto.
 4. Cambiamenti piccoli e coerenti con lo stile esistente; aggiungi o aggiorna i test insieme al codice. Niente segreti nel repository (variabili d'ambiente).
 5. Prima di ogni commit esegui `code_review` e correggi ciò che segnala; commit frequenti con messaggi chiari (cosa e perché).
-6. Il codice NON gira sul server: i test girano nella CI di GitHub (`code_add_ci` se manca, poi `code_wait_checks`). Se la CI è rossa leggi `code_ci_logs`, trova la causa vera (non aggirare i test) e correggi.
+6. Il codice NON gira sul server, ma lo PROVI davvero con `code_exec` (test, lint, build nel runner di GitHub, senza committare: fallo prima di ogni commit importante) e, per la verifica completa, nella CI di GitHub (`code_add_ci` se manca, poi `code_wait_checks`). Se la CI è rossa leggi `code_ci_logs`, trova la causa vera (non aggirare i test) e correggi.
    Prima di un refactor rischioso `code_checkpoint` (poi `code_rollback`/`code_undo` se serve); per più modifiche coordinate `code_multi_edit`; dopo aver scritto codice `code_lint` per la sintassi. Se nel progetto c'è JARVIS.md/CLAUDE.md rispettalo.
    Compiti lunghi o richieste «in background»/«avvisami quando finisci»: `code_background` (continua anche con l'app chiusa e notifica a fine lavoro).
 7. Chiudi con PR e, a CI verde, `code_merge`; riassumi in poche righe cosa è cambiato, come verificarlo e cosa resta aperto.
@@ -78,7 +78,7 @@ class Agent:
         "code_plan": "Imposto il piano…", "code_plan_done": "Aggiorno il piano…", "code_review": "Rivedo le modifiche…", "code_graph": "Mappo il codice…", "code_symbol": "Cerco il simbolo…", "code_read": "Leggo il file…",
         "code_edit": "Modifico il file…", "code_ci_logs": "Leggo i log della CI…", "code_wait_checks": "Attendo la CI…", "code_open_pr": "Apro la Pull Request…", "code_search": "Cerco nel codice…",
         "code_checkpoint": "Salvo un punto di ripristino…", "code_rollback": "Torno al punto di ripristino…", "code_undo": "Annullo l'ultima modifica…", "code_multi_edit": "Applico le modifiche…",
-        "code_lint": "Controllo la sintassi…", "code_todos": "Cerco i TODO…", "code_pr_diff": "Leggo le modifiche della PR…", "code_background": "Avvio il lavoro in background…",
+        "code_lint": "Controllo la sintassi…", "code_exec": "Eseguo il comando su GitHub…", "code_exec_result": "Attendo l'esito dell'esecuzione…", "code_read_many": "Leggo i file…", "code_todos": "Cerco i TODO…", "code_pr_diff": "Leggo le modifiche della PR…", "code_background": "Avvio il lavoro in background…",
         "calculate": "Calcolo…", "convert_currency": "Controllo il cambio…", "get_token_budget": "Controllo i token…",
     }
 

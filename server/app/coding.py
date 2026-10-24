@@ -82,6 +82,33 @@ SCAFFOLDS = {
     },
 }
 
+MAX_EXECS = 15
+EXEC_BRANCH = "jarvis-exec/"
+EXEC_WORKFLOW = """name: JARVIS exec
+on:
+  push:
+    branches: ['jarvis-exec/**']
+permissions:
+  contents: read
+jobs:
+  run:
+    name: exec
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: JARVIS comando
+        run: bash .jarvis-exec.sh
+"""
+
 
 class CodingError(RuntimeError):
     """Messaggio sicuro da mostrare all'utente (mai contiene il token)."""
@@ -138,6 +165,7 @@ class Session:
     root: Path = Path()
     plan: list[dict] = field(default_factory=list)  # piano di lavoro: [{text, done}], visibile nella sezione Codice dell'app
     hist: list[tuple[str, bytes | None]] = field(default_factory=list)  # (percorso, contenuto prima della modifica; None = non esisteva): serve a code_undo
+    execs: int = 0  # quante esecuzioni code_exec in questa sessione (tetto: ognuna fa partire anche la CI del repository)
     checkpoints: dict[str, dict[str, bytes]] = field(default_factory=dict)  # punti di ripristino con nome (code_checkpoint / code_rollback)
 
 
@@ -149,6 +177,7 @@ class CodingService:
         self.session: Session | None = None
         self._lock = asyncio.Lock()
         self._graph: tuple[str, CodeGraph] | None = None
+        self._exec_pending: dict[int, tuple[str, str]] = {}
 
     @property
     def enabled(self) -> bool:
@@ -173,7 +202,7 @@ class CodingService:
             return ""
         base = (f"Sessione di coding attiva: repository privato {s.repo} (ramo principale {s.default_branch}, ramo di lavoro {s.branch or 'non ancora creato'}"
                 f"{', PR #%d aperta' % s.pr if s.pr else ''}). Lavori nella sandbox con code_*: scrivi i file, committa spesso con messaggi chiari, apri la PR, controlla la CI (code_checks), "
-                "correggi dai log, poi unisci (code_merge). Il codice NON si esegue sul server: i test girano nella CI di GitHub (code_add_ci se manca; code_wait_checks per attendere). Non inventare file che non hai letto. "
+                "correggi dai log, poi unisci (code_merge). Il codice NON si esegue sul server: per provarlo usa code_exec (gira nel runner di GitHub su un ramo temporaneo, senza committare) e per i test completi la CI di GitHub (code_add_ci se manca; code_wait_checks per attendere). Non inventare file che non hai letto. "
                 "Per orientarti usa la mappa a grafo (code_graph, code_symbol, code_deps, code_path) invece di leggere interi file: costa molti meno token. Prima di modificare guarda code_tree/code_diff; per scheletri pronti code_scaffold. Eliminare un repository (code_repo_delete) richiede la conferma esplicita dell'utente: spiega quale e perché, poi attendi.")
         extra = (" Come un ingegnere: code_checkpoint prima di cambiamenti rischiosi (code_rollback per tornare), code_undo per annullare, code_multi_edit per più modifiche insieme, "
                  "code_lint dopo aver scritto codice (sintassi senza eseguire), code_review prima del commit, code_pr_diff per rivedere una PR.")
@@ -229,6 +258,19 @@ class CodingService:
         p = self._path(rel)
         s.hist.append((rel.strip("/"), p.read_bytes() if p.is_file() else None))
         del s.hist[:-120]
+
+    def read_many(self, paths: str, lines: int = 120) -> str:
+        """Legge più file in un colpo solo (percorsi separati da virgola o a capo, al massimo 8, `lines` righe ciascuno): meno giri, meno token."""
+        names = [x.strip() for x in re.split(r"[,\n]", paths or "") if x.strip()][:8]
+        if not names:
+            raise CodingError("Indica uno o più percorsi.")
+        out = []
+        for n in names:
+            try:
+                out.append(f"=== {n} ===\n{self.read(n, 1, min(max(int(lines), 10), 300))}")
+            except CodingError as e:
+                out.append(f"=== {n} ===\nErrore: {e}")
+        return "\n\n".join(out)
 
     def write(self, path: str, content: str) -> str:
         p = self._path(path)
@@ -1171,6 +1213,91 @@ class CodingService:
         s = self._need()
         rows = (await self.gh.call("GET", f"/repos/{s.repo}/actions/runs", params={"per_page": max(1, min(n, 15))})).get("workflow_runs", [])
         return "\n".join(f"• {r['name']} · {r['head_branch']} · {r['status']}{('/' + r['conclusion']) if r.get('conclusion') else ''} · {str(r['created_at'])[:16]} · {r['html_url']}" for r in rows) or "Nessuna esecuzione di CI."
+
+    # ------------------------------------------------------------------ esecuzione su GitHub (mai sul server)
+    POLL_S = 3  # secondi tra un controllo e l'altro dell'esito su GitHub
+
+    async def exec(self, command: str, timeout: int = 100) -> str:
+        """Esegue un comando (test, lint, build, script) sulle modifiche attuali nel runner di GitHub Actions, SENZA committare sul ramo di lavoro:
+        la sandbox va su un ramo temporaneo `jarvis-exec/…` (poi eliminato) con un workflow dedicato, senza segreti e con permesso di sola lettura.
+        Il server non esegue mai codice: le chiavi dell'utente restano al sicuro."""
+        s = self._need()
+        cmd = (command or "").strip()
+        if not cmd or len(cmd) > 2000 or "\x00" in cmd:
+            raise CodingError("Comando mancante o troppo lungo (massimo 2000 caratteri).")
+        if s.execs >= MAX_EXECS:
+            raise CodingError(f"Raggiunto il limite di {MAX_EXECS} esecuzioni per sessione (ognuna consuma minuti di GitHub Actions): committa e usa la CI normale (code_wait_checks).")
+        if not s.head:
+            raise CodingError("Il progetto non ha ancora un commit di partenza.")
+        mod, gone = self._changes()
+        self._scan(mod)  # niente chiavi o dati bancari verso GitHub, nemmeno su un ramo temporaneo
+        repo = s.repo
+        parent = s.head
+        base_tree = (await self.gh.call("GET", f"/repos/{repo}/git/commits/{parent}"))["tree"]["sha"]
+        files = dict(mod)
+        files[".github/workflows/jarvis-exec.yml"] = EXEC_WORKFLOW.encode()
+        files[".jarvis-exec.sh"] = ("set -o pipefail\n" + cmd + "\n").encode()
+        entries = []
+        for path, raw in files.items():
+            blob = await self.gh.call("POST", f"/repos/{repo}/git/blobs", {"content": base64.b64encode(raw).decode(), "encoding": "base64"})
+            entries.append({"path": path, "mode": "100644", "type": "blob", "sha": blob["sha"]})
+        entries += [{"path": g, "mode": "100644", "type": "blob", "sha": None} for g in gone]
+        tree = await self.gh.call("POST", f"/repos/{repo}/git/trees", {"base_tree": base_tree, "tree": entries})
+        commit = await self.gh.call("POST", f"/repos/{repo}/git/commits", {"message": "JARVIS exec (temporaneo)", "tree": tree["sha"], "parents": [parent]})
+        branch = f"{EXEC_BRANCH}{time.strftime('%m%d%H%M%S')}-{commit['sha'][:6]}"
+        await self.gh.call("POST", f"/repos/{repo}/git/refs", {"ref": f"refs/heads/{branch}", "sha": commit["sha"]})
+        s.execs += 1
+        run = None
+        for _ in range(8):  # il run compare qualche secondo dopo il push
+            await asyncio.sleep(self.POLL_S)
+            runs = (await self.gh.call("GET", f"/repos/{repo}/actions/runs", params={"head_sha": commit["sha"], "per_page": 10})).get("workflow_runs", [])
+            run = next((r for r in runs if r.get("name") == "JARVIS exec"), None)
+            if run:
+                break
+        if not run:
+            await self._exec_cleanup(repo, branch)
+            raise CodingError("GitHub Actions non ha avviato l'esecuzione: controlla che le Actions siano attive sul repository e che il token abbia il permesso «workflow».")
+        self._exec_pending[run["id"]] = (repo, branch)
+        return await self.exec_result(run["id"], timeout)
+
+    async def exec_result(self, run_id: int = 0, timeout: int = 100) -> str:
+        """Attende (fino a `timeout` secondi, max 110) l'esito di un'esecuzione e restituisce l'output; se non è finita dice di richiamare."""
+        s = self._need()
+        rid = int(run_id) or (max(self._exec_pending) if self._exec_pending else 0)
+        if not rid or rid not in self._exec_pending:
+            raise CodingError("Nessuna esecuzione in corso da attendere: lanciane una con code_exec.")
+        repo, branch = self._exec_pending[rid]
+        deadline = time.monotonic() + max(5, min(int(timeout), 110))
+        while True:
+            r = await self.gh.call("GET", f"/repos/{repo}/actions/runs/{rid}")
+            if r.get("status") == "completed" or time.monotonic() >= deadline:
+                break
+            await asyncio.sleep(self.POLL_S + 2)
+        if r.get("status") != "completed":
+            return f"Esecuzione {rid} ancora in corso: richiama code_exec_result (run_id={rid})."
+        self._exec_pending.pop(rid, None)
+        await self._exec_cleanup(repo, branch)
+        jobs = (await self.gh.call("GET", f"/repos/{repo}/actions/runs/{rid}/jobs")).get("jobs", [])
+        text = ""
+        if jobs:
+            try:
+                text = str(await self.gh.call("GET", f"/repos/{repo}/actions/jobs/{jobs[0]['id']}/logs"))
+            except CodingError as e:
+                text = f"(log non disponibili: {e})"
+        text = re.sub(r"\x1b\[[0-9;]*m|^\d{4}-\d\d-\d\dT[\d:.]+Z ", "", text, flags=re.M)
+        i = text.rfind("Run bash .jarvis-exec.sh")
+        body = text[i:].split("\n", 1)[-1] if i >= 0 else text
+        body = re.sub(r"^##\[(?:endgroup|group)\].*\n?", "", body, flags=re.M)
+        ok = r.get("conclusion") == "success"
+        body = Redactor("standard").mask(body)
+        tail = body[-6000:]
+        return f"{'✓ riuscito' if ok else '✗ fallito (' + str(r.get('conclusion')) + ')'}\n{('[…inizio omesso]\n' if len(body) > 6000 else '')}{tail.strip() or '(nessun output)'}"
+
+    async def _exec_cleanup(self, repo: str, branch: str) -> None:
+        try:
+            await self.gh.call("DELETE", f"/repos/{repo}/git/refs/heads/{branch}")
+        except CodingError:
+            log.warning("ramo temporaneo %s non eliminato", branch)
 
     async def wait_checks(self, timeout: int = 90) -> str:
         """Aspetta (al massimo `timeout` secondi) che la CI sul commit attuale finisca, poi dice com'è andata."""

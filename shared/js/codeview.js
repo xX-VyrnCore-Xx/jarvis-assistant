@@ -3,6 +3,7 @@
 import "./codeview.css";
 import { el, markdown } from "./format.js";
 import { icon } from "./icons.js";
+import { highlight } from "./highlight.js";
 import { Typewriter } from "./typewriter.js";
 
 const FEATURED = ["revisione-codice", "debug-sistematico", "test-e-qualita", "architettura-software", "refactoring-e-codice-legacy", "sicurezza-applicativa",
@@ -45,6 +46,8 @@ export function createCodeStudio({ api, toast, errText, haptic = () => {} }) {
 
   function decorate(node) {  // pulsante «Copia» su ogni blocco di codice
     node.querySelectorAll("pre").forEach((pre) => {
+      const c = pre.querySelector("code");
+      if (c) highlight(c, pre.dataset.lang || "");
       if (pre.querySelector(".cs-copy")) return;
       pre.prepend(el("button", { class: "cs-copy", onclick: () => navigator.clipboard?.writeText(pre.querySelector("code")?.textContent || "").then(() => toast("Codice copiato")).catch(() => toast("Copia non riuscita", true)) }, "Copia"));
     });
@@ -158,7 +161,7 @@ export function createCodeStudio({ api, toast, errText, haptic = () => {} }) {
   }
 
   async function openProject() {
-    const tabs = ["File", "Modifiche", "CI"];
+    const tabs = ["File", "Modifiche", "CI", "Esegui"];
     const body = el("div", { class: "cs-body" });
     const bar = el("div", { class: "cs-tabs" });
     let cur = 0;
@@ -177,6 +180,18 @@ export function createCodeStudio({ api, toast, errText, haptic = () => {} }) {
           const pre = el("pre", { class: "cs-code" });
           diff.split("\n").forEach((ln) => pre.append(el("span", { class: ln.startsWith("+") && !ln.startsWith("+++") ? "add" : ln.startsWith("-") && !ln.startsWith("---") ? "del" : ln.startsWith("###") ? "hdr" : "" }, `${ln}\n`)));
           body.replaceChildren(el("pre", { class: "cs-code", style: "white-space:pre-wrap;margin-bottom:8px" }, review), pre);
+        } else if (cur === 3) {
+          const out = el("pre", { class: "cs-code", style: "white-space:pre-wrap;margin-top:8px", hidden: true });
+          const cmd = el("input", { type: "text", placeholder: "python -m pytest -q", "aria-label": "Comando", autocapitalize: "off", spellcheck: "false", style: "flex:1;min-width:0;padding:9px 12px;border-radius:12px;border:1px solid var(--line);background:var(--surf,var(--panel));color:var(--text);font:inherit" });
+          const go = el("button", { class: "cs-btn pri", onclick: async () => {
+            const c = cmd.value.trim(); if (!c) return;
+            go.disabled = true; out.hidden = false; out.textContent = "Eseguo su GitHub Actions (può volerci un minuto)…";
+            try { const r = await api.codeExec(c); out.textContent = r.output; } catch (e) { out.textContent = errText(e); }
+            go.disabled = false;
+          } }, "Esegui");
+          const presets = [["Test Python", "pip install -q pytest; [ -f requirements.txt ] && pip install -q -r requirements.txt; python -m pytest -q"], ["Test Node", "npm ci && npm test --if-present"], ["Lint Python", "pip install ruff -q && ruff check ."], ["Build Node", "npm ci && npm run build --if-present"]];
+          body.replaceChildren(el("div", { class: "cs-status" }, "Il comando gira nel runner di GitHub sulle tue modifiche attuali, senza committare e senza segreti. Mai sul server."),
+            el("div", { class: "cs-skills" }, presets.map(([l, c]) => el("button", { class: "cs-chip", onclick: () => { cmd.value = c; } }, l))), el("div", { class: "cs-proj" }, cmd, go), out);
         } else {
           const c = await api.codeChecks();
           body.replaceChildren(el("div", { class: "cs-list" }, el("div", { class: `cs-pill ${c.state === "success" ? "ok" : c.state === "failure" ? "bad" : "warn"}`, style: "align-self:flex-start" }, `CI: ${c.state}`),

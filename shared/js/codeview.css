@@ -65,3 +65,7 @@
 .cs-job { display: flex; gap: 10px; align-items: center; } .cs-job .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); flex: none; }
 .cs-job.running .dot { background: var(--cs-acc); } .cs-job.done .dot { background: var(--ok); } .cs-job.failed .dot, .cs-job.interrupted .dot { background: var(--bad); }
 .cs-steps { margin: 0; padding-left: 20px; font-size: 12.5px; color: var(--muted); } .cs-steps li { margin: 2px 0; }
+
+/* evidenziazione della sintassi */
+.tk-k { color: #ff9e64; } .tk-s { color: #9ece6a; } .tk-c { color: #7a7f9a; font-style: italic; } .tk-n { color: #e0af68; } .tk-f { color: #7aa2f7; }
+.cs-msg pre { padding-top: 34px; } .cs-copy { position: absolute; float: none; top: 6px; right: 6px; margin: 0; }
